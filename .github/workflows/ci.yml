@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Fail the build rather than quietly crawling anything from CI.
+  CI: 'true'
+
+jobs:
+  verify:
+    name: Format, lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Check formatting
+        run: pnpm run format:check
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Validate migrations
+        run: pnpm run db:migrate -- --check
+
+      - name: Test
+        # Database tests run against an in-process PostgreSQL, and every crawl
+        # test reads a saved fixture, so this job needs no services and no
+        # network access to any external site.
+        run: pnpm run test
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Fixture crawl end to end
+        run: pnpm run crawl:fixture
+
+  secrets:
+    name: No secrets committed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if a .env file is committed
+        run: |
+          if git ls-files --error-unmatch .env >/dev/null 2>&1; then
+            echo "::error::.env must never be committed"
+            exit 1
+          fi
+          echo "no .env in the index"

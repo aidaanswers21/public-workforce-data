@@ -1,0 +1,83 @@
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { createLogger, type Logger } from '@pan/observability';
+import { QueryRepository, type SqlClient } from '@pan/database';
+
+export interface ApiOptions {
+  client: SqlClient;
+  logger?: Logger;
+  port?: number;
+}
+
+/**
+ * Minimal read-only API over coverage and records.
+ *
+ * Read-only by design for the foundation: this service can answer questions
+ * about what has been collected, and it has no route that sends anything, adds
+ * a suppression bypass, or exports without going through the export path that
+ * enforces suppression. Anything richer belongs in docs/BACKLOG.md, not here.
+ */
+export function createApi(options: ApiOptions): ReturnType<typeof createServer> {
+  const logger = options.logger ?? createLogger({ name: 'pan-api' });
+  const queries = new QueryRepository(options.client);
+
+  return createServer((request: IncomingMessage, response: ServerResponse) => {
+    void handle(request, response, queries, logger);
+  });
+}
+
+async function handle(
+  request: IncomingMessage,
+  response: ServerResponse,
+  queries: QueryRepository,
+  logger: Logger,
+): Promise<void> {
+  const url = new URL(request.url ?? '/', 'http://localhost');
+
+  if (request.method !== 'GET') {
+    send(response, 405, { error: 'this service is read-only' });
+    return;
+  }
+
+  try {
+    if (url.pathname === '/health') {
+      send(response, 200, { status: 'ok' });
+      return;
+    }
+
+    if (url.pathname === '/coverage') {
+      const state = url.searchParams.get('state');
+      if (state === null) {
+        send(response, 400, { error: 'state query parameter is required' });
+        return;
+      }
+      send(response, 200, await queries.coverageSummary(state));
+      return;
+    }
+
+    if (url.pathname === '/records') {
+      const at = new Date().toISOString();
+      const rows = await queries.queryExportableRows(at, {
+        ...(url.searchParams.get('state') === null
+          ? {}
+          : { stateCode: url.searchParams.get('state') as string }),
+        limit: Math.min(200, Number(url.searchParams.get('limit') ?? 50) || 50),
+      });
+      send(response, 200, { at, count: rows.length, rows });
+      return;
+    }
+
+    send(response, 404, { error: 'not found' });
+  } catch (error) {
+    logger.error(
+      { error: error instanceof Error ? error.message : String(error) },
+      'request failed',
+    );
+    send(response, 500, { error: 'internal error' });
+  }
+}
+
+function send(response: ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body);
+  response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' });
+  response.end(payload);
+}

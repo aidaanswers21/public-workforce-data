@@ -1,0 +1,20 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/shared-types" },
+    { "path": "packages/observability" },
+    { "path": "packages/core" },
+    { "path": "packages/extraction" },
+    { "path": "packages/database" },
+    { "path": "packages/directory-adapters/kit" },
+    { "path": "packages/directory-adapters/generic-html" },
+    { "path": "packages/directory-adapters/generic-json" },
+    { "path": "packages/state-config/kit" },
+    { "path": "packages/state-config/texas" },
+    { "path": "services/crawler-worker" },
+    { "path": "services/discovery-worker" },
+    { "path": "services/validation-worker" },
+    { "path": "apps/api" },
+    { "path": "apps/admin" }
+  ]
+}

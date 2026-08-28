@@ -1,0 +1,23 @@
+{
+  "results": [
+    {
+      "staff_id": 77,
+      "name": "Colin Mbatha",
+      "position": "Network Administrator",
+      "email_address": "colin.mbatha@sample-isd.example.org",
+      "department": "Technology"
+    },
+    {
+      "staff_id": 78,
+      "name": "Renata Alves",
+      "position": "Payroll Clerk",
+      "email_address": "renata.alves@sample-isd.example.org",
+      "department": "Business Office"
+    }
+  ],
+  "pagination": {
+    "offset": 0,
+    "limit": 2,
+    "total": 2
+  }
+}

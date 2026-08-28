@@ -1,0 +1,22 @@
+{
+  "data": [
+    {
+      "id": "e-1004",
+      "full_name": "Gerald Pham",
+      "job_title": "Attendance Clerk",
+      "email": "gerald.pham@sample-isd.example.org",
+      "campus": "Sample High School"
+    },
+    {
+      "id": "e-1005",
+      "full_name": "Miriam Katz",
+      "job_title": "Orchestra Director",
+      "email": "miriam.katz@sample-isd.example.org",
+      "campus": "Sample High School"
+    }
+  ],
+  "meta": {
+    "next_cursor": null,
+    "total": 5
+  }
+}

@@ -1,0 +1,39 @@
+# Local dependencies only. Nothing here is a deployment target.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pan-postgres
+    environment:
+      POSTGRES_USER: pan
+      POSTGRES_PASSWORD: pan
+      POSTGRES_DB: pan
+    ports:
+      - '5432:5432'
+    volumes:
+      - pan-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U pan -d pan']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # S3-compatible storage for archived raw responses. The uploader is not
+  # implemented yet; this is here so local development matches the intended
+  # shape. See docs/BACKLOG.md.
+  minio:
+    image: minio/minio:latest
+    container_name: pan-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: pan
+      MINIO_ROOT_PASSWORD: pan-local-dev
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - pan-minio-data:/data
+    profiles: ['storage']
+
+volumes:
+  pan-postgres-data:
+  pan-minio-data:

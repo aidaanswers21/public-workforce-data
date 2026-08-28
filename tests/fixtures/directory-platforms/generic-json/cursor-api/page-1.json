@@ -1,0 +1,32 @@
+{
+  "data": [
+    {
+      "id": "e-1001",
+      "first_name": "Sofia",
+      "last_name": "Marchetti",
+      "job_title": "Special Education Diagnostician",
+      "email": "sofia.marchetti@sample-isd.example.org",
+      "campus": "Sample High School",
+      "phone": "555-010-4001"
+    },
+    {
+      "id": "e-1002",
+      "first_name": "Andre",
+      "last_name": "Boucher",
+      "job_title": "Head Football Coach",
+      "email": "andre.boucher@sample-isd.example.org",
+      "campus": "Sample High School"
+    },
+    {
+      "id": "e-1003",
+      "full_name": "Winnie Ochieng",
+      "job_title": "Library Media Specialist",
+      "email": "winnie.ochieng@sample-isd.example.org",
+      "campus": "Sample High School"
+    }
+  ],
+  "meta": {
+    "next_cursor": "eyJwYWdlIjoyfQ",
+    "total": 5
+  }
+}

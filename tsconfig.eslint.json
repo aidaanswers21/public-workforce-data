@@ -1,0 +1,28 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "baseUrl": ".",
+    "paths": {
+      "@pan/shared-types": ["packages/shared-types/src/index.ts"],
+      "@pan/observability": ["packages/observability/src/index.ts"],
+      "@pan/core": ["packages/core/src/index.ts"],
+      "@pan/extraction": ["packages/extraction/src/index.ts"],
+      "@pan/database": ["packages/database/src/index.ts"],
+      "@pan/adapter-kit": ["packages/directory-adapters/kit/src/index.ts"],
+      "@pan/adapter-generic-html": ["packages/directory-adapters/generic-html/src/index.ts"],
+      "@pan/adapter-generic-json": ["packages/directory-adapters/generic-json/src/index.ts"],
+      "@pan/state-kit": ["packages/state-config/kit/src/index.ts"],
+      "@pan/state-texas": ["packages/state-config/texas/src/index.ts"],
+      "@pan/crawler-worker": ["services/crawler-worker/src/index.ts"],
+      "@pan/discovery-worker": ["services/discovery-worker/src/index.ts"],
+      "@pan/validation-worker": ["services/validation-worker/src/index.ts"]
+    }
+  },
+  "include": ["apps/**/*.ts", "services/**/*.ts", "packages/**/*.ts", "tests/**/*.ts", "*.ts"],
+  "exclude": ["node_modules", "**/dist/**"]
+}

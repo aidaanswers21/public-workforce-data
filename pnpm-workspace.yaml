@@ -1,0 +1,6 @@
+packages:
+  - 'apps/*'
+  - 'services/*'
+  - 'packages/*'
+  - 'packages/directory-adapters/*'
+  - 'packages/state-config/*'
