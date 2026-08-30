@@ -15,6 +15,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@pan/shared-types': source('packages/shared-types'),
+      '@pan/taxonomy': source('packages/taxonomy'),
       '@pan/observability': source('packages/observability'),
       '@pan/core': source('packages/core'),
       '@pan/extraction': source('packages/extraction'),
@@ -22,8 +23,11 @@ export default defineConfig({
       '@pan/adapter-kit': source('packages/directory-adapters/kit'),
       '@pan/adapter-generic-html': source('packages/directory-adapters/generic-html'),
       '@pan/adapter-generic-json': source('packages/directory-adapters/generic-json'),
-      '@pan/state-kit': source('packages/state-config/kit'),
-      '@pan/state-texas': source('packages/state-config/texas'),
+      '@pan/sector-education': source('packages/sectors/education'),
+      '@pan/sector-state-local': source('packages/sectors/state-local-government'),
+      '@pan/sector-federal': source('packages/sectors/federal-government'),
+      '@pan/jurisdiction-kit': source('packages/jurisdiction-config/kit'),
+      '@pan/jurisdiction-texas-education': source('packages/jurisdiction-config/texas-education'),
       '@pan/crawler-worker': source('services/crawler-worker'),
       '@pan/discovery-worker': source('services/discovery-worker'),
       '@pan/validation-worker': source('services/validation-worker'),

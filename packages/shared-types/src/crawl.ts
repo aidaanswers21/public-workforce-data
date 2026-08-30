@@ -5,7 +5,6 @@ import type {
   CrawlStopReason,
   CrawlTargetStatus,
   CrawlTargetType,
-  SourceType,
   Uuid,
   Timestamp,
 } from './index.js';
@@ -63,7 +62,7 @@ export interface RobotsProvider {
 
 export interface CrawlRunRecord {
   id: Uuid;
-  stateId: Uuid | null;
+  jurisdictionId: Uuid | null;
   runType: string;
   status: CrawlRunStatus;
   startedAt: Timestamp;
@@ -87,12 +86,14 @@ export interface CrawlRunStats {
 
 export interface CrawlTargetRecord {
   id: Uuid;
-  stateId: Uuid;
-  districtId: Uuid | null;
-  schoolId: Uuid | null;
+  /** The organization this target belongs to. No state is required or implied. */
+  organizationId: Uuid | null;
+  jurisdictionId: Uuid | null;
   url: string;
+  urlHash: string;
   targetType: CrawlTargetType;
-  sourceType: SourceType;
+  /** Reference code from the taxonomy. */
+  sourceTypeCode: string;
   directoryPlatformId: Uuid | null;
   adapterKey: string | null;
   status: CrawlTargetStatus;

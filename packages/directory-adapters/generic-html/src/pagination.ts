@@ -36,11 +36,15 @@ function push(
  * Find every way this page offers to reach more records.
  *
  * Ordered by reliability: an explicit rel=next beats a guessed page parameter,
- * and filters (alphabet, department, school) are only used when no sequential
+ * and filters (alphabet, department, organization) are only used when no sequential
  * pagination exists, because enumerating filters on top of pagination multiplies
  * the crawl for no extra coverage.
  */
-export function discoverPaginationFrom($: Html, baseUrl: string): PaginationPlan {
+export function discoverPaginationFrom(
+  $: Html,
+  baseUrl: string,
+  organizationTerms: readonly string[] = [],
+): PaginationPlan {
   const requests = new Map<string, PaginationRequest>();
   let kind: PaginationKind | null = null;
   const notes: string[] = [];
@@ -119,7 +123,7 @@ export function discoverPaginationFrom($: Html, baseUrl: string): PaginationPlan
   }
 
   if (requests.size === 0) {
-    const filters = collectSelectFilters($, baseUrl);
+    const filters = collectSelectFilters($, organizationTerms);
     for (const filter of filters) push(requests, filter.kind, filter.url, baseUrl);
     if (filters.length > 0) {
       kind = filters[0]?.kind ?? null;
@@ -180,14 +184,28 @@ function collectAlphaFilters($: Html, _baseUrl: string): string[] {
   return hrefs.length >= 5 ? hrefs : [];
 }
 
-function collectSelectFilters($: Html, _baseUrl: string): { url: string; kind: PaginationKind }[] {
+/**
+ * Filter controls that split a directory by unit or by organization.
+ *
+ * The organization terms come from the composed vocabulary, so a select named
+ * "campus" and one named "bureau" are both recognized without this package
+ * knowing which vertical contributed either word.
+ */
+function collectSelectFilters(
+  $: Html,
+  organizationTerms: readonly string[],
+): { url: string; kind: PaginationKind }[] {
   const out: { url: string; kind: PaginationKind }[] = [];
+  const organizationNames = new Set(
+    organizationTerms.map((term) => term.toLowerCase().replace(/[^a-z]+/g, '')),
+  );
   $('select[name]').each((_index, element) => {
     const name = ($(element).attr('name') ?? '').toLowerCase();
+    const compact = name.replace(/[^a-z]+/g, '');
     const kind: PaginationKind | null = /department|dept|division/.test(name)
       ? 'department_filter'
-      : /school|campus|building|site/.test(name)
-        ? 'school_filter'
+      : organizationNames.has(compact)
+        ? 'organization_filter'
         : null;
     if (kind === null) return;
     $(element)

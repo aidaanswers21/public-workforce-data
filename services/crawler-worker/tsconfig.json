@@ -7,15 +7,47 @@
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "dist"],
   "references": [
-    { "path": "../../packages/shared-types" },
-    { "path": "../../packages/core" },
-    { "path": "../../packages/database" },
-    { "path": "../../packages/extraction" },
-    { "path": "../../packages/observability" },
-    { "path": "../../packages/directory-adapters/kit" },
-    { "path": "../../packages/directory-adapters/generic-html" },
-    { "path": "../../packages/directory-adapters/generic-json" },
-    { "path": "../../packages/state-config/kit" },
-    { "path": "../../packages/state-config/texas" }
+    {
+      "path": "../../packages/shared-types"
+    },
+    {
+      "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/extraction"
+    },
+    {
+      "path": "../../packages/observability"
+    },
+    {
+      "path": "../../packages/taxonomy"
+    },
+    {
+      "path": "../../packages/directory-adapters/kit"
+    },
+    {
+      "path": "../../packages/directory-adapters/generic-html"
+    },
+    {
+      "path": "../../packages/directory-adapters/generic-json"
+    },
+    {
+      "path": "../../packages/jurisdiction-config/kit"
+    },
+    {
+      "path": "../../packages/jurisdiction-config/texas-education"
+    },
+    {
+      "path": "../../packages/sectors/education"
+    },
+    {
+      "path": "../../packages/sectors/state-local-government"
+    },
+    {
+      "path": "../../packages/sectors/federal-government"
+    }
   ]
 }

@@ -7,12 +7,29 @@
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "dist"],
   "references": [
-    { "path": "../../packages/shared-types" },
-    { "path": "../../packages/core" },
-    { "path": "../../packages/database" },
-    { "path": "../../packages/observability" },
-    { "path": "../../packages/directory-adapters/kit" },
-    { "path": "../../packages/directory-adapters/generic-html" },
-    { "path": "../../packages/extraction" }
+    {
+      "path": "../../packages/shared-types"
+    },
+    {
+      "path": "../../packages/core"
+    },
+    {
+      "path": "../../packages/database"
+    },
+    {
+      "path": "../../packages/observability"
+    },
+    {
+      "path": "../../packages/taxonomy"
+    },
+    {
+      "path": "../../packages/directory-adapters/kit"
+    },
+    {
+      "path": "../../packages/directory-adapters/generic-html"
+    },
+    {
+      "path": "../../packages/extraction"
+    }
   ]
 }

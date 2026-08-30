@@ -1,0 +1,23 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "dist"],
+  "references": [
+    {
+      "path": "../../shared-types"
+    },
+    {
+      "path": "../../taxonomy"
+    },
+    {
+      "path": "../kit"
+    },
+    {
+      "path": "../../sectors/education"
+    }
+  ]
+}

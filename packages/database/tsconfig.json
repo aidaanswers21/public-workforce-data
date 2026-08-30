@@ -7,8 +7,17 @@
   "include": ["src/**/*.ts"],
   "exclude": ["src/**/*.test.ts", "dist"],
   "references": [
-    { "path": "../shared-types" },
-    { "path": "../core" },
-    { "path": "../observability" }
+    {
+      "path": "../shared-types"
+    },
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../observability"
+    },
+    {
+      "path": "../taxonomy"
+    }
   ]
 }

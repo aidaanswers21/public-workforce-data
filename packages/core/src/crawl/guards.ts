@@ -67,7 +67,7 @@ export class CrawlGuards {
     if (this.visitedUrlHashes.has(input.urlHash)) {
       return skip('url already visited in this run');
     }
-    const domain = domainKey(input.url);
+    const domain = domainKey(input.url, this.policy.localityDomainLabels);
     const domainPages = this.pagesPerDomain.get(domain) ?? 0;
     if (domainPages >= this.policy.maxPagesPerDomain) {
       return halt(
@@ -94,7 +94,7 @@ export class CrawlGuards {
   afterFetch(input: { url: string; urlHash: string; contentHash: string }): GuardVerdict {
     this.visitedUrlHashes.add(input.urlHash);
     this.pagesFetched += 1;
-    const domain = domainKey(input.url);
+    const domain = domainKey(input.url, this.policy.localityDomainLabels);
     this.pagesPerDomain.set(domain, (this.pagesPerDomain.get(domain) ?? 0) + 1);
     this.consecutiveFailuresPerDomain.set(domain, 0);
 
@@ -114,7 +114,7 @@ export class CrawlGuards {
   }
 
   recordFailure(url: string): void {
-    const domain = domainKey(url);
+    const domain = domainKey(url, this.policy.localityDomainLabels);
     this.consecutiveFailuresPerDomain.set(
       domain,
       (this.consecutiveFailuresPerDomain.get(domain) ?? 0) + 1,
@@ -211,9 +211,9 @@ export class CrawlGuards {
   }
 }
 
-function domainKey(url: string): string {
+function domainKey(url: string, localityLabels: readonly string[]): string {
   try {
-    return registrableDomain(new URL(url).hostname);
+    return registrableDomain(new URL(url).hostname, localityLabels);
   } catch {
     return 'invalid';
   }

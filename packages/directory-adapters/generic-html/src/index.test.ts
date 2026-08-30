@@ -5,8 +5,17 @@ import {
   fixturePage,
   type AdapterFixture,
 } from '@pan/adapter-kit';
+import { allSectorsTaxonomy } from '../../../../tests/support/taxonomy.js';
 import { loadAdapterFixture } from '../../../../tests/support/fixtures.js';
 import { genericHtmlAdapter } from './index.js';
+
+const TAXONOMY = allSectorsTaxonomy();
+const VOCABULARY = TAXONOMY.vocabulary;
+
+/** Every fixture runs against the composed vocabulary the worker would use. */
+function withVocabulary(fixture: AdapterFixture): AdapterFixture {
+  return { ...fixture, context: { ...fixture.context, vocabulary: VOCABULARY } };
+}
 
 const FIXTURES: AdapterFixture[] = [
   loadAdapterFixture({
@@ -99,7 +108,7 @@ const FIXTURES: AdapterFixture[] = [
     url: 'https://sample-isd.example.org/staff/priya-raman',
     kind: 'profile',
   }),
-];
+].map(withVocabulary);
 
 describe.each(FIXTURES)('generic-html adapter contract: $name', (fixture) => {
   const checks = checkAdapterContract(genericHtmlAdapter, fixture);
@@ -124,11 +133,13 @@ describe('generic-html adapter behaviour', () => {
   });
 
   it('flags a shared office inbox rather than treating it as a person address', () => {
-    const fixture = loadAdapterFixture({
-      name: 'page 3',
-      file: 'generic-html/table-numbered/page-3.html',
-      url: 'https://sample-isd.example.org/staff-directory?page=3',
-    });
+    const fixture = withVocabulary(
+      loadAdapterFixture({
+        name: 'page 3',
+        file: 'generic-html/table-numbered/page-3.html',
+        url: 'https://sample-isd.example.org/staff-directory?page=3',
+      }),
+    );
     const listing = genericHtmlAdapter.extractListing(
       fixturePage(fixture),
       fixtureContext(fixture),
@@ -140,11 +151,13 @@ describe('generic-html adapter behaviour', () => {
   });
 
   it('ranks real directory links above calendar and news traps during discovery', () => {
-    const fixture = loadAdapterFixture({
-      name: 'discovery',
-      file: 'generic-html/discovery/index.html',
-      url: 'https://sample-isd.example.org/',
-    });
+    const fixture = withVocabulary(
+      loadAdapterFixture({
+        name: 'discovery',
+        file: 'generic-html/discovery/index.html',
+        url: 'https://sample-isd.example.org/',
+      }),
+    );
     const found = genericHtmlAdapter.discoverDirectories(
       fixturePage(fixture),
       fixtureContext(fixture),
@@ -163,7 +176,12 @@ describe('generic-html adapter behaviour', () => {
       html: '<html><body><h1>About Us</h1><p>Welcome.</p></body></html>',
       kind: 'listing',
     });
-    const detection = genericHtmlAdapter.detect({ url: page.url, page, hints: {} });
+    const detection = genericHtmlAdapter.detect({
+      url: page.url,
+      page,
+      hints: {},
+      vocabulary: VOCABULARY,
+    });
     expect(detection.score).toBeLessThan(genericHtmlAdapter.detectionThreshold);
   });
 });

@@ -19,7 +19,8 @@
     "@pan/shared-types": "workspace:*",
     "@pan/core": "workspace:*",
     "@pan/observability": "workspace:*",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "@pan/taxonomy": "workspace:*"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.0",

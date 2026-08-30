@@ -1,6 +1,8 @@
 import { PGlite } from '@electric-sql/pglite';
+import { Taxonomy, type SectorPack } from '@pan/taxonomy';
 import type { SqlClient } from './client.js';
 import { loadMigrations, migrate } from './migrations.js';
+import { seedReferenceData } from './reference-seed.js';
 
 /**
  * An in-process PostgreSQL 16 for tests.
@@ -12,9 +14,16 @@ import { loadMigrations, migrate } from './migrations.js';
 export class TestDatabase implements SqlClient {
   private constructor(private readonly db: PGlite) {}
 
-  static async create(options: { migrate?: boolean } = {}): Promise<TestDatabase> {
+  static async create(
+    options: { migrate?: boolean; seed?: boolean; sectors?: readonly SectorPack[] } = {},
+  ): Promise<TestDatabase> {
     const database = new TestDatabase(new PGlite());
     if (options.migrate !== false) await migrate(database, loadMigrations());
+    // Reference data is seeded from the taxonomy, not from a migration, which
+    // is what lets a sector add an organization type without a schema change.
+    if (options.migrate !== false && options.seed !== false) {
+      await seedReferenceData(database, new Taxonomy(options.sectors ?? []));
+    }
     return database;
   }
 

@@ -3,13 +3,14 @@ import type {
   DetectionContext,
   DetectionResult,
   DirectoryAdapter,
+  DirectoryVocabulary,
   DiscoveredDirectory,
   ExtractedPersonRecord,
   FetchedPage,
   ListingExtraction,
   PaginationPlan,
 } from '@pan/shared-types';
-import { dedupeExtractedRecords, resolveUrl, scoreDirectoryUrl } from '@pan/core';
+import { dedupeExtractedRecords, escapeRegExp, resolveUrl, scoreDirectoryUrl } from '@pan/core';
 import { loadHtml, textOf, type Html } from '@pan/extraction';
 import { clamp01 } from '@pan/adapter-kit';
 import {
@@ -23,15 +24,14 @@ import { discoverPaginationFrom } from './pagination.js';
 
 export const GENERIC_HTML_ADAPTER_KEY = 'generic-html';
 
-const DIRECTORY_HEADING =
-  /\b(staff|faculty|employee|personnel|directory|our team|administration)\b/i;
-
 /**
  * Fallback adapter for directories with no recognizable platform.
  *
- * It scores low on purpose: any platform-specific adapter that recognizes a page
- * should outrank it. Its job is to give useful coverage of the long tail of
- * bespoke district sites rather than to be the best parser for any one of them.
+ * Sector-agnostic by construction: every word it looks for arrives in the
+ * composed vocabulary, so the same adapter reads a federal bureau's leadership
+ * page, a county department roster and a school district's staff list without
+ * knowing which is which. It scores low on purpose, so any platform-specific
+ * adapter that recognizes a page outranks it.
  *
  * Strategies run in descending order of reliability and the first one that
  * yields records wins, so a page with proper JSON-LD is never re-parsed with
@@ -39,7 +39,7 @@ const DIRECTORY_HEADING =
  */
 export class GenericHtmlAdapter implements DirectoryAdapter {
   readonly key = GENERIC_HTML_ADAPTER_KEY;
-  readonly version = '1.0.0';
+  readonly version = '2.0.0';
   readonly displayName = 'Generic HTML directory';
   readonly detectionThreshold = 0.25;
   readonly requiresBrowser = false;
@@ -48,7 +48,7 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
     const reasons: string[] = [];
     let score = 0;
 
-    const urlScore = scoreDirectoryUrl(context.url);
+    const urlScore = scoreDirectoryUrl(context.url, context.vocabulary.urlHints);
     if (urlScore.score > 0) {
       score = Math.max(score, urlScore.score * 0.6);
       reasons.push(...urlScore.reasons);
@@ -57,10 +57,9 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
     if (context.page !== null) {
       const $ = loadHtml(context.page.body);
 
-      const headingText = $('h1, h2, title').text();
-      if (DIRECTORY_HEADING.test(headingText)) {
+      if (headingPattern(context.vocabulary).test($('h1, h2, title').text())) {
         score = Math.max(score, 0.6);
-        reasons.push('page heading names a staff directory');
+        reasons.push('page heading names a people directory');
       }
 
       const mailtoCount = $('a[href^="mailto:" i]').length;
@@ -99,9 +98,9 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
         .find('th')
         .toArray()
         .map((cell) => textOf($, cell).toLowerCase());
-      const hasName = headers.some((header) => /name|staff|employee/.test(header));
+      const hasName = headers.some((header) => /name|staff|employee|official/.test(header));
       const hasDetail = headers.some((header) =>
-        /e-?mail|title|position|phone|department/.test(header),
+        /e-?mail|title|position|phone|department|office/.test(header),
       );
       if (hasName && hasDetail) found = true;
     });
@@ -111,6 +110,7 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
   discoverDirectories(page: FetchedPage, context: AdapterContext): readonly DiscoveredDirectory[] {
     const $ = loadHtml(page.body);
     const found = new Map<string, DiscoveredDirectory>();
+    const headings = headingPattern(context.vocabulary);
 
     $('a[href]').each((_index, element) => {
       const href = $(element).attr('href');
@@ -119,8 +119,8 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
       if (resolved === null) return;
 
       const label = textOf($, element);
-      const urlScore = scoreDirectoryUrl(resolved);
-      const labelScore = DIRECTORY_HEADING.test(label) ? 0.7 : 0;
+      const urlScore = scoreDirectoryUrl(resolved, context.vocabulary.urlHints);
+      const labelScore = headings.test(label) ? 0.7 : 0;
       const score = Math.max(urlScore.score, labelScore);
       if (score < 0.3) return;
 
@@ -128,8 +128,8 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
       if (existing !== undefined && existing.score >= score) return;
       found.set(resolved, {
         url: resolved,
-        targetType: context.schoolName === null ? 'district_directory' : 'school_directory',
-        sourceType: context.schoolName === null ? 'district_site' : 'school_site',
+        targetType: 'organization_directory',
+        sourceTypeCode: 'html_directory',
         score,
         reasons: [...urlScore.reasons, ...(labelScore > 0 ? [`link text "${label}"`] : [])],
       });
@@ -140,7 +140,12 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
 
   extractListing(page: FetchedPage, context: AdapterContext): ListingExtraction {
     const $ = loadHtml(page.body);
-    const input = { $, sourceUrl: page.finalUrl, adapterKey: this.key };
+    const input = {
+      $,
+      sourceUrl: page.finalUrl,
+      adapterKey: this.key,
+      vocabulary: context.vocabulary,
+    };
     const warnings: string[] = [];
 
     const strategies: readonly [string, () => ExtractedPersonRecord[]][] = [
@@ -168,7 +173,11 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
       );
     }
 
-    const pagination = discoverPaginationFrom($, page.finalUrl);
+    const pagination = discoverPaginationFrom(
+      $,
+      page.finalUrl,
+      context.vocabulary.organizationFieldAliases,
+    );
     if (records.length === 0 && pagination.note?.includes('search-only') === true) {
       warnings.push('directory appears to be search-only and cannot be enumerated by this adapter');
     }
@@ -186,14 +195,20 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
     const out: Record<string, string> = {};
     const heading = textOf($, $('h1').first());
     if (heading.length > 0) out['heading'] = heading;
-    if (context.schoolName !== null) out['school'] = context.schoolName;
-    if (context.districtName !== null) out['district'] = context.districtName;
+    if (context.organizationName !== null) out['organization'] = context.organizationName;
+    if (context.parentOrganizationName !== null)
+      out['parentOrganization'] = context.parentOrganizationName;
     return out;
   }
 
-  extractProfile(page: FetchedPage, _context: AdapterContext): ExtractedPersonRecord | null {
+  extractProfile(page: FetchedPage, context: AdapterContext): ExtractedPersonRecord | null {
     const $ = loadHtml(page.body);
-    const input = { $, sourceUrl: page.finalUrl, adapterKey: this.key };
+    const input = {
+      $,
+      sourceUrl: page.finalUrl,
+      adapterKey: this.key,
+      vocabulary: context.vocabulary,
+    };
 
     const structured = extractStructured(input);
     if (structured.length > 0) return structured[0] ?? null;
@@ -205,9 +220,30 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
     return mailto[0] ?? null;
   }
 
-  discoverPagination(page: FetchedPage, _context: AdapterContext): PaginationPlan {
-    return discoverPaginationFrom(loadHtml(page.body), page.finalUrl);
+  discoverPagination(page: FetchedPage, context: AdapterContext): PaginationPlan {
+    return discoverPaginationFrom(
+      loadHtml(page.body),
+      page.finalUrl,
+      context.vocabulary.organizationFieldAliases,
+    );
   }
+}
+
+/**
+ * Build a heading matcher from the composed vocabulary.
+ *
+ * Cached per vocabulary object so a long term list is not recompiled for every
+ * link on a page.
+ */
+const headingPatternCache = new WeakMap<DirectoryVocabulary, RegExp>();
+
+function headingPattern(vocabulary: DirectoryVocabulary): RegExp {
+  const cached = headingPatternCache.get(vocabulary);
+  if (cached !== undefined) return cached;
+  const terms = vocabulary.headingTerms.filter((term) => term.trim().length > 0).map(escapeRegExp);
+  const pattern = terms.length === 0 ? /(?!)/ : new RegExp(`\\b(${terms.join('|')})\\b`, 'i');
+  headingPatternCache.set(vocabulary, pattern);
+  return pattern;
 }
 
 export const genericHtmlAdapter = new GenericHtmlAdapter();

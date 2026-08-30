@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-import { readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CrawlEngine, PermissiveRobotsProvider, withPolicyDefaults } from '@pan/core';
+import { CrawlEngine, PermissiveRobotsProvider, normalizeOrganizationName } from '@pan/core';
 import { createLogger } from '@pan/observability';
 import { genericHtmlAdapter } from '@pan/adapter-generic-html';
 import {
@@ -10,12 +10,15 @@ import {
   CrawlRepository,
   ExportRepository,
   IngestionRepository,
+  OrganizationRepository,
   QueryRepository,
   TestDatabase,
+  seedReferenceData,
 } from '@pan/database';
 import type { Uuid } from '@pan/shared-types';
 import { FixtureFetcher } from '../fetchers/fixture-fetcher.js';
-import { IngestionPipeline } from '../pipeline.js';
+import { IngestionPipeline, type IngestContext } from '../pipeline.js';
+import { buildCrawlPolicy, buildTaxonomy, buildTitleRuleSet } from '../registries.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..');
@@ -29,33 +32,41 @@ const FIXTURES = join(
 );
 const OUT_DIR = join(repoRoot, 'out');
 const HOST = 'https://sample-isd.example.org';
+const EXPORT_PURPOSE = 'internal-review';
 
 /**
  * Runs the whole pipeline against saved fixtures, with no network and no
  * external database.
  *
- * This is the command to run to see the system work end to end: crawl, extract,
- * normalize, store with provenance, recrawl to prove idempotency, record an
- * opt-out, and write a CSV that excludes it. It uses an in-process Postgres, so
- * it leaves nothing behind but the file in `out/`.
+ * The worked example is an education organization, but nothing it exercises is
+ * education-specific: the same code path serves a federal bureau or a county
+ * department, which `tests/extensibility.test.ts` proves by constructing both.
+ * It crawls, extracts, normalizes, stores with provenance, crawls again to show
+ * the recrawl adds nothing, records an opt-out, and writes a CSV excluding it.
  */
 async function main(): Promise<void> {
   const logger = createLogger({ name: 'fixture-crawl' });
   const database = await TestDatabase.create();
+  const taxonomy = buildTaxonomy();
+  const titleRules = buildTitleRuleSet(taxonomy);
 
   try {
+    await seedReferenceData(database, taxonomy);
+
     const ingestion = new IngestionRepository(database);
+    const organizations = new OrganizationRepository(database);
     const crawl = new CrawlRepository(database);
     const compliance = new ComplianceRepository(database);
     const queries = new QueryRepository(database);
-    const pipeline = new IngestionPipeline({ ingestion, crawl, logger });
+    const pipeline = new IngestionPipeline({ ingestion, crawl, organizations, logger });
 
-    const bootstrapPageId = await ingestion.upsertSourcePage({
+    const now = new Date().toISOString();
+    const bootstrapDocumentId = await ingestion.upsertSourceDocument({
       url: `${HOST}/`,
       urlCanonical: `${HOST}/`,
       urlHash: 'bootstrap',
       domain: 'sample-isd.example.org',
-      sourceType: 'file_import',
+      sourceTypeCode: 'manual_entry',
       httpStatus: 200,
       contentHash: null,
       contentType: 'text/html',
@@ -63,27 +74,66 @@ async function main(): Promise<void> {
       robotsAllowed: true,
       robotsPolicyNote: 'local fixture seed',
       crawlRunId: null,
-      fetchedAt: new Date().toISOString(),
+      retrievedAt: now,
     });
 
-    const state = await database.query<{ id: Uuid }>(
-      `insert into states (code, name, fips_code, config_key) values ('TX','Texas','48','texas') returning id`,
-    );
-    const stateId = state.rows[0]!.id;
-    const county = await database.query<{ id: Uuid }>(
-      `insert into counties (state_id, name, name_normalized) values ($1,'Harris','harris') returning id`,
-      [stateId],
-    );
-    const district = await database.query<{ id: Uuid }>(
-      `insert into districts (state_id, county_id, name, name_normalized, primary_domain, source_page_id, extraction_method, confidence)
-       values ($1,$2,'Sample ISD','sample','sample-isd.example.org',$3,'file_import',1) returning id`,
-      [stateId, county.rows[0]!.id, bootstrapPageId],
-    );
-    const school = await database.query<{ id: Uuid }>(
-      `insert into schools (district_id, state_id, county_id, name, name_normalized, source_page_id, extraction_method, confidence)
-       values ($1,$2,$3,'Sample High School','sample-high',$4,'file_import',1) returning id`,
-      [district.rows[0]!.id, stateId, county.rows[0]!.id, bootstrapPageId],
-    );
+    // Geography and jurisdiction, kept apart from the employer hierarchy.
+    const stateArea = await organizations.upsertGeographicArea({
+      areaTypeCode: 'state',
+      name: 'Texas',
+      nameNormalized: 'texas',
+      stateCode: 'TX',
+    });
+    await organizations.upsertGeographicArea({
+      areaTypeCode: 'county',
+      name: 'Harris',
+      nameNormalized: 'harris',
+      parentAreaId: stateArea,
+      stateCode: 'TX',
+    });
+    const jurisdictionId = await organizations.upsertJurisdiction({
+      code: 'us-tx-education',
+      name: 'Texas public education',
+      governmentLevelCode: 'education',
+      geographicAreaId: stateArea,
+    });
+
+    const suffixes = taxonomy.vocabulary.organizationNameSuffixes;
+    const parent = await organizations.upsertOrganization({
+      organizationTypeCode: 'school_district',
+      governmentLevelCode: 'education',
+      sectorCode: 'education',
+      jurisdictionId,
+      name: 'Sample Independent School District',
+      nameNormalized: normalizeOrganizationName('Sample Independent School District', suffixes),
+      primaryDomain: 'sample-isd.example.org',
+      sourceDocumentId: bootstrapDocumentId,
+      extractionMethod: 'manual',
+      confidence: 1,
+      observedAt: now,
+    });
+    const child = await organizations.upsertOrganization({
+      organizationTypeCode: 'school',
+      governmentLevelCode: 'education',
+      sectorCode: 'education',
+      jurisdictionId,
+      name: 'Sample High School',
+      nameNormalized: normalizeOrganizationName('Sample High School', suffixes),
+      sourceDocumentId: bootstrapDocumentId,
+      extractionMethod: 'manual',
+      confidence: 1,
+      observedAt: now,
+    });
+    await organizations.upsertRelationship({
+      parentOrganizationId: parent.id,
+      childOrganizationId: child.id,
+      relationshipTypeCode: 'part_of',
+      effectiveFrom: '2020-08-01',
+      sourceDocumentId: bootstrapDocumentId,
+      extractionMethod: 'manual',
+      confidence: 1,
+      observedAt: now,
+    });
 
     const routes = readdirSync(FIXTURES)
       .filter((file) => file.endsWith('.html'))
@@ -100,18 +150,20 @@ async function main(): Promise<void> {
       sleep: () => Promise.resolve(),
     });
 
-    const context = {
-      stateId,
-      stateCode: 'TX',
-      districtId: district.rows[0]!.id,
-      schoolId: school.rows[0]!.id,
-      districtName: 'Sample ISD',
-      sourceType: 'district_site' as const,
+    const context: IngestContext = {
+      organizationId: child.id,
+      organizationName: 'Sample High School',
+      governmentLevelCode: 'education',
+      sectorCode: 'education',
+      jurisdictionId,
+      sourceTypeCode: 'html_directory',
+      vocabulary: taxonomy.vocabulary,
+      titleRules,
     };
 
     const runOnce = async (label: string): Promise<void> => {
-      const crawlRunId = await crawl.startRun({
-        stateId,
+      const crawlRunId: Uuid = await crawl.startRun({
+        jurisdictionId,
         runType: 'fixture',
         config: { seedUrl: routes[0]?.url ?? '' },
         initiatedBy: 'fixture-crawl-cli',
@@ -121,19 +173,22 @@ async function main(): Promise<void> {
         crawlTargetId: null,
         seedUrl: routes[0]?.url ?? '',
         adapter: genericHtmlAdapter,
-        districtName: 'Sample ISD',
-        policy: withPolicyDefaults({ requestDelayMs: 0, respectRobots: false }),
+        organizationName: 'Sample High School',
+        parentOrganizationName: 'Sample Independent School District',
+        vocabulary: taxonomy.vocabulary,
+        collectionMode: 'fixture',
+        policy: buildCrawlPolicy({ requestDelayMs: 0, respectRobots: false }),
       });
       const summary = await pipeline.ingestRun(result, context);
       await crawl.finishRun(crawlRunId, 'completed', result.stats, new Date().toISOString());
       logger.info(
         { label, stops: result.stops.map((stop) => stop.reason), ...summary },
-        'crawl pass complete',
+        'collection pass complete',
       );
     };
 
     await runOnce('first pass');
-    await runOnce('second pass, proving recrawl is idempotent');
+    await runOnce('second pass, proving a repeat collection is idempotent');
 
     await compliance.recordComplaint({
       channel: 'email',
@@ -148,20 +203,37 @@ async function main(): Promise<void> {
     const built = await exports.buildPeopleExport({
       name: 'fixture-demo',
       requestedBy: 'fixture-crawl-cli',
-      filters: { stateCode: 'TX' },
+      purpose: EXPORT_PURPOSE,
+      filters: { sectorCode: 'education' },
     });
 
     mkdirSync(OUT_DIR, { recursive: true });
     const outPath = join(OUT_DIR, 'fixture-export.csv');
     writeFileSync(outPath, built.csv, 'utf8');
 
-    const coverage = await queries.coverageSummary('TX');
+    // The same opt-out mechanism, applied to a whole organization subtree.
+    await compliance.addSuppression({
+      scope: 'organization_subtree',
+      value: parent.id,
+      organizationId: parent.id,
+      reason: 'demonstration: the parent organization asked not to be contacted',
+      source: 'opt_out_request',
+      effectiveAt: new Date(Date.now() - 30_000).toISOString(),
+      createdBy: 'fixture-crawl-cli',
+    });
+    const afterSubtree = await exports.buildPeopleExport({
+      name: 'fixture-demo-after-subtree',
+      requestedBy: 'fixture-crawl-cli',
+      purpose: EXPORT_PURPOSE,
+      filters: { sectorCode: 'education' },
+    });
+
+    const coverage = await queries.coverageSummary({ sectorCode: 'education' });
     logger.info({ coverage }, 'coverage after the fixture run');
-    logger.info(
-      { rows: built.rowCount, suppressedInSql: 1, checksum: built.checksum.slice(0, 16), outPath },
-      'export written; the opted-out person is absent',
+    process.stdout.write(
+      `\nWrote ${built.rowCount} rows to ${outPath}\n` +
+        `After suppressing the parent organization subtree: ${afterSubtree.rowCount} rows\n`,
     );
-    process.stdout.write(`\nWrote ${built.rowCount} rows to ${outPath}\n`);
   } finally {
     await database.close();
   }

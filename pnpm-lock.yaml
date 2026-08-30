@@ -74,6 +74,9 @@ importers:
       '@pan/shared-types':
         specifier: workspace:*
         version: link:../shared-types
+      '@pan/taxonomy':
+        specifier: workspace:*
+        version: link:../taxonomy
 
   packages/database:
     dependencies:
@@ -86,6 +89,9 @@ importers:
       '@pan/shared-types':
         specifier: workspace:*
         version: link:../shared-types
+      '@pan/taxonomy':
+        specifier: workspace:*
+        version: link:../taxonomy
       pg:
         specifier: ^8.13.0
         version: 8.23.0
@@ -135,6 +141,9 @@ importers:
       '@pan/shared-types':
         specifier: workspace:*
         version: link:../../shared-types
+      '@pan/taxonomy':
+        specifier: workspace:*
+        version: link:../../taxonomy
 
   packages/extraction:
     dependencies:
@@ -151,15 +160,7 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3
 
-  packages/observability:
-    dependencies:
-      pino:
-        specifier: ^9.5.0
-        version: 9.14.0
-
-  packages/shared-types: {}
-
-  packages/state-config/kit:
+  packages/jurisdiction-config/kit:
     dependencies:
       '@pan/core':
         specifier: workspace:*
@@ -167,15 +168,62 @@ importers:
       '@pan/shared-types':
         specifier: workspace:*
         version: link:../../shared-types
+      '@pan/taxonomy':
+        specifier: workspace:*
+        version: link:../../taxonomy
 
-  packages/state-config/texas:
+  packages/jurisdiction-config/texas-education:
     dependencies:
+      '@pan/jurisdiction-kit':
+        specifier: workspace:*
+        version: link:../kit
+      '@pan/sector-education':
+        specifier: workspace:*
+        version: link:../../sectors/education
       '@pan/shared-types':
         specifier: workspace:*
         version: link:../../shared-types
-      '@pan/state-kit':
+      '@pan/taxonomy':
         specifier: workspace:*
-        version: link:../kit
+        version: link:../../taxonomy
+
+  packages/observability:
+    dependencies:
+      pino:
+        specifier: ^9.5.0
+        version: 9.14.0
+
+  packages/sectors/education:
+    dependencies:
+      '@pan/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@pan/shared-types':
+        specifier: workspace:*
+        version: link:../../shared-types
+      '@pan/taxonomy':
+        specifier: workspace:*
+        version: link:../../taxonomy
+
+  packages/sectors/federal-government:
+    dependencies:
+      '@pan/taxonomy':
+        specifier: workspace:*
+        version: link:../../taxonomy
+
+  packages/sectors/state-local-government:
+    dependencies:
+      '@pan/taxonomy':
+        specifier: workspace:*
+        version: link:../../taxonomy
+
+  packages/shared-types: {}
+
+  packages/taxonomy:
+    dependencies:
+      '@pan/shared-types':
+        specifier: workspace:*
+        version: link:../shared-types
 
   services/crawler-worker:
     dependencies:
@@ -197,18 +245,30 @@ importers:
       '@pan/extraction':
         specifier: workspace:*
         version: link:../../packages/extraction
+      '@pan/jurisdiction-kit':
+        specifier: workspace:*
+        version: link:../../packages/jurisdiction-config/kit
+      '@pan/jurisdiction-texas-education':
+        specifier: workspace:*
+        version: link:../../packages/jurisdiction-config/texas-education
       '@pan/observability':
         specifier: workspace:*
         version: link:../../packages/observability
+      '@pan/sector-education':
+        specifier: workspace:*
+        version: link:../../packages/sectors/education
+      '@pan/sector-federal':
+        specifier: workspace:*
+        version: link:../../packages/sectors/federal-government
+      '@pan/sector-state-local':
+        specifier: workspace:*
+        version: link:../../packages/sectors/state-local-government
       '@pan/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
-      '@pan/state-kit':
+      '@pan/taxonomy':
         specifier: workspace:*
-        version: link:../../packages/state-config/kit
-      '@pan/state-texas':
-        specifier: workspace:*
-        version: link:../../packages/state-config/texas
+        version: link:../../packages/taxonomy
 
   services/discovery-worker:
     dependencies:

@@ -18,7 +18,8 @@
   "dependencies": {
     "@pan/shared-types": "workspace:*",
     "@pan/core": "workspace:*",
-    "@pan/extraction": "workspace:*"
+    "@pan/extraction": "workspace:*",
+    "@pan/taxonomy": "workspace:*"
   },
   "devDependencies": {}
 }

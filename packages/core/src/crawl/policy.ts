@@ -31,6 +31,13 @@ export interface CrawlPolicy {
    */
   allowedDomains: readonly string[];
   excludedUrlPatterns: readonly RegExp[];
+  /**
+   * DNS labels used by United States locality domains, from the taxonomy.
+   *
+   * Without them `co.harris.tx.us` and `ci.austin.tx.us` both collapse to
+   * `tx.us`, and every public body in a state looks like one site.
+   */
+  localityDomainLabels: readonly string[];
   maxRetries: number;
   retryBaseDelayMs: number;
   requestTimeoutMs: number;
@@ -50,6 +57,7 @@ export const DEFAULT_CRAWL_POLICY: CrawlPolicy = {
   respectRobots: true,
   allowedDomains: [],
   excludedUrlPatterns: DEFAULT_URL_EXCLUSION_PATTERNS,
+  localityDomainLabels: [],
   maxRetries: 2,
   retryBaseDelayMs: 500,
   requestTimeoutMs: 20_000,
@@ -64,13 +72,15 @@ export function isAllowedDomain(url: string, seedUrl: string, policy: CrawlPolic
   let host: string;
   let seedHost: string;
   try {
-    host = registrableDomain(new URL(url).hostname);
-    seedHost = registrableDomain(new URL(seedUrl).hostname);
+    host = registrableDomain(new URL(url).hostname, policy.localityDomainLabels);
+    seedHost = registrableDomain(new URL(seedUrl).hostname, policy.localityDomainLabels);
   } catch {
     return false;
   }
   if (policy.allowedDomains.length === 0) return host === seedHost;
-  return policy.allowedDomains.some((allowed) => registrableDomain(allowed) === host);
+  return policy.allowedDomains.some(
+    (allowed) => registrableDomain(allowed, policy.localityDomainLabels) === host,
+  );
 }
 
 /**

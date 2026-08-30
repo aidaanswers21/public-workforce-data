@@ -7,19 +7,19 @@ import {
   withPolicyDefaults,
   type CrawlPolicy,
 } from '@pan/core';
-import type { Fetcher, RobotsProvider, Uuid } from '@pan/shared-types';
+import type { DirectoryVocabulary, Fetcher, RobotsProvider, Uuid } from '@pan/shared-types';
 import type { Logger } from '@pan/observability';
 import type { AdapterRegistry } from '@pan/adapter-kit';
 import { UnsupportedPlatformError } from '@pan/adapter-kit';
 import type { SqlClient } from '@pan/database';
 
 export interface DiscoveryTarget {
-  districtId: Uuid | null;
-  schoolId: Uuid | null;
-  stateId: Uuid;
+  /** The organization whose site this is. Any public body, at any level. */
+  organizationId: Uuid;
+  jurisdictionId: Uuid | null;
   siteUrl: string;
-  districtName: string | null;
-  schoolName: string | null;
+  organizationName: string | null;
+  parentOrganizationName: string | null;
 }
 
 export interface DiscoveredCandidate {
@@ -38,12 +38,12 @@ export interface DiscoverySummary {
 }
 
 /**
- * Finds a district or school's staff directory and records it as a crawl target.
+ * Finds an organization's staff directory and records it as a crawl target.
  *
  * Discovery is separated from crawling so that "we could not find a directory"
  * and "we found one and it broke" are different, countable outcomes. Coverage
- * reporting depends on that distinction: a state with 900 districts and 200
- * discovered directories is a discovery problem, not an extraction one.
+ * reporting depends on that distinction: 900 organizations with 200 discovered
+ * directories is a discovery problem, not an extraction one.
  */
 export class DiscoveryWorker {
   constructor(
@@ -53,6 +53,8 @@ export class DiscoveryWorker {
       robots: RobotsProvider;
       adapters: AdapterRegistry;
       logger: Logger;
+      /** Composed from the registered sectors. Never hard-coded here. */
+      vocabulary: DirectoryVocabulary;
       policy?: Partial<CrawlPolicy>;
     },
   ) {}
@@ -96,7 +98,12 @@ export class DiscoveryWorker {
     const page = outcome.page;
     let selection;
     try {
-      selection = this.deps.adapters.select({ url: seed, page, hints: {} });
+      selection = this.deps.adapters.select({
+        url: seed,
+        page,
+        hints: {},
+        vocabulary: this.deps.vocabulary,
+      });
     } catch (error) {
       if (error instanceof UnsupportedPlatformError) {
         await this.recordUnsupported(target, seed);
@@ -113,16 +120,17 @@ export class DiscoveryWorker {
 
     const discovered = selection.adapter.discoverDirectories(page, {
       baseUrl: page.finalUrl,
-      districtName: target.districtName,
-      schoolName: target.schoolName,
+      organizationName: target.organizationName,
+      parentOrganizationName: target.parentOrganizationName,
       allowedDomains: [],
+      vocabulary: this.deps.vocabulary,
       now: () => new Date(),
     });
 
     const candidates: DiscoveredCandidate[] = [];
     for (const entry of discovered) {
       if (isExcludedUrl(entry.url).excluded) continue;
-      const scored = scoreDirectoryUrl(entry.url);
+      const scored = scoreDirectoryUrl(entry.url, this.deps.vocabulary.urlHints);
       candidates.push({
         url: entry.url,
         score: Math.max(entry.score, scored.score),
@@ -153,44 +161,41 @@ export class DiscoveryWorker {
   ): Promise<void> {
     await this.deps.client.query(
       `insert into crawl_targets (
-         state_id, district_id, school_id, url, url_hash, target_type, source_type,
+         organization_id, jurisdiction_id, url, url_hash, target_type, source_type_code,
          adapter_key, status, priority
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,'ready',$9)
-       on conflict (state_id, url_hash) do update set
+       ) values ($1,$2,$3,$4,'organization_directory','html_directory',$5,'ready',$6)
+       on conflict (url_hash) do update set
          adapter_key = excluded.adapter_key,
          status = case when crawl_targets.status = 'crawled' then crawl_targets.status else excluded.status end,
          priority = excluded.priority,
          updated_at = now()`,
       [
-        target.stateId,
-        target.districtId,
-        target.schoolId,
+        target.organizationId,
+        target.jurisdictionId,
         candidate.url,
         urlHash(candidate.url),
-        target.schoolId === null ? 'district_directory' : 'school_directory',
-        target.schoolId === null ? 'district_site' : 'school_site',
         candidate.adapterKey,
         Math.round((1 - candidate.score) * 100),
       ],
     );
   }
 
+  /**
+   * Record a site no adapter claimed.
+   *
+   * Kept as a countable outcome rather than an error, because a real platform
+   * appearing repeatedly is what justifies writing an adapter for it.
+   */
   private async recordUnsupported(target: DiscoveryTarget, url: string): Promise<void> {
     await this.deps.client.query(
       `insert into crawl_targets (
-         state_id, district_id, school_id, url, url_hash, target_type, source_type, status, exclusion_reason
-       ) values ($1,$2,$3,$4,$5,$6,$7,'unsupported_platform','no registered adapter claimed this site')
-       on conflict (state_id, url_hash) do update set
+         organization_id, jurisdiction_id, url, url_hash, target_type, source_type_code,
+         status, exclusion_reason
+       ) values ($1,$2,$3,$4,'organization_site','html_directory','unsupported_platform',
+                 'no registered adapter claimed this site')
+       on conflict (url_hash) do update set
          status = 'unsupported_platform', updated_at = now()`,
-      [
-        target.stateId,
-        target.districtId,
-        target.schoolId,
-        url,
-        urlHash(url),
-        target.schoolId === null ? 'district_site' : 'school_site',
-        target.schoolId === null ? 'district_site' : 'school_site',
-      ],
+      [target.organizationId, target.jurisdictionId, url, urlHash(url)],
     );
   }
 }

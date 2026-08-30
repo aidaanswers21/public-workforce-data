@@ -39,8 +39,14 @@ export class CandidateGenerator {
     private readonly deps: { client: SqlClient; queries: QueryRepository; logger: Logger },
   ) {}
 
-  async generateForState(
-    stateCode: string,
+  /**
+   * Generate candidates for every domain in scope.
+   *
+   * Scope is an organization filter, not a state: a federal agency has no state,
+   * and a county department is not reached by naming one.
+   */
+  async generateForScope(
+    scope: { governmentLevelCode?: string; sectorCode?: string } = {},
     options: CandidateGenerationOptions = {},
   ): Promise<CandidateGenerationSummary> {
     const summary: CandidateGenerationSummary = {
@@ -55,10 +61,11 @@ export class CandidateGenerator {
     const domains = await this.deps.client.query<{ domain: string }>(
       `select distinct e.domain
        from email_addresses e
-       join people p on p.id = e.person_id
-       join states s on s.id = p.state_id
-       where s.code = $1 and e.classification in ('published','decoded_published')`,
-      [stateCode.toUpperCase()],
+       join organizations o on o.id = e.organization_id
+       where e.classification in ('published','decoded_published')
+         and ($1::text is null or o.government_level_code = $1)
+         and ($2::text is null or o.sector_code = $2)`,
+      [scope.governmentLevelCode ?? null, scope.sectorCode ?? null],
     );
 
     for (const { domain } of domains.rows) {
@@ -89,17 +96,22 @@ export class CandidateGenerator {
       // Only people with no observed address at all get a candidate. Guessing
       // an address for someone whose real one is published would be pointless
       // and would risk the guess being mistaken for the published value.
-      const targets = await this.deps.client.query<{ id: Uuid; full_name_published: string }>(
-        `select p.id, p.full_name_published
+      // Only people with no observed address at all get a candidate. Guessing
+      // for someone whose real address is published would be pointless and
+      // would risk the guess being mistaken for the published value.
+      const targets = await this.deps.client.query<{
+        id: Uuid;
+        full_name_published: string;
+        organization_id: Uuid;
+      }>(
+        `select p.id, p.full_name_published, emp.organization_id
          from people p
-         join states s on s.id = p.state_id
          join employment_assignments emp on emp.person_id = p.id
-         join districts d on d.id = coalesce(emp.district_id, (select district_id from schools where id = emp.school_id))
-         where s.code = $1
-           and not exists (select 1 from email_addresses e where e.person_id = p.id)
-           and (d.primary_domain = $2 or $2 = any(d.email_domains))
-         group by p.id, p.full_name_published`,
-        [stateCode.toUpperCase(), domain],
+         join organizations o on o.id = emp.organization_id
+         where not exists (select 1 from email_addresses e where e.person_id = p.id)
+           and (o.primary_domain = $1 or $1 = any(o.email_domains))
+         group by p.id, p.full_name_published, emp.organization_id`,
+        [domain],
       );
 
       for (const target of targets.rows) {
@@ -111,9 +123,9 @@ export class CandidateGenerator {
         }
         await this.deps.client.query(
           `insert into email_candidates (
-             person_id, domain, address, pattern, supporting_examples, support_count,
-             conflict_count, consistency, confidence, state
-           ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending')
+             person_id, organization_id, domain, address, pattern, supporting_examples,
+             support_count, conflict_count, consistency, confidence, state
+           ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'pending')
            on conflict (person_id, address) do update set
              pattern = excluded.pattern,
              supporting_examples = excluded.supporting_examples,
@@ -138,7 +150,7 @@ export class CandidateGenerator {
       }
     }
 
-    this.deps.logger.info({ stateCode, ...summary }, 'candidate generation complete');
+    this.deps.logger.info({ ...scope, ...summary }, 'candidate generation complete');
     return summary;
   }
 

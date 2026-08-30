@@ -1,4 +1,9 @@
-import type { ExtractedEmail, ExtractedPersonRecord, ExtractionMethod } from '@pan/shared-types';
+import type {
+  DirectoryVocabulary,
+  ExtractedEmail,
+  ExtractedPersonRecord,
+  ExtractionMethod,
+} from '@pan/shared-types';
 import {
   collapseWhitespace,
   decodeCloudflareEmail,
@@ -20,7 +25,7 @@ export interface RecordDraft {
   fullNamePublished: string;
   titlePublished?: string | null;
   departmentPublished?: string | null;
-  schoolPublished?: string | null;
+  organizationPublished?: string | null;
   phonePublished?: string | null;
   profileUrl?: string | null;
   /** Any text that may contain addresses: cell contents, mailto hrefs, data attributes. */
@@ -31,6 +36,14 @@ export interface RecordDraft {
   confidence: number;
   selector?: string | null;
   snippet?: string | null;
+  /**
+   * Composed from the registered sectors.
+   *
+   * Required, because deciding whether a row names a person or an office is a
+   * vocabulary question, and an adapter that guessed would quietly become
+   * specific to one vertical.
+   */
+  vocabulary: DirectoryVocabulary;
 }
 
 /**
@@ -49,7 +62,12 @@ export function buildPersonRecord(draft: RecordDraft): ExtractedPersonRecord | n
   // "Front Office" parses as a name whose surname is "Office", which would
   // otherwise make office@ look like that person's own address. An organization
   // label vouches for nothing.
-  const nameForClassification = isOrganizationLabel(fullNamePublished) ? null : parsed;
+  const nameForClassification = isOrganizationLabel(
+    fullNamePublished,
+    draft.vocabulary.organizationLabelWords,
+  )
+    ? null
+    : parsed;
   const emails = new Map<string, ExtractedEmail>();
 
   const addEmail = (candidate: {
@@ -65,6 +83,10 @@ export function buildPersonRecord(draft: RecordDraft): ExtractedPersonRecord | n
       obfuscation: candidate.obfuscation,
       origin: 'observed',
       personName: nameForClassification,
+      sharedInbox: {
+        localParts: draft.vocabulary.sharedInboxLocalParts,
+        prefixes: draft.vocabulary.sharedInboxPrefixes,
+      },
     });
     emails.set(address, {
       raw: candidate.raw,
@@ -105,7 +127,7 @@ export function buildPersonRecord(draft: RecordDraft): ExtractedPersonRecord | n
     fullNamePublished,
     titlePublished: emptyToNull(draft.titlePublished),
     departmentPublished: emptyToNull(draft.departmentPublished),
-    schoolPublished: emptyToNull(draft.schoolPublished),
+    organizationPublished: emptyToNull(draft.organizationPublished),
     phonePublished: phone,
     emails: [...emails.values()],
     profileUrl: emptyToNull(draft.profileUrl),

@@ -1,5 +1,5 @@
-import type { ExtractedPersonRecord } from '@pan/shared-types';
-import { collapseWhitespace, looksLikeTitle, normalizePhone } from '@pan/core';
+import type { DirectoryVocabulary, ExtractedPersonRecord } from '@pan/shared-types';
+import { collapseWhitespace, normalizePhone } from '@pan/core';
 import {
   classifyHeader,
   cloudflareEncodedValues,
@@ -18,6 +18,8 @@ export interface ExtractInput {
   $: Html;
   sourceUrl: string;
   adapterKey: string;
+  /** Composed from the registered sectors; never hard-coded in this package. */
+  vocabulary: DirectoryVocabulary;
 }
 
 /** Structured markup first: the site has already told us what each value means. */
@@ -33,9 +35,10 @@ export function extractStructured(input: ExtractInput): ExtractedPersonRecord[] 
       fullNamePublished: person.name,
       titlePublished: person.title,
       departmentPublished: person.department,
-      schoolPublished: person.affiliation,
+      organizationPublished: person.affiliation,
       phonePublished: person.telephone,
       emailSources: person.email === null ? [] : [person.email],
+      vocabulary: input.vocabulary,
       extractionMethod: person.source === 'json_ld' ? 'json_ld' : 'microdata',
       confidence: 0.95,
       selector:
@@ -53,7 +56,7 @@ export function extractFromTables(input: ExtractInput): ExtractedPersonRecord[] 
   const records: ExtractedPersonRecord[] = [];
 
   input.$('table').each((tableIndex, table) => {
-    const parsed = parseTable(input.$, table);
+    const parsed = parseTable(input.$, table, input.vocabulary.organizationFieldAliases);
     if (parsed.score < 0.5) return;
 
     parsed.rows.forEach((row, rowIndex) => {
@@ -88,11 +91,12 @@ export function extractFromTables(input: ExtractInput): ExtractedPersonRecord[] 
         fullNamePublished: composed,
         titlePublished: first('title'),
         departmentPublished: first('department'),
-        schoolPublished: first('school'),
+        organizationPublished: first('organization'),
         phonePublished: first('phone'),
         emailSources,
         cloudflareEncoded: collectCfEmails(input.$, rowHtml),
         profileUrl: firstProfileHref(input.$, rowHtml),
+        vocabulary: input.vocabulary,
         extractionMethod: 'html_table',
         confidence: parsed.score,
         selector: row.selector,
@@ -105,17 +109,29 @@ export function extractFromTables(input: ExtractInput): ExtractedPersonRecord[] 
   return records;
 }
 
-const CARD_CONTAINER_SELECTORS = [
-  '[class*="staff" i]',
-  '[class*="faculty" i]',
-  '[class*="directory" i]',
-  '[class*="employee" i]',
+/** Structural selectors that carry no vertical-specific vocabulary. */
+const STRUCTURAL_CARD_SELECTORS = [
   '[class*="person" i]',
-  '[class*="team-member" i]',
   '[class*="profile" i]',
+  '[class*="member" i]',
   'li',
   'article',
 ];
+
+/**
+ * Class-name selectors built from the composed vocabulary.
+ *
+ * A site that classes its rows `.personnel-card` and one that uses
+ * `.staff-listing` are both found, without this package knowing which vertical
+ * contributed either word.
+ */
+function cardSelectors(vocabulary: DirectoryVocabulary): string[] {
+  const fromVocabulary = vocabulary.headingTerms
+    .map((term) => term.trim().split(/\s+/)[0] ?? '')
+    .filter((word) => /^[a-z]{4,}$/i.test(word))
+    .map((word) => `[class*="${word.toLowerCase()}" i]`);
+  return [...new Set([...fromVocabulary, ...STRUCTURAL_CARD_SELECTORS])];
+}
 
 /**
  * Card and list directories.
@@ -129,7 +145,7 @@ export function extractFromCards(input: ExtractInput): ExtractedPersonRecord[] {
   const { $ } = input;
   const groups = new Map<string, { elements: ReturnType<Html>[]; selector: string }>();
 
-  for (const selector of CARD_CONTAINER_SELECTORS) {
+  for (const selector of cardSelectors(input.vocabulary)) {
     $(selector).each((_index, element) => {
       const node = $(element);
       const tag = (node.prop('tagName') ?? '').toLowerCase();
@@ -166,9 +182,9 @@ export function extractFromCards(input: ExtractInput): ExtractedPersonRecord[] {
         cfEmails.length > 0 ||
         inlineEmails.length > 0;
 
-      const name = guessNameWithin($, node);
+      const name = guessNameWithin($, node, input.vocabulary);
       if (name === null) return;
-      const title = guessTitleWithin($, node, name);
+      const title = guessTitleWithin($, node, name, input.vocabulary);
       if (!hasContact && title === null) return;
 
       const localKey = `card:${name}#${index}`;
@@ -185,6 +201,7 @@ export function extractFromCards(input: ExtractInput): ExtractedPersonRecord[] {
         emailSources: [...emailSources, ...attributeEmails, ...inlineEmails],
         cloudflareEncoded: cfEmails,
         profileUrl: firstProfileHref($, html),
+        vocabulary: input.vocabulary,
         extractionMethod: group.selector === 'li' ? 'html_list' : 'html_card',
         confidence: hasContact ? 0.8 : 0.6,
         selector: group.selector,
@@ -219,10 +236,11 @@ export function extractFromDefinitionLists(input: ExtractInput): ExtractedPerson
         sourceUrl: input.sourceUrl,
         localKey: `dl${listIndex}:${index}:${name}`,
         fullNamePublished: name,
-        titlePublished: firstTitleLike(text),
+        titlePublished: firstTitleLike(text, input.vocabulary),
         phonePublished: guessPhoneWithin(text),
         emailSources: [...collectHrefEmails($, html), text],
         cloudflareEncoded: collectCfEmails($, html),
+        vocabulary: input.vocabulary,
         extractionMethod: 'html_definition_list',
         confidence: 0.7,
         selector: 'dl > dt + dd',
@@ -255,7 +273,8 @@ export function extractFromMailtoLinks(input: ExtractInput): ExtractedPersonReco
 
     const name = looksLikePersonName(linkText)
       ? linkText
-      : (guessNameWithin($, container.length > 0 ? container : $(element)) ?? null);
+      : (guessNameWithin($, container.length > 0 ? container : $(element), input.vocabulary) ??
+        null);
     if (name === null) return;
 
     const record = buildPersonRecord({
@@ -263,9 +282,10 @@ export function extractFromMailtoLinks(input: ExtractInput): ExtractedPersonReco
       sourceUrl: input.sourceUrl,
       localKey: `mailto:${href}#${index}`,
       fullNamePublished: name,
-      titlePublished: firstTitleLike(containerText),
+      titlePublished: firstTitleLike(containerText, input.vocabulary),
       phonePublished: guessPhoneWithin(containerText),
       emailSources: [href],
+      vocabulary: input.vocabulary,
       extractionMethod: 'mailto_harvest',
       confidence: 0.45,
       selector: 'a[href^="mailto:"]',
@@ -303,7 +323,7 @@ function firstProfileHref($: Html, html: string): string | null {
     const href = fragment(element).attr('href');
     if (href === undefined) return;
     if (/^(mailto:|tel:|#|javascript:)/i.test(href)) return;
-    if (!/(staff|profile|bio|person|employee|directory|teacher|user)/i.test(href)) return;
+    if (!/(staff|profile|bio|person|employee|directory|user|detail)/i.test(href)) return;
     found = href;
   });
   return found;
@@ -321,21 +341,30 @@ const NAME_SELECTORS = [
   'a[href]',
 ];
 
-function guessNameWithin($: Html, node: ReturnType<Html>): string | null {
+function guessNameWithin(
+  $: Html,
+  node: ReturnType<Html>,
+  vocabulary: DirectoryVocabulary,
+): string | null {
   for (const selector of NAME_SELECTORS) {
     const candidate = node.find(selector).first();
     if (candidate.length === 0) continue;
     const text = textOf($, candidate);
-    if (looksLikePersonName(text) && !looksLikeTitle(text)) return text;
+    if (looksLikePersonName(text) && !looksLikeTitleText(text, vocabulary)) return text;
   }
   const own = textOf($, node);
   const firstLine = own.split(/[|,•]/)[0] ?? '';
-  return looksLikePersonName(firstLine) && !looksLikeTitle(firstLine)
+  return looksLikePersonName(firstLine) && !looksLikeTitleText(firstLine, vocabulary)
     ? collapseWhitespace(firstLine)
     : null;
 }
 
-function guessTitleWithin($: Html, node: ReturnType<Html>, name: string): string | null {
+function guessTitleWithin(
+  $: Html,
+  node: ReturnType<Html>,
+  name: string,
+  vocabulary: DirectoryVocabulary,
+): string | null {
   const explicit = node
     .find('[class*="title" i], [class*="position" i], [class*="role" i], [class*="job" i]')
     .first();
@@ -345,18 +374,39 @@ function guessTitleWithin($: Html, node: ReturnType<Html>, name: string): string
   }
   const text = textOf($, node);
   const withoutName = text.replace(name, ' ');
-  return firstTitleLike(withoutName);
+  return firstTitleLike(withoutName, vocabulary);
 }
 
-function firstTitleLike(text: string): string | null {
+function firstTitleLike(text: string, vocabulary: DirectoryVocabulary): string | null {
   for (const segment of text.split(/[|•\n]|\s{2,}|,\s/)) {
     const cleaned = collapseWhitespace(segment);
     if (cleaned.length < 3 || cleaned.length > 90) continue;
     if (cleaned.includes('@')) continue;
     if (classifyHeader(cleaned) !== 'unknown') continue;
-    if (looksLikeTitle(cleaned)) return cleaned;
+    if (looksLikeTitleText(cleaned, vocabulary)) return cleaned;
   }
   return null;
+}
+
+/**
+ * True when a string reads as a job title rather than a name.
+ *
+ * Uses the composed indicator terms, so a page that says "Bureau Chief" and one
+ * that says "Lead Teacher" are both recognized without this package knowing
+ * which vertical contributed either word.
+ */
+function looksLikeTitleText(value: string, vocabulary: DirectoryVocabulary): boolean {
+  const cleaned = collapseWhitespace(value).toLowerCase();
+  if (cleaned.length === 0) return false;
+  if (
+    /^(name|staff|employee|title|position|email|phone|department|office|organization)$/.test(
+      cleaned,
+    )
+  ) {
+    return true;
+  }
+  const words = new Set(cleaned.split(/[^a-z]+/).filter(Boolean));
+  return vocabulary.titleIndicatorTerms.some((term) => words.has(term.toLowerCase()));
 }
 
 function guessPhoneWithin(text: string): string | null {

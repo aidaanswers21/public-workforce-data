@@ -1,0 +1,42 @@
+// Type-checks the test suite, which the package builds deliberately exclude.
+//
+// Tests run against sources through Vitest aliases and never ship in `dist`, so
+// no package tsconfig includes them. Without this project a required field
+// added to an interface would break the tests at run time only, which is how a
+// stale fixture stays stale.
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "composite": false,
+    "incremental": false,
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "types": ["node"],
+    "baseUrl": ".",
+    "paths": {
+      "@pan/shared-types": ["packages/shared-types/src/index.ts"],
+      "@pan/observability": ["packages/observability/src/index.ts"],
+      "@pan/core": ["packages/core/src/index.ts"],
+      "@pan/extraction": ["packages/extraction/src/index.ts"],
+      "@pan/database": ["packages/database/src/index.ts"],
+      "@pan/adapter-kit": ["packages/directory-adapters/kit/src/index.ts"],
+      "@pan/adapter-generic-html": ["packages/directory-adapters/generic-html/src/index.ts"],
+      "@pan/adapter-generic-json": ["packages/directory-adapters/generic-json/src/index.ts"],
+      "@pan/taxonomy": ["packages/taxonomy/src/index.ts"],
+      "@pan/sector-education": ["packages/sectors/education/src/index.ts"],
+      "@pan/sector-state-local": ["packages/sectors/state-local-government/src/index.ts"],
+      "@pan/sector-federal": ["packages/sectors/federal-government/src/index.ts"],
+      "@pan/jurisdiction-kit": ["packages/jurisdiction-config/kit/src/index.ts"],
+      "@pan/jurisdiction-texas-education": [
+        "packages/jurisdiction-config/texas-education/src/index.ts"
+      ],
+      "@pan/crawler-worker": ["services/crawler-worker/src/index.ts"],
+      "@pan/discovery-worker": ["services/discovery-worker/src/index.ts"],
+      "@pan/validation-worker": ["services/validation-worker/src/index.ts"]
+    }
+  },
+  "include": ["**/*.test.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", "**/dist/**"]
+}

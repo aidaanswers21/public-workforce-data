@@ -3,24 +3,52 @@ import type { Timestamp, Uuid } from '@pan/shared-types';
 import type { SqlClient } from '../client.js';
 
 export interface ExportFilters {
+  governmentLevelCode?: string;
+  sectorCode?: string;
+  jurisdictionId?: Uuid;
+  organizationId?: Uuid;
+  /** Include everything under the organization, not only its own staff. */
+  includeOrganizationSubtree?: boolean;
   stateCode?: string;
-  districtId?: Uuid;
-  schoolId?: Uuid;
-  roleCategories?: readonly string[];
-  /** Include rows whose only address is an inferred candidate. Off by default. */
+  roleCategoryCodes?: readonly string[];
+  assignmentStatuses?: readonly string[];
   includeInferredOnly?: boolean;
-  /** Include shared office inboxes. Off by default. */
   includeGeneralInboxes?: boolean;
   limit?: number;
 }
 
 /**
- * Suppression is applied in SQL, not by the caller.
+ * Organization ancestry, computed once per query.
  *
- * This subquery is the data layer's half of the guarantee: a consumer that
- * forgets to re-check still cannot read a suppressed person out of the
- * database. The export path re-checks anyway, because an opt-out recorded
- * between this query and the file being written must still take effect.
+ * Only containment relationships are followed, which the taxonomy marks with
+ * `implies_subtree`. Depth is bounded so a cycle in collected data cannot hang
+ * the query, and the same rule is implemented in `OrganizationHierarchy` for
+ * the in-memory re-check on the export path.
+ */
+const ORG_ANCESTRY_CTE = `
+  org_ancestry as (
+    select o.id as organization_id, o.id as ancestor_id, 0 as depth
+    from organizations o
+    union all
+    select a.organization_id, r.parent_organization_id, a.depth + 1
+    from org_ancestry a
+    join organization_relationships r on r.child_organization_id = a.ancestor_id
+    join relationship_types rt on rt.code = r.relationship_type_code and rt.implies_subtree
+    where a.depth < 12
+      and r.effective_from <= current_date
+      and (r.effective_to is null or r.effective_to >= current_date)
+  )
+`;
+
+/**
+ * Suppression applied in SQL, not by the caller.
+ *
+ * This is the data layer's half of the guarantee: a consumer that forgets to
+ * re-check still cannot read a suppressed person out of the database. The export
+ * path re-checks anyway, because an opt-out recorded between this query and the
+ * file being written must still take effect.
+ *
+ * `$1` is the evaluation time and `$2` is the declared export purpose.
  */
 const SUPPRESSION_FILTER = `
   not exists (
@@ -30,77 +58,113 @@ const SUPPRESSION_FILTER = `
       and (s.expires_at is null or s.expires_at > $1::timestamptz)
       and (
         s.scope = 'global'
-        or (s.scope = 'email' and s.value in (
-              coalesce(ea.address_normalized, ''), coalesce(ec.address, '')))
+        or (s.scope = 'email' and s.value in (coalesce(ea.address_normalized, ''), coalesce(ec.address, '')))
         or (s.scope = 'domain' and (
               coalesce(ea.domain, '') = s.value or coalesce(ea.domain, '') like '%.' || s.value
               or coalesce(ec.domain, '') = s.value or coalesce(ec.domain, '') like '%.' || s.value))
         or (s.scope = 'person' and s.person_id = p.id)
-        or (s.scope = 'school' and s.school_id = emp.school_id)
-        or (s.scope = 'district' and s.district_id = emp.district_id)
-        or (s.scope = 'state' and s.state_id = p.state_id)
+        or (s.scope = 'organization' and s.organization_id = emp.organization_id)
+        or (s.scope = 'organization_subtree' and exists (
+              select 1 from org_ancestry oa
+              where oa.organization_id = emp.organization_id and oa.ancestor_id = s.organization_id))
+        or (s.scope = 'jurisdiction' and s.jurisdiction_id = org.jurisdiction_id)
+        or (s.scope = 'government_level' and s.government_level_code = org.government_level_code)
+        or (s.scope = 'geographic_area' and s.geographic_area_id = loc.geographic_area_id)
+        or (s.scope = 'source' and s.source_document_id = emp.source_document_id)
+        or (s.scope = 'export_purpose' and s.export_purpose = $2)
       )
   )
 `;
 
-/** Read the rows an export would contain, already filtered by suppression. */
 export class QueryRepository {
   constructor(private readonly client: SqlClient) {}
 
   async queryExportableRows(
     at: Timestamp,
+    purpose: string,
     filters: ExportFilters = {},
   ): Promise<ExportablePersonRow[]> {
     const conditions: string[] = [SUPPRESSION_FILTER];
-    const params: unknown[] = [at];
+    const params: unknown[] = [at, purpose];
 
+    const bind = (value: unknown): string => {
+      params.push(value);
+      return `$${params.length}`;
+    };
+
+    if (filters.governmentLevelCode !== undefined) {
+      conditions.push(`org.government_level_code = ${bind(filters.governmentLevelCode)}`);
+    }
+    if (filters.sectorCode !== undefined)
+      conditions.push(`org.sector_code = ${bind(filters.sectorCode)}`);
+    if (filters.jurisdictionId !== undefined)
+      conditions.push(`org.jurisdiction_id = ${bind(filters.jurisdictionId)}`);
+    if (filters.organizationId !== undefined) {
+      conditions.push(
+        filters.includeOrganizationSubtree === true
+          ? `exists (select 1 from org_ancestry oa2 where oa2.organization_id = emp.organization_id and oa2.ancestor_id = ${bind(filters.organizationId)})`
+          : `emp.organization_id = ${bind(filters.organizationId)}`,
+      );
+    }
     if (filters.stateCode !== undefined) {
-      params.push(filters.stateCode.toUpperCase());
-      conditions.push(`st.code = $${params.length}`);
+      conditions.push(
+        `coalesce(loc.state_code, area_state.state_code) = ${bind(filters.stateCode.toUpperCase())}`,
+      );
     }
-    if (filters.districtId !== undefined) {
-      params.push(filters.districtId);
-      conditions.push(`emp.district_id = $${params.length}`);
+    if (filters.roleCategoryCodes !== undefined && filters.roleCategoryCodes.length > 0) {
+      conditions.push(
+        `emp.role_category_code = any(${bind([...filters.roleCategoryCodes])}::text[])`,
+      );
     }
-    if (filters.schoolId !== undefined) {
-      params.push(filters.schoolId);
-      conditions.push(`emp.school_id = $${params.length}`);
-    }
-    if (filters.roleCategories !== undefined && filters.roleCategories.length > 0) {
-      params.push(filters.roleCategories);
-      conditions.push(`emp.role_category = any($${params.length}::role_category[])`);
-    }
+    conditions.push(
+      filters.assignmentStatuses !== undefined && filters.assignmentStatuses.length > 0
+        ? `emp.assignment_status = any(${bind([...filters.assignmentStatuses])}::assignment_status[])`
+        : `emp.assignment_status = 'active'`,
+    );
     if (filters.includeGeneralInboxes !== true) {
       conditions.push(`(ea.classification is null or ea.classification <> 'general_inbox')`);
     }
-    if (filters.includeInferredOnly !== true) {
-      conditions.push(`ea.id is not null`);
-    }
+    if (filters.includeInferredOnly !== true) conditions.push(`ea.id is not null`);
 
     const limitClause = filters.limit === undefined ? '' : `limit ${Number(filters.limit)}`;
 
     const result = await this.client.query<Record<string, unknown>>(
-      `select
+      `with recursive ${ORG_ANCESTRY_CTE}
+       select
          p.id as person_id, p.first_name, p.middle_name, p.last_name, p.full_name_published,
-         p.status as person_status, p.state_id,
-         emp.title_published, emp.title_normalized, emp.role_category, emp.school_id, emp.district_id,
+         p.status as person_status,
+         emp.title_published, emp.title_normalized, emp.role_category_code, emp.job_family_code,
+         emp.seniority_code, emp.department_published, emp.assignment_status,
          emp.extraction_method, emp.confidence, emp.first_seen_at, emp.last_seen_at, emp.crawl_run_id,
-         dep.name as department_name,
-         sch.name as school_name,
-         dis.name as district_name,
-         cty.name as county_name,
-         st.code as state_code,
+         emp.source_document_id,
+         unit.name as unit_name,
+         org.id as organization_id, org.name as organization_name,
+         org.organization_type_code, org.government_level_code, org.sector_code, org.jurisdiction_id,
+         j.name as jurisdiction_name,
+         parent_org.id as parent_organization_id, parent_org.name as parent_organization_name,
+         (select array_agg(oa3.ancestor_id) from org_ancestry oa3
+            where oa3.organization_id = emp.organization_id and oa3.depth > 0) as ancestor_ids,
+         loc.city as duty_city, coalesce(loc.state_code, area_state.state_code) as duty_state,
+         county_area.name as duty_county, loc.geographic_area_id,
          ea.address as published_email, ea.classification as email_classification,
          ea.validation_status as email_validation_status,
          ec.address as inferred_email_candidate, ec.confidence as inference_confidence,
-         sp.url as source_url, sp.source_type
+         sd.url as source_url, sd.source_type_code
        from people p
        join employment_assignments emp on emp.person_id = p.id
-       join states st on st.id = p.state_id
-       left join departments dep on dep.id = emp.department_id
-       left join schools sch on sch.id = emp.school_id
-       left join districts dis on dis.id = coalesce(emp.district_id, sch.district_id)
-       left join counties cty on cty.id = coalesce(dis.county_id, sch.county_id)
+       join organizations org on org.id = emp.organization_id
+       left join jurisdictions j on j.id = org.jurisdiction_id
+       left join organizational_units unit on unit.id = emp.organizational_unit_id
+       left join organization_locations loc on loc.id = emp.duty_location_id
+       left join geographic_areas area_state on area_state.id = loc.geographic_area_id
+       left join geographic_areas county_area
+         on county_area.id = loc.geographic_area_id and county_area.area_type_code = 'county'
+       left join lateral (
+         select po.id, po.name from org_ancestry oa
+         join organizations po on po.id = oa.ancestor_id
+         where oa.organization_id = emp.organization_id and oa.depth = 1
+         limit 1
+       ) parent_org on true
        left join lateral (
          select * from email_addresses e
          where e.person_id = p.id
@@ -114,7 +178,7 @@ export class QueryRepository {
          where c.person_id = p.id and c.state <> 'rejected'
          order by c.confidence desc limit 1
        ) ec on true
-       left join source_pages sp on sp.id = emp.source_page_id
+       left join source_documents sd on sd.id = emp.source_document_id
        where ${conditions.join(' and ')}
        order by p.last_name nulls last, p.first_name nulls last, p.id
        ${limitClause}`,
@@ -124,50 +188,59 @@ export class QueryRepository {
     return result.rows.map(toExportRow);
   }
 
-  /** Counts behind the admin coverage view. */
-  async coverageSummary(stateCode: string): Promise<CoverageSummary> {
+  /** Counts behind the admin coverage view, scoped however the caller asks. */
+  async coverageSummary(
+    scope: { governmentLevelCode?: string; sectorCode?: string } = {},
+  ): Promise<CoverageSummary> {
+    const params: unknown[] = [scope.governmentLevelCode ?? null, scope.sectorCode ?? null];
+    const orgFilter = `($1::text is null or o.government_level_code = $1) and ($2::text is null or o.sector_code = $2)`;
+
     const result = await this.client.query<Record<string, unknown>>(
       `select
-         (select count(*) from districts d join states s on s.id = d.state_id where s.code = $1) as districts,
-         (select count(*) from schools sc join states s on s.id = sc.state_id where s.code = $1) as schools,
-         (select count(*) from crawl_targets t join states s on s.id = t.state_id
-            where s.code = $1 and t.target_type in ('district_directory','school_directory','department_directory')) as directories_discovered,
-         (select count(*) from crawl_targets t join states s on s.id = t.state_id
-            where s.code = $1 and t.status = 'crawled') as targets_crawled,
-         (select count(*) from crawl_targets t join states s on s.id = t.state_id
-            where s.code = $1 and t.status in ('failed','blocked')) as targets_failed,
-         (select count(*) from crawl_targets t join states s on s.id = t.state_id
-            where s.code = $1 and t.status = 'unsupported_platform') as unsupported_platforms,
-         (select count(*) from people p join states s on s.id = p.state_id where s.code = $1) as people,
-         (select count(*) from email_addresses e join people p on p.id = e.person_id
-            join states s on s.id = p.state_id
-            where s.code = $1 and e.classification in ('published','decoded_published')) as published_emails,
-         (select count(*) from email_addresses e join people p on p.id = e.person_id
-            join states s on s.id = p.state_id
-            where s.code = $1 and e.classification = 'general_inbox') as general_inboxes,
-         (select count(*) from email_candidates c join people p on p.id = c.person_id
-            join states s on s.id = p.state_id where s.code = $1) as inferred_candidates,
-         (select count(*) from email_candidates c join people p on p.id = c.person_id
-            join states s on s.id = p.state_id where s.code = $1 and c.validation_status = 'valid') as validated_candidates,
+         (select count(*) from organizations o where ${orgFilter}) as organizations,
+         (select count(distinct o.government_level_code) from organizations o where ${orgFilter}) as government_levels,
+         (select count(*) from organization_relationships) as relationships,
+         (select count(*) from crawl_targets) as targets,
+         (select count(*) from crawl_targets where status = 'crawled') as targets_crawled,
+         (select count(*) from crawl_targets where status in ('failed','blocked')) as targets_failed,
+         (select count(*) from crawl_targets where status = 'unsupported_platform') as unsupported_platforms,
+         (select count(*) from crawl_targets where status = 'policy_hold') as targets_policy_hold,
+         (select count(*) from people p join employment_assignments e on e.person_id = p.id
+            join organizations o on o.id = e.organization_id where ${orgFilter}) as people,
+         (select count(*) from email_addresses ea join organizations o on o.id = ea.organization_id
+            where ${orgFilter} and ea.classification in ('published','decoded_published')) as published_emails,
+         (select count(*) from email_addresses ea join organizations o on o.id = ea.organization_id
+            where ${orgFilter} and ea.classification = 'general_inbox') as general_inboxes,
+         (select count(*) from email_candidates) as inferred_candidates,
+         (select count(*) from email_candidates where validation_status = 'valid') as validated_candidates,
+         (select count(*) from contact_points) as contact_points,
          (select count(*) from suppression_entries where revoked_at is null) as suppression_entries,
-         (select max(finished_at) from crawl_runs r join states s on s.id = r.state_id where s.code = $1) as last_crawl_at`,
-      [stateCode.toUpperCase()],
+         (select count(*) from source_policies where collection_status = 'permitted') as policies_permitted,
+         (select count(*) from source_policies where collection_status in ('prohibited','review_required')) as policies_blocking,
+         (select max(finished_at) from crawl_runs) as last_crawl_at`,
+      params,
     );
     const row = result.rows[0] ?? {};
     return {
-      stateCode: stateCode.toUpperCase(),
-      districts: num(row['districts']),
-      schools: num(row['schools']),
-      directoriesDiscovered: num(row['directories_discovered']),
+      governmentLevelCode: scope.governmentLevelCode ?? null,
+      sectorCode: scope.sectorCode ?? null,
+      organizations: num(row['organizations']),
+      governmentLevels: num(row['government_levels']),
+      relationships: num(row['relationships']),
+      targets: num(row['targets']),
       targetsCrawled: num(row['targets_crawled']),
       targetsFailed: num(row['targets_failed']),
       unsupportedPlatforms: num(row['unsupported_platforms']),
+      targetsPolicyHold: num(row['targets_policy_hold']),
       people: num(row['people']),
       publishedEmails: num(row['published_emails']),
       generalInboxes: num(row['general_inboxes']),
       inferredCandidates: num(row['inferred_candidates']),
       validatedCandidates: num(row['validated_candidates']),
+      contactPoints: num(row['contact_points']),
       suppressionEntries: num(row['suppression_entries']),
+      policiesPermitted: num(row['policies_permitted']),
+      policiesBlocking: num(row['policies_blocking']),
       lastCrawlAt: row['last_crawl_at'] == null ? null : toIso(row['last_crawl_at']),
     };
   }
@@ -190,31 +263,26 @@ export class QueryRepository {
 }
 
 export interface CoverageSummary {
-  stateCode: string;
-  districts: number;
-  schools: number;
-  directoriesDiscovered: number;
+  governmentLevelCode: string | null;
+  sectorCode: string | null;
+  organizations: number;
+  governmentLevels: number;
+  relationships: number;
+  targets: number;
   targetsCrawled: number;
   targetsFailed: number;
   unsupportedPlatforms: number;
+  targetsPolicyHold: number;
   people: number;
   publishedEmails: number;
   generalInboxes: number;
   inferredCandidates: number;
   validatedCandidates: number;
+  contactPoints: number;
   suppressionEntries: number;
+  policiesPermitted: number;
+  policiesBlocking: number;
   lastCrawlAt: string | null;
-}
-
-/**
- * Convert a driver timestamp to ISO-8601 without losing precision.
- *
- * Going via `String(date)` renders a human-readable form with no milliseconds,
- * which silently truncates every timestamp the database returns.
- */
-function toIso(value: unknown): string {
-  if (value instanceof Date) return value.toISOString();
-  return new Date(String(value)).toISOString();
 }
 
 function num(value: unknown): number {
@@ -222,21 +290,45 @@ function num(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/**
+ * Convert a driver timestamp to ISO-8601 without losing precision.
+ * Going via `String(date)` renders a form with no milliseconds.
+ */
+function toIso(value: unknown): string {
+  if (value instanceof Date) return value.toISOString();
+  return new Date(String(value)).toISOString();
+}
+
 function toExportRow(row: Record<string, unknown>): ExportablePersonRow {
+  const ancestors = Array.isArray(row['ancestor_ids']) ? (row['ancestor_ids'] as Uuid[]) : [];
+  const areaId = (row['geographic_area_id'] as Uuid | null) ?? null;
   return {
-    personId: row['person_id'] as string,
+    personId: row['person_id'] as Uuid,
     firstName: (row['first_name'] as string | null) ?? null,
     middleName: (row['middle_name'] as string | null) ?? null,
     lastName: (row['last_name'] as string | null) ?? null,
     fullNamePublished: row['full_name_published'] as string,
     titlePublished: (row['title_published'] as string | null) ?? null,
     titleNormalized: (row['title_normalized'] as string | null) ?? null,
-    roleCategory: row['role_category'] as ExportablePersonRow['roleCategory'],
-    department: (row['department_name'] as string | null) ?? null,
-    schoolName: (row['school_name'] as string | null) ?? null,
-    districtName: (row['district_name'] as string | null) ?? null,
-    countyName: (row['county_name'] as string | null) ?? null,
-    stateCode: row['state_code'] as string,
+    roleCategoryCode: (row['role_category_code'] as string | null) ?? 'unknown',
+    jobFamilyCode: (row['job_family_code'] as string | null) ?? 'unknown',
+    seniorityCode: (row['seniority_code'] as string | null) ?? 'unknown',
+    departmentPublished: (row['department_published'] as string | null) ?? null,
+    organizationalUnitName: (row['unit_name'] as string | null) ?? null,
+    organizationId: (row['organization_id'] as Uuid | null) ?? null,
+    organizationName: (row['organization_name'] as string | null) ?? null,
+    organizationTypeCode: (row['organization_type_code'] as string | null) ?? null,
+    governmentLevelCode: (row['government_level_code'] as string | null) ?? null,
+    sectorCode: (row['sector_code'] as string | null) ?? null,
+    parentOrganizationId: (row['parent_organization_id'] as Uuid | null) ?? null,
+    parentOrganizationName: (row['parent_organization_name'] as string | null) ?? null,
+    organizationAncestorIds: ancestors,
+    jurisdictionId: (row['jurisdiction_id'] as Uuid | null) ?? null,
+    jurisdictionName: (row['jurisdiction_name'] as string | null) ?? null,
+    dutyLocationCity: (row['duty_city'] as string | null) ?? null,
+    dutyLocationStateCode: (row['duty_state'] as string | null) ?? null,
+    dutyLocationCountyName: (row['duty_county'] as string | null) ?? null,
+    geographicAreaIds: areaId === null ? [] : [areaId],
     publishedEmail: (row['published_email'] as string | null) ?? null,
     inferredEmailCandidate: (row['inferred_email_candidate'] as string | null) ?? null,
     emailClassification:
@@ -247,15 +339,15 @@ function toExportRow(row: Record<string, unknown>): ExportablePersonRow {
     inferenceConfidence:
       row['inference_confidence'] == null ? null : Number(row['inference_confidence']),
     sourceUrl: (row['source_url'] as string | null) ?? null,
-    sourceType: (row['source_type'] as ExportablePersonRow['sourceType']) ?? null,
+    sourceTypeCode: (row['source_type_code'] as string | null) ?? null,
+    sourceDocumentId: (row['source_document_id'] as Uuid | null) ?? null,
     firstSeenAt: toIso(row['first_seen_at']),
     lastSeenAt: toIso(row['last_seen_at']),
-    crawlRunId: (row['crawl_run_id'] as string | null) ?? null,
+    crawlRunId: (row['crawl_run_id'] as Uuid | null) ?? null,
     extractionMethod: row['extraction_method'] as ExportablePersonRow['extractionMethod'],
     confidence: Number(row['confidence'] ?? 0),
+    assignmentStatus:
+      (row['assignment_status'] as ExportablePersonRow['assignmentStatus']) ?? 'unknown',
     status: (row['person_status'] as ExportablePersonRow['status']) ?? 'active',
-    schoolId: (row['school_id'] as string | null) ?? null,
-    districtId: (row['district_id'] as string | null) ?? null,
-    stateId: (row['state_id'] as string | null) ?? null,
   };
 }

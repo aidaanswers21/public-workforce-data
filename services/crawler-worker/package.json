@@ -24,8 +24,12 @@
     "@pan/adapter-kit": "workspace:*",
     "@pan/adapter-generic-html": "workspace:*",
     "@pan/adapter-generic-json": "workspace:*",
-    "@pan/state-kit": "workspace:*",
-    "@pan/state-texas": "workspace:*"
+    "@pan/jurisdiction-kit": "workspace:*",
+    "@pan/jurisdiction-texas-education": "workspace:*",
+    "@pan/taxonomy": "workspace:*",
+    "@pan/sector-education": "workspace:*",
+    "@pan/sector-state-local": "workspace:*",
+    "@pan/sector-federal": "workspace:*"
   },
   "devDependencies": {}
 }

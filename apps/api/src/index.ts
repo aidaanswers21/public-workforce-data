@@ -45,24 +45,32 @@ async function handle(
     }
 
     if (url.pathname === '/coverage') {
-      const state = url.searchParams.get('state');
-      if (state === null) {
-        send(response, 400, { error: 'state query parameter is required' });
-        return;
-      }
-      send(response, 200, await queries.coverageSummary(state));
+      const level = url.searchParams.get('level');
+      const sector = url.searchParams.get('sector');
+      send(
+        response,
+        200,
+        await queries.coverageSummary({
+          ...(level === null ? {} : { governmentLevelCode: level }),
+          ...(sector === null ? {} : { sectorCode: sector }),
+        }),
+      );
       return;
     }
 
     if (url.pathname === '/records') {
       const at = new Date().toISOString();
-      const rows = await queries.queryExportableRows(at, {
-        ...(url.searchParams.get('state') === null
-          ? {}
-          : { stateCode: url.searchParams.get('state') as string }),
+      const level = url.searchParams.get('level');
+      const sector = url.searchParams.get('sector');
+      // A read still declares a purpose, so export_purpose suppression applies
+      // to browsing exactly as it applies to a written file.
+      const purpose = url.searchParams.get('purpose') ?? 'internal-review';
+      const rows = await queries.queryExportableRows(at, purpose, {
+        ...(level === null ? {} : { governmentLevelCode: level }),
+        ...(sector === null ? {} : { sectorCode: sector }),
         limit: Math.min(200, Number(url.searchParams.get('limit') ?? 50) || 50),
       });
-      send(response, 200, { at, count: rows.length, rows });
+      send(response, 200, { at, purpose, count: rows.length, rows });
       return;
     }
 

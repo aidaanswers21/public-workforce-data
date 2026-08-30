@@ -35,7 +35,7 @@ describe('migration files', () => {
 
 describe('migrate', () => {
   it('creates every table the schema declares', async () => {
-    database = await TestDatabase.create();
+    database = await TestDatabase.create({ seed: false });
     const result = await database.query<{ tablename: string }>(
       "select tablename from pg_tables where schemaname = 'public'",
     );
@@ -46,20 +46,20 @@ describe('migrate', () => {
   });
 
   it('records what it applied', async () => {
-    database = await TestDatabase.create();
+    database = await TestDatabase.create({ seed: false });
     const applied = await appliedMigrations(database);
     expect(applied.map((row) => row.version)).toEqual(loadMigrations().map((m) => m.version));
   });
 
   it('is idempotent: a second run applies nothing', async () => {
-    database = await TestDatabase.create();
+    database = await TestDatabase.create({ seed: false });
     const second = await migrate(database, loadMigrations());
     expect(second.applied).toEqual([]);
     expect(second.skipped.length).toBeGreaterThan(0);
   });
 
   it('refuses to run when an applied migration has been edited', async () => {
-    database = await TestDatabase.create();
+    database = await TestDatabase.create({ seed: false });
     const tampered = loadMigrations().map((migration, index) =>
       index === 0 ? { ...migration, checksum: 'deadbeef' } : migration,
     );
@@ -69,7 +69,7 @@ describe('migrate', () => {
 
 describe('rollback', () => {
   it('reverses every migration and leaves no tables behind', async () => {
-    database = await TestDatabase.create();
+    database = await TestDatabase.create({ seed: false });
     const migrations = loadMigrations();
     const reverted = await rollback(database, migrations);
     expect(reverted).toHaveLength(migrations.length);
@@ -84,7 +84,7 @@ describe('rollback', () => {
   });
 
   it('drops the enum types too, so a re-migrate succeeds', async () => {
-    database = await TestDatabase.create();
+    database = await TestDatabase.create({ seed: false });
     const migrations = loadMigrations();
     await rollback(database, migrations);
     const again = await migrate(database, migrations);
@@ -92,10 +92,10 @@ describe('rollback', () => {
   });
 
   it('rolls back only down to the requested version', async () => {
-    database = await TestDatabase.create();
+    database = await TestDatabase.create({ seed: false });
     const migrations = loadMigrations();
-    const reverted = await rollback(database, migrations, '0006');
-    expect(reverted).toEqual(['0007', '0006']);
+    const reverted = await rollback(database, migrations, '0007');
+    expect(reverted).toEqual(['0009', '0008', '0007']);
     expect(await database.count('people')).toBe(0);
   });
 });

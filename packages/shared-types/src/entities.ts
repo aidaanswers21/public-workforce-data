@@ -1,33 +1,35 @@
 import type {
+  AssignmentStatus,
+  CollectionStatus,
+  ComplaintChannel,
   EmailCandidateState,
   EmailClassification,
   EmailValidationStatus,
+  ExportStatus,
   ExtractionMethod,
+  NormalizationMethod,
   ObfuscationKind,
-  OrgScope,
+  PolicyStance,
   RecordStatus,
-  RoleCategory,
-  SeniorityLevel,
-  SourceType,
   SuppressionScope,
   SuppressionSource,
-  ComplaintChannel,
-  ExportStatus,
 } from './enums.js';
 
 export type Uuid = string;
 /** RFC3339 / ISO-8601 UTC timestamp. */
 export type Timestamp = string;
+/** Calendar date, YYYY-MM-DD. Used where a source publishes a date without a time. */
+export type DateOnly = string;
 
 /**
  * Provenance carried by every material value.
  *
- * `sourcePageId` is the page the value was read from. Inferred values instead
- * carry `inferenceEvidenceId`. One of the two is always present, which is what
- * makes "every material value is traceable" enforceable rather than aspirational.
+ * One of `sourceDocumentId` or `inferenceEvidenceId` is always present, which is
+ * what makes "every material value is traceable" a database constraint rather
+ * than an aspiration.
  */
 export interface Provenance {
-  sourcePageId: Uuid | null;
+  sourceDocumentId: Uuid | null;
   inferenceEvidenceId: Uuid | null;
   crawlRunId: Uuid | null;
   extractionMethod: ExtractionMethod;
@@ -36,42 +38,78 @@ export interface Provenance {
   lastSeenAt: Timestamp;
 }
 
-export interface StateRecord {
+/* -------------------------------------------------------------------------- */
+/* Geography and jurisdiction                                                 */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * A place.
+ *
+ * Deliberately independent of both jurisdiction and employer hierarchy. A
+ * federal office sits in a county without the county having any authority over
+ * it, and a school sits in a municipality while belonging to a district.
+ */
+export interface GeographicAreaRecord {
+  id: Uuid;
+  /** Reference code from the taxonomy, e.g. `state`, `county`, `zip_code`. */
+  areaTypeCode: string;
+  name: string;
+  nameNormalized: string;
+  /** Containing area, e.g. a county inside a state. Null for a country. */
+  parentAreaId: Uuid | null;
+  /** Two letter postal abbreviation, when the area is a state or territory. */
+  stateCode: string | null;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+/**
+ * The authority an organization operates under.
+ *
+ * A jurisdiction names a level of government and, where meaningful, the area it
+ * covers. Federal jurisdictions have no state above them; this is the field
+ * that stops the model demanding one.
+ */
+export interface JurisdictionRecord {
   id: Uuid;
   code: string;
   name: string;
-  fipsCode: string | null;
-  configKey: string;
+  /** Reference code from the taxonomy, e.g. `federal`, `state`, `county`. */
+  governmentLevelCode: string;
+  /** The area the jurisdiction covers, when it has one. Null for nationwide bodies. */
+  geographicAreaId: Uuid | null;
+  /** A containing jurisdiction, where one genuinely exists. Often null. */
+  parentJurisdictionId: Uuid | null;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
 
-export interface CountyRecord {
-  id: Uuid;
-  stateId: Uuid;
-  name: string;
-  nameNormalized: string;
-  fipsCode: string | null;
-  sourceValue: string | null;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
+/* -------------------------------------------------------------------------- */
+/* Organizations                                                              */
+/* -------------------------------------------------------------------------- */
 
-/** Officially issued identifiers, kept separate from our surrogate keys. */
-export interface ExternalIdentifiers {
-  ncesId: string | null;
-  stateAgencyId: string | null;
-  federalEin: string | null;
-}
-
-export interface DistrictRecord {
+/**
+ * Any public body: a federal bureau, a state agency, a county department, a
+ * municipality, a special district or a school.
+ *
+ * There is no parent column. Hierarchy is effective-dated and lives in
+ * `organization_relationships`, because public-sector reporting lines change,
+ * overlap and occasionally run in more than one direction at once.
+ */
+export interface OrganizationRecord {
   id: Uuid;
-  stateId: Uuid;
-  countyId: Uuid | null;
+  /** Reference code from the taxonomy, e.g. `federal_bureau`, `school`. */
+  organizationTypeCode: string;
+  /** Denormalized from the type for querying. Kept in step by the pipeline. */
+  governmentLevelCode: string;
+  sectorCode: string;
+  jurisdictionId: Uuid | null;
   name: string;
   nameNormalized: string;
   nameSourceValue: string | null;
-  identifiers: ExternalIdentifiers;
+  legalName: string | null;
+  /** Common short form or acronym, when published. */
+  shortName: string | null;
   websiteUrl: string | null;
   primaryDomain: string | null;
   emailDomains: string[];
@@ -79,35 +117,76 @@ export interface DistrictRecord {
   provenance: Provenance;
 }
 
-export interface SchoolRecord {
+/** An effective-dated edge between two organizations. */
+export interface OrganizationRelationshipRecord {
   id: Uuid;
-  districtId: Uuid;
-  stateId: Uuid;
-  countyId: Uuid | null;
-  name: string;
-  nameNormalized: string;
-  nameSourceValue: string | null;
-  identifiers: ExternalIdentifiers;
-  schoolLevel: string | null;
-  lowGrade: string | null;
-  highGrade: string | null;
-  websiteUrl: string | null;
-  primaryDomain: string | null;
-  status: RecordStatus;
+  parentOrganizationId: Uuid;
+  childOrganizationId: Uuid;
+  /** Reference code from the taxonomy, e.g. `part_of`, `reports_to`, `succeeds`. */
+  relationshipTypeCode: string;
+  effectiveFrom: DateOnly;
+  /** Null while the relationship is current. */
+  effectiveTo: DateOnly | null;
+  notes: string | null;
   provenance: Provenance;
 }
 
-export interface DepartmentRecord {
+/** A subdivision inside one organization: a division, bureau-level unit or team. */
+export interface OrganizationalUnitRecord {
   id: Uuid;
-  scope: OrgScope;
-  scopeId: Uuid;
+  organizationId: Uuid;
+  parentUnitId: Uuid | null;
   name: string;
   nameNormalized: string;
   nameSourceValue: string | null;
   provenance: Provenance;
 }
 
-/** Parsed name parts. Every field is nullable: sources publish what they publish. */
+/** A physical or mailing location an organization operates from. */
+export interface OrganizationLocationRecord {
+  id: Uuid;
+  organizationId: Uuid;
+  /** e.g. `headquarters`, `field_office`, `mailing`. Free text with common values. */
+  locationType: string;
+  name: string | null;
+  addressLine1: string | null;
+  addressLine2: string | null;
+  city: string | null;
+  stateCode: string | null;
+  postalCode: string | null;
+  countryCode: string;
+  /** The area this location sits in, resolved where possible. */
+  geographicAreaId: Uuid | null;
+  isPrimary: boolean;
+  effectiveFrom: DateOnly | null;
+  effectiveTo: DateOnly | null;
+  provenance: Provenance;
+}
+
+/**
+ * An officially issued identifier for an organization, area or jurisdiction.
+ *
+ * Generic on purpose: an NCES district id, a Treasury agency code and a state's
+ * own numbering all live on this table, so a new identifier system needs a
+ * reference row rather than a column.
+ */
+export interface ExternalIdentifierRecord {
+  id: Uuid;
+  entityType: 'organization' | 'geographic_area' | 'jurisdiction' | 'person';
+  entityId: Uuid;
+  /** Reference code from the taxonomy, e.g. `nces_school_id`, `fips_county`. */
+  identifierSystemCode: string;
+  identifierValue: string;
+  /** The state that issued it, for state-assigned systems. */
+  issuingStateCode: string | null;
+  isPrimary: boolean;
+  provenance: Provenance;
+}
+
+/* -------------------------------------------------------------------------- */
+/* People, employment and contact                                             */
+/* -------------------------------------------------------------------------- */
+
 export interface NameParts {
   prefix: string | null;
   firstName: string | null;
@@ -116,27 +195,84 @@ export interface NameParts {
   suffix: string | null;
 }
 
+/**
+ * A person.
+ *
+ * Carries no title, no department and no employer. All three belong to an
+ * assignment, because one person can hold several at once and has held others
+ * before.
+ */
 export interface PersonRecord {
   id: Uuid;
-  stateId: Uuid;
   fullNamePublished: string;
   nameParts: NameParts;
-  /** Stable within a state + org scope. Used for cross-run identity resolution. */
+  /** Stable within one organization. Used for cross-run identity resolution. */
   identityKey: string;
   status: RecordStatus;
   provenance: Provenance;
 }
 
+/** How a published title was interpreted, kept separate from the title itself. */
+export interface TitleNormalization {
+  /** Exactly as the source published it. Never overwritten. */
+  titlePublished: string | null;
+  titleNormalized: string | null;
+  /** Reference codes from the taxonomy. */
+  roleCategoryCode: string;
+  jobFamilyCode: string;
+  seniorityCode: string;
+  /** Subject, grade band, beat or other specialty the title carried. */
+  specialty: string | null;
+  method: NormalizationMethod;
+  /** Which rule pack produced the match, for audit. */
+  ruleSource: string | null;
+  /** Version of the taxonomy that produced it, so a re-run is comparable. */
+  taxonomyVersion: string;
+  confidence: number;
+}
+
+/**
+ * One person holding one role at one organization, over a period.
+ *
+ * Multiple simultaneous assignments are ordinary in the public sector: a county
+ * employee may also sit on a district board. Nothing here assumes one employer.
+ */
 export interface EmploymentAssignmentRecord {
   id: Uuid;
   personId: Uuid;
-  districtId: Uuid | null;
-  schoolId: Uuid | null;
-  departmentId: Uuid | null;
-  titlePublished: string | null;
-  titleNormalized: string | null;
-  roleCategory: RoleCategory;
-  seniority: SeniorityLevel;
+  organizationId: Uuid;
+  organizationalUnitId: Uuid | null;
+  /** Where this person actually works, which need not be the employer's seat. */
+  dutyLocationId: Uuid | null;
+  title: TitleNormalization;
+  /** Department name exactly as published, when no unit could be resolved. */
+  departmentPublished: string | null;
+  isPrimary: boolean;
+  assignmentStatus: AssignmentStatus;
+  effectiveFrom: DateOnly | null;
+  effectiveTo: DateOnly | null;
+  provenance: Provenance;
+}
+
+/**
+ * A professional contact point other than email.
+ *
+ * Email keeps its own tables because published and inferred addresses must stay
+ * structurally apart; phones, extensions and office addresses have no inferred
+ * equivalent and live here.
+ */
+export interface ContactPointRecord {
+  id: Uuid;
+  /** Exactly one of these is set. */
+  personId: Uuid | null;
+  employmentAssignmentId: Uuid | null;
+  organizationId: Uuid | null;
+  /** Reference code from the taxonomy, e.g. `work_phone`, `office_address`. */
+  contactPointTypeCode: string;
+  value: string;
+  valueNormalized: string;
+  /** Verbatim, before normalization. */
+  sourceValue: string | null;
   isPrimary: boolean;
   status: RecordStatus;
   provenance: Provenance;
@@ -146,15 +282,13 @@ export interface EmailAddressRecord {
   id: Uuid;
   personId: Uuid | null;
   employmentAssignmentId: Uuid | null;
-  districtId: Uuid | null;
-  schoolId: Uuid | null;
+  organizationId: Uuid | null;
   address: string;
   addressNormalized: string;
   domain: string;
   localPart: string;
   classification: EmailClassification;
   obfuscation: ObfuscationKind;
-  /** Raw text as displayed on the page, before decoding or normalization. */
   sourceValue: string | null;
   validationStatus: EmailValidationStatus;
   latestValidationResultId: Uuid | null;
@@ -163,14 +297,10 @@ export interface EmailAddressRecord {
 }
 
 export interface EmailPatternEvidence {
-  /** Pattern token expression, e.g. `{first}.{last}`. */
   pattern: string;
-  /** Published addresses on the same domain that match the pattern. */
   supportingExamples: string[];
   supportCount: number;
-  /** Published addresses on the domain that contradict the pattern. */
   conflictCount: number;
-  /** supportCount / (supportCount + conflictCount). */
   consistency: number;
 }
 
@@ -178,22 +308,16 @@ export interface EmailCandidateRecord {
   id: Uuid;
   personId: Uuid;
   employmentAssignmentId: Uuid | null;
+  organizationId: Uuid | null;
   domain: string;
   address: string;
   pattern: string;
   evidence: EmailPatternEvidence;
-  /** Confidence in the *inference*. Never a substitute for validation. */
+  /** Confidence in the inference. Never a deliverability claim. */
   confidence: number;
   state: EmailCandidateState;
   validationStatus: EmailValidationStatus;
   latestValidationResultId: Uuid | null;
-  /**
-   * Set only when a provider actually returned "valid".
-   *
-   * Promotion never moves the address into `email_addresses`: that table holds
-   * only what a source displayed, so a validated guess stays a guess in the
-   * record even once we believe it is deliverable.
-   */
   promotedAt: Timestamp | null;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -212,37 +336,51 @@ export interface EmailValidationResultRecord {
   validatedAt: Timestamp;
 }
 
-export interface SourcePageRecord {
+/* -------------------------------------------------------------------------- */
+/* Sources and evidence                                                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One retrieved source artefact: a page, an API response, a dataset row set, a
+ * spreadsheet or a PDF.
+ */
+export interface SourceDocumentRecord {
   id: Uuid;
   url: string;
   urlCanonical: string;
   urlHash: string;
   domain: string;
-  sourceType: SourceType;
+  /** Reference code from the taxonomy, e.g. `html_directory`, `open_data_portal`. */
+  sourceTypeCode: string;
   httpStatus: number | null;
   contentHash: string | null;
   contentType: string | null;
-  /** Object-storage key for the archived raw response. */
   storageKey: string | null;
   robotsAllowed: boolean | null;
   robotsPolicyNote: string | null;
+  /** The policy row that permitted this retrieval, when one applied. */
+  sourcePolicyId: Uuid | null;
   crawlRunId: Uuid | null;
-  fetchedAt: Timestamp;
+  retrievedAt: Timestamp;
   firstSeenAt: Timestamp;
   lastSeenAt: Timestamp;
 }
 
 /**
- * One observed field value on one page. This is the append-only evidence table
- * behind every normalized record.
+ * One observed field value in one source document.
+ *
+ * `evidenceClass` separates what a source proves. A roster may establish
+ * employment while a contact page supplies the address, and either can be
+ * revised without disturbing the other.
  */
 export interface SourceObservationRecord {
   id: Uuid;
-  sourcePageId: Uuid;
+  sourceDocumentId: Uuid;
   crawlRunId: Uuid | null;
+  /** Reference code: `organization`, `employment`, `contact`, `location`, `policy`. */
+  evidenceClass: string;
   entityType: string;
   entityId: Uuid | null;
-  /** Deterministic per-source record key, stable across recrawls. */
   recordKey: string;
   field: string;
   valueRaw: string | null;
@@ -264,20 +402,61 @@ export interface DirectoryPlatformRecord {
   updatedAt: Timestamp;
 }
 
+/**
+ * A recorded decision about whether, and on what terms, a source may be used.
+ *
+ * The crawler refuses production collection from anything marked prohibited or
+ * review_required until a person has recorded an approval on the row. A vendor
+ * asserting that data is compliant does not change any of these fields.
+ */
+export interface SourcePolicyRecord {
+  id: Uuid;
+  domain: string | null;
+  urlPattern: string | null;
+  organizationId: Uuid | null;
+  jurisdictionId: Uuid | null;
+  sourceTypeCode: string | null;
+  collectionStatus: CollectionStatus;
+  commercialUseStatus: PolicyStance;
+  solicitationStatus: PolicyStance;
+  automatedAccessStatus: PolicyStance;
+  policyUrl: string | null;
+  /** Verbatim excerpt of the governing text, kept so a later change is visible. */
+  policyTextSnapshot: string | null;
+  policyTextHash: string | null;
+  effectiveAt: Timestamp;
+  lastReviewedAt: Timestamp | null;
+  reviewedBy: string | null;
+  reviewNotes: string | null;
+  /** Set only by a person, and only after reading the policy. */
+  productionApprovedBy: string | null;
+  productionApprovedAt: Timestamp | null;
+  productionApprovalNote: string | null;
+  createdAt: Timestamp;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Compliance                                                                 */
+/* -------------------------------------------------------------------------- */
+
 export interface SuppressionEntryRecord {
   id: Uuid;
   scope: SuppressionScope;
-  /** Normalized match value: email address, domain, or entity id as text. */
+  /** Normalized match value: an address, a domain, an entity id or a code. */
   value: string;
   personId: Uuid | null;
-  schoolId: Uuid | null;
-  districtId: Uuid | null;
-  stateId: Uuid | null;
+  organizationId: Uuid | null;
+  jurisdictionId: Uuid | null;
+  geographicAreaId: Uuid | null;
+  sourceDocumentId: Uuid | null;
+  /** Set for `government_level` scope. */
+  governmentLevelCode: string | null;
+  /** Set for `export_purpose` scope. */
+  exportPurpose: string | null;
   reason: string;
   source: SuppressionSource;
   effectiveAt: Timestamp;
   expiresAt: Timestamp | null;
-  /** Set instead of deleting. Suppression rows are never updated in place. */
   revokedAt: Timestamp | null;
   revokedReason: string | null;
   createdBy: string;
@@ -300,13 +479,14 @@ export interface ExportRecord {
   id: Uuid;
   name: string;
   requestedBy: string;
+  /** Declared purpose, checked against `export_purpose` suppression entries. */
+  purpose: string;
   filters: Record<string, unknown>;
   status: ExportStatus;
   rowCount: number;
   suppressedCount: number;
   filePath: string | null;
   checksum: string | null;
-  /** Timestamp of the suppression re-check performed immediately before writing. */
   suppressionCheckedAt: Timestamp | null;
   createdAt: Timestamp;
   completedAt: Timestamp | null;
@@ -320,7 +500,6 @@ export interface AuditEventRecord {
   entityType: string;
   entityId: Uuid | null;
   payload: Record<string, unknown>;
-  /** Hash chain over (prevHash, occurredAt, actor, action, entityType, entityId, payload). */
   prevHash: string | null;
   hash: string;
 }

@@ -11,11 +11,17 @@ import type { SqlClient } from '../client.js';
 
 export interface AddSuppressionInput {
   scope: SuppressionScope;
+  /** Normalized match value: an address, a domain, an entity id or a code. */
   value: string;
   personId?: Uuid | null;
-  schoolId?: Uuid | null;
-  districtId?: Uuid | null;
-  stateId?: Uuid | null;
+  /** For `organization` and `organization_subtree` scopes. */
+  organizationId?: Uuid | null;
+  jurisdictionId?: Uuid | null;
+  geographicAreaId?: Uuid | null;
+  sourceDocumentId?: Uuid | null;
+  governmentLevelCode?: string | null;
+  /** For `export_purpose` scope: block one declared use, not the record itself. */
+  exportPurpose?: string | null;
   reason: string;
   source: SuppressionSource;
   effectiveAt?: Timestamp;
@@ -49,17 +55,21 @@ export class ComplianceRepository {
   async addSuppression(input: AddSuppressionInput): Promise<Uuid> {
     const result = await this.client.query<{ id: Uuid }>(
       `insert into suppression_entries (
-         scope, value, person_id, school_id, district_id, state_id, reason, source,
+         scope, value, person_id, organization_id, jurisdiction_id, geographic_area_id,
+         source_document_id, government_level_code, export_purpose, reason, source,
          effective_at, expires_at, created_by
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,coalesce($9::timestamptz, now()),$10,$11)
+       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,coalesce($12::timestamptz, now()),$13,$14)
        returning id`,
       [
         input.scope,
         input.value.trim().toLowerCase(),
         input.personId ?? null,
-        input.schoolId ?? null,
-        input.districtId ?? null,
-        input.stateId ?? null,
+        input.organizationId ?? null,
+        input.jurisdictionId ?? null,
+        input.geographicAreaId ?? null,
+        input.sourceDocumentId ?? null,
+        input.governmentLevelCode ?? null,
+        input.exportPurpose ?? null,
         input.reason,
         input.source,
         input.effectiveAt ?? null,
@@ -97,7 +107,8 @@ export class ComplianceRepository {
   /** Every entry that is currently in force, for building a SuppressionIndex. */
   async loadActiveSuppressions(): Promise<SuppressionEntryRecord[]> {
     const result = await this.client.query<Record<string, unknown>>(
-      `select id, scope, value, person_id, school_id, district_id, state_id, reason, source,
+      `select id, scope, value, person_id, organization_id, jurisdiction_id, geographic_area_id,
+              source_document_id, government_level_code, export_purpose, reason, source,
               effective_at, expires_at, revoked_at, revoked_reason, created_by, created_at
        from suppression_entries
        where revoked_at is null
@@ -216,9 +227,12 @@ function toSuppressionEntry(row: Record<string, unknown>): SuppressionEntryRecor
     scope: row['scope'] as SuppressionScope,
     value: row['value'] as string,
     personId: (row['person_id'] as Uuid | null) ?? null,
-    schoolId: (row['school_id'] as Uuid | null) ?? null,
-    districtId: (row['district_id'] as Uuid | null) ?? null,
-    stateId: (row['state_id'] as Uuid | null) ?? null,
+    organizationId: (row['organization_id'] as Uuid | null) ?? null,
+    jurisdictionId: (row['jurisdiction_id'] as Uuid | null) ?? null,
+    geographicAreaId: (row['geographic_area_id'] as Uuid | null) ?? null,
+    sourceDocumentId: (row['source_document_id'] as Uuid | null) ?? null,
+    governmentLevelCode: (row['government_level_code'] as string | null) ?? null,
+    exportPurpose: (row['export_purpose'] as string | null) ?? null,
     reason: row['reason'] as string,
     source: row['source'] as SuppressionSource,
     effectiveAt: toIso(row['effective_at']),

@@ -13,6 +13,14 @@ import { QueryRepository, type ExportFilters } from './queries.js';
 export interface BuildExportInput {
   name: string;
   requestedBy: string;
+  /**
+   * What the export is for.
+   *
+   * Recorded on the row and checked against `export_purpose` suppression
+   * entries, so a record can be withheld from one use without being withheld
+   * from every use.
+   */
+  purpose: string;
   filters: ExportFilters;
 }
 
@@ -43,21 +51,26 @@ export class ExportRepository {
   async buildPeopleExport(input: BuildExportInput): Promise<BuiltExport> {
     const requestedAt: Timestamp = nowTimestamp(this.clock);
     const created = await this.client.query<{ id: Uuid }>(
-      `insert into exports (name, requested_by, filters, status) values ($1,$2,$3,'building') returning id`,
-      [input.name, input.requestedBy, JSON.stringify(input.filters)],
+      `insert into exports (name, requested_by, purpose, filters, status)
+       values ($1,$2,$3,$4,'building') returning id`,
+      [input.name, input.requestedBy, input.purpose, JSON.stringify(input.filters)],
     );
     const exportId = created.rows[0]?.id;
     if (exportId === undefined) throw new Error('exports: insert returned no id');
 
     try {
-      const rows = await this.queries.queryExportableRows(requestedAt, input.filters);
+      const rows = await this.queries.queryExportableRows(
+        requestedAt,
+        input.purpose,
+        input.filters,
+      );
 
       // Re-read suppression after the rows are in hand, then check again.
       const suppression = SuppressionIndex.fromEntries(
         await this.compliance.loadActiveSuppressions(),
       );
       const checkedAt: Timestamp = nowTimestamp(this.clock);
-      const result = exportPeopleCsv({ rows, suppression, at: checkedAt });
+      const result = exportPeopleCsv({ rows, suppression, at: checkedAt, purpose: input.purpose });
 
       await this.client.query(
         `update exports set status = 'completed', row_count = $2, suppressed_count = $3,
@@ -72,6 +85,7 @@ export class ExportRepository {
         entityId: exportId,
         payload: {
           name: input.name,
+          purpose: input.purpose,
           rowCount: result.rowCount,
           suppressedCount: result.suppressedCount,
           checksum: result.checksum,

@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "@pan/shared-types": "workspace:*",
-    "@pan/observability": "workspace:*"
+    "@pan/observability": "workspace:*",
+    "@pan/taxonomy": "workspace:*"
   },
   "devDependencies": {}
 }

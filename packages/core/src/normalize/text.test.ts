@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  collapseDottedAcronyms,
   collapseWhitespace,
   isShouting,
   normalizeCountyName,
-  normalizeDepartmentName,
-  normalizeDistrictName,
   normalizeKey,
+  normalizeOrganizationName,
   normalizePhone,
-  normalizeSchoolName,
+  normalizeUnitName,
 } from './text.js';
 
 describe('collapseWhitespace', () => {
@@ -38,41 +38,66 @@ describe('normalizeCountyName', () => {
   });
 });
 
-describe('normalizeDistrictName', () => {
-  it('collapses district suffix variants to the same key', () => {
-    const a = normalizeDistrictName('Sample Independent School District');
-    expect(normalizeDistrictName('Sample ISD')).toBe(a);
-    expect(normalizeDistrictName('SAMPLE I.S.D.')).toBe(a);
+describe('normalizeOrganizationName', () => {
+  const suffixes = ['department', 'bureau of', 'office of', 'board of supervisors', 'agency'];
+
+  it('drops the supplied suffixes and folds case', () => {
+    expect(normalizeOrganizationName('Public Works Department', suffixes)).toBe('public-works');
+    expect(normalizeOrganizationName('Bureau of Reclamation', suffixes)).toBe('reclamation');
   });
 
-  it('keeps genuinely different districts apart', () => {
-    expect(normalizeDistrictName('North Sample ISD')).not.toBe(
-      normalizeDistrictName('South Sample ISD'),
+  it('prefers a longer suffix over a substring of it', () => {
+    expect(normalizeOrganizationName('Marin Board of Supervisors', suffixes)).toBe('marin');
+  });
+
+  it('collapses dotted acronyms so both spellings match', () => {
+    expect(normalizeOrganizationName('U.S.D.A. Forest Service')).toBe(
+      normalizeOrganizationName('USDA Forest Service'),
+    );
+  });
+
+  it('carries no vertical-specific knowledge of its own', () => {
+    // With no suffixes supplied it must not silently strip anything.
+    expect(normalizeOrganizationName('Sample Special District')).toBe('sample-special-district');
+  });
+
+  it('keeps genuinely different organizations apart', () => {
+    expect(normalizeOrganizationName('North County Fire District', suffixes)).not.toBe(
+      normalizeOrganizationName('South County Fire District', suffixes),
     );
   });
 });
 
-describe('normalizeSchoolName', () => {
-  it('collapses "Elementary" and "Elementary School"', () => {
-    expect(normalizeSchoolName('Oak Ridge Elementary School')).toBe(
-      normalizeSchoolName('Oak Ridge Elementary'),
+describe('collapseDottedAcronyms', () => {
+  it('collapses runs of single letters followed by periods', () => {
+    expect(collapseDottedAcronyms('F.B.I. field office')).toBe('FBI field office');
+  });
+
+  it('leaves ordinary sentences alone', () => {
+    expect(collapseDottedAcronyms('Public works. Streets division.')).toBe(
+      'Public works. Streets division.',
     );
   });
 });
 
-describe('normalizeDepartmentName', () => {
+describe('normalizeUnitName', () => {
   it.each([
     ['HR', 'Human Resources'],
-    ['Human Resources', 'Human Resources'],
-    ['IT', 'Technology'],
-    ['SPED', 'Special Education'],
-    ['Food Services', 'Child Nutrition'],
+    ['IT', 'Information Technology'],
+    ['DPW', 'Public Works'],
+    ['OIG', 'Office of Inspector General'],
   ])('maps %s to %s', (input, expected) => {
-    expect(normalizeDepartmentName(input)).toBe(expected);
+    expect(normalizeUnitName(input)).toBe(expected);
   });
 
-  it('strips a trailing "Department" from an unmapped name', () => {
-    expect(normalizeDepartmentName('Fine Arts Department')).toBe('Fine Arts');
+  it('strips a trailing organizational word from an unmapped name', () => {
+    expect(normalizeUnitName('Code Enforcement Division')).toBe('Code Enforcement');
+  });
+
+  it('accepts caller-supplied aliases', () => {
+    expect(normalizeUnitName('SPED', new Map([['sped', 'Special Education']]))).toBe(
+      'Special Education',
+    );
   });
 });
 

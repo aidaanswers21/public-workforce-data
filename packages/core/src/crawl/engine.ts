@@ -1,5 +1,6 @@
 import type {
   CrawlCheckpoint,
+  DirectoryVocabulary,
   CrawlErrorRecord,
   CrawlErrorType,
   CrawlPageRecord,
@@ -23,6 +24,7 @@ import { newUuid, urlHash } from '../ids.js';
 import { type Clock, nowTimestamp, systemClock } from '../time.js';
 import { CrawlGuards } from './guards.js';
 import { isAllowedDomain, type CrawlPolicy } from './policy.js';
+import { SourcePolicyRegistry, type CollectionMode } from '../policy/source-policy.js';
 
 export type TaskKind = 'listing' | 'profile' | 'discovery';
 
@@ -42,7 +44,7 @@ export interface HarvestedRecord {
   sourceContentHash: string;
   fetchedAt: Timestamp;
   depth: number;
-  /** Directory-wide context established by the page (school, department). */
+  /** Directory-wide context established by the page, such as organization or unit. */
   pageContext: Readonly<Record<string, string>>;
 }
 
@@ -52,8 +54,19 @@ export interface CrawlJob {
   seedUrl: string;
   adapter: DirectoryAdapter;
   policy: CrawlPolicy;
-  districtName?: string | null;
-  schoolName?: string | null;
+  /** Terms composed from the registered sectors. Adapters read this, not constants. */
+  vocabulary: DirectoryVocabulary;
+  /** The organization whose directory this is, when known. */
+  organizationName?: string | null;
+  /** The organization above it, when there is one. Never required. */
+  parentOrganizationName?: string | null;
+  /**
+   * Whether this run actually collects. A fixture run reads saved files, so the
+   * source-policy gate does not apply to it.
+   */
+  collectionMode?: CollectionMode;
+  /** Consulted before every fetch in a production run. */
+  sourcePolicy?: SourcePolicyRegistry;
   /** Follow links to individual profile pages when the listing exposes them. */
   followProfiles?: boolean;
   resumeFrom?: CrawlCheckpoint;
@@ -182,6 +195,26 @@ export class CrawlEngine {
         continue;
       }
 
+      const collectionMode: CollectionMode = job.collectionMode ?? 'production';
+      const sourcePolicy = job.sourcePolicy ?? SourcePolicyRegistry.empty();
+      const policyDecision = sourcePolicy.evaluate(task.url, collectionMode);
+      if (!policyDecision.allowed) {
+        errors.push(
+          this.errorRecord(job, task.url, 'source_policy_refusal', policyDecision.reason, false, 1),
+        );
+        pages.push(this.pageRecord(job, task, { status: 'blocked', note: 'source policy' }));
+        guards.noteStop({
+          reason: 'blocked_by_source_policy',
+          detail: policyDecision.reason,
+          url: task.url,
+        });
+        log.warn(
+          { url: task.url, status: policyDecision.status, policyId: policyDecision.policyId },
+          'source policy refuses collection; stopping this target',
+        );
+        break;
+      }
+
       if (job.policy.respectRobots) {
         const decision = await this.deps.robots.check(task.url, job.policy.userAgent);
         if (!decision.allowed) {
@@ -211,12 +244,27 @@ export class CrawlEngine {
           decision.crawlDelaySeconds !== null &&
           decision.crawlDelaySeconds * 1000 > job.policy.requestDelayMs
         ) {
-          await this.throttle(task.url, decision.crawlDelaySeconds * 1000, lastRequestAtByDomain);
+          await this.throttle(
+            task.url,
+            decision.crawlDelaySeconds * 1000,
+            lastRequestAtByDomain,
+            job.policy.localityDomainLabels,
+          );
         } else {
-          await this.throttle(task.url, job.policy.requestDelayMs, lastRequestAtByDomain);
+          await this.throttle(
+            task.url,
+            job.policy.requestDelayMs,
+            lastRequestAtByDomain,
+            job.policy.localityDomainLabels,
+          );
         }
       } else {
-        await this.throttle(task.url, job.policy.requestDelayMs, lastRequestAtByDomain);
+        await this.throttle(
+          task.url,
+          job.policy.requestDelayMs,
+          lastRequestAtByDomain,
+          job.policy.localityDomainLabels,
+        );
       }
 
       const fetchStartedAt = this.clock().getTime();
@@ -282,12 +330,13 @@ export class CrawlEngine {
 
       const adapterContext = {
         baseUrl: page.finalUrl,
-        districtName: job.districtName ?? null,
-        schoolName: job.schoolName ?? null,
+        organizationName: job.organizationName ?? null,
+        parentOrganizationName: job.parentOrganizationName ?? null,
         allowedDomains:
           job.policy.allowedDomains.length > 0
             ? job.policy.allowedDomains
-            : [registrableDomain(new URL(seed).hostname)],
+            : [registrableDomain(new URL(seed).hostname, job.policy.localityDomainLabels)],
+        vocabulary: job.vocabulary,
         now: () => this.clock(),
       };
 
@@ -482,11 +531,12 @@ export class CrawlEngine {
     url: string,
     delayMs: number,
     lastRequestAtByDomain: Map<string, number>,
+    localityDomainLabels: readonly string[],
   ): Promise<void> {
     if (delayMs <= 0) return;
     let domain: string;
     try {
-      domain = registrableDomain(new URL(url).hostname);
+      domain = registrableDomain(new URL(url).hostname, localityDomainLabels);
     } catch {
       return;
     }

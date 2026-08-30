@@ -4,6 +4,24 @@ import { canReplaceClassification, classifyEmail, localPartMatchesName } from '.
 
 const jane = parsePersonName('Jane Smith');
 
+/** A small vocabulary. The composed one is exercised in the sector tests. */
+const SHARED_INBOX = {
+  localParts: [
+    'info',
+    'office',
+    'frontoffice',
+    'webmaster',
+    'noreply',
+    'clerk',
+    'permits',
+    'records',
+    'foia',
+    'dispatch',
+    'hr',
+  ],
+  prefixes: ['info', 'office', 'hr', 'noreply'],
+};
+
 describe('classifyEmail', () => {
   it('marks a plainly displayed address as published', () => {
     const result = classifyEmail({
@@ -36,24 +54,40 @@ describe('classifyEmail', () => {
   });
 
   it.each([
-    'info@sample-isd.example.org',
-    'office@sample-isd.example.org',
+    'info@agency.example.gov',
+    'office@county.example.org',
     'frontoffice@sample-isd.example.org',
-    'webmaster@sample-isd.example.org',
-    'attendance@sample-isd.example.org',
-    'noreply@sample-isd.example.org',
+    'webmaster@city.example.gov',
+    'foia@agency.example.gov',
+    'noreply@county.example.org',
   ])('classifies %s as a general inbox', (address) => {
-    const result = classifyEmail({ address, obfuscation: 'none', origin: 'observed' });
+    const result = classifyEmail({
+      address,
+      obfuscation: 'none',
+      origin: 'observed',
+      sharedInbox: SHARED_INBOX,
+    });
     expect(result.classification).toBe('general_inbox');
     expect(result.isGeneralInbox).toBe(true);
   });
 
+  it('has no built-in inbox vocabulary: with none supplied nothing is shared', () => {
+    const result = classifyEmail({
+      address: 'info@agency.example.gov',
+      obfuscation: 'none',
+      origin: 'observed',
+    });
+    expect(result.classification).toBe('published');
+    expect(result.isGeneralInbox).toBe(false);
+  });
+
   it('does not treat a person address as a shared inbox just because it starts with a role word', () => {
     const result = classifyEmail({
-      address: 'hrobinson@sample-isd.example.org',
+      address: 'hrobinson@county.example.org',
       obfuscation: 'none',
       origin: 'observed',
       personName: parsePersonName('Helen Robinson'),
+      sharedInbox: SHARED_INBOX,
     });
     expect(result.classification).toBe('published');
   });

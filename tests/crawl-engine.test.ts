@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { CrawlEngine, fixedClock, withPolicyDefaults } from '@pan/core';
+import { CrawlEngine, SourcePolicyRegistry, fixedClock, withPolicyDefaults } from '@pan/core';
 import { createSilentLogger } from '@pan/observability';
 import { genericHtmlAdapter } from '@pan/adapter-generic-html';
 import { genericJsonAdapter } from '@pan/adapter-generic-json';
-import type { CrawlCheckpoint, CrawlJob } from '@pan/core';
+import type { CrawlJob } from '@pan/core';
+import type { CrawlCheckpoint, SourcePolicyRecord } from '@pan/shared-types';
 import { MapFetcher, StubRobotsProvider, recordingSleep } from './support/fetchers.js';
 import { readFixture } from './support/fixtures.js';
+import { allSectorsTaxonomy } from './support/taxonomy.js';
+
+const VOCABULARY = allSectorsTaxonomy().vocabulary;
 
 const CLOCK = fixedClock('2026-06-01T00:00:00.000Z');
 const LOGGER = createSilentLogger();
@@ -29,6 +33,9 @@ function job(overrides: Partial<CrawlJob> & { seedUrl: string }): CrawlJob {
     crawlRunId: 'run-1',
     crawlTargetId: 'target-1',
     adapter: genericHtmlAdapter,
+    vocabulary: VOCABULARY,
+    // Fixture mode: nothing is collected, so the source-policy gate does not apply.
+    collectionMode: 'fixture',
     policy: withPolicyDefaults({ requestDelayMs: 0, respectRobots: false }),
     ...overrides,
   };
@@ -357,5 +364,84 @@ describe('CrawlEngine idempotency', () => {
       expect(harvested.sourceContentHash).toMatch(/^[0-9a-f]{64}$/);
       expect(harvested.fetchedAt).toBeTruthy();
     }
+  });
+});
+
+describe('CrawlEngine source policy gate', () => {
+  function policy(overrides: Partial<SourcePolicyRecord> & { id: string }): SourcePolicyRecord {
+    return {
+      domain: null,
+      urlPattern: null,
+      organizationId: null,
+      jurisdictionId: null,
+      sourceTypeCode: null,
+      collectionStatus: 'unknown',
+      commercialUseStatus: 'unknown',
+      solicitationStatus: 'unknown',
+      automatedAccessStatus: 'unknown',
+      policyUrl: null,
+      policyTextSnapshot: null,
+      policyTextHash: null,
+      effectiveAt: '2026-01-01T00:00:00.000Z',
+      lastReviewedAt: null,
+      reviewedBy: null,
+      reviewNotes: null,
+      productionApprovedBy: null,
+      productionApprovedAt: null,
+      productionApprovalNote: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('refuses a production run against a prohibited source without fetching it', async () => {
+    const fetcher = MapFetcher.from(NUMBERED);
+    const result = await engine(fetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        collectionMode: 'production',
+        sourcePolicy: new SourcePolicyRegistry([
+          policy({ id: 'p1', domain: 'sample-isd.example.org', collectionStatus: 'prohibited' }),
+        ]),
+      }),
+    );
+    expect(fetcher.requested).toHaveLength(0);
+    expect(result.errors.map((e) => e.errorType)).toContain('source_policy_refusal');
+    expect(result.stops.map((s) => s.reason)).toContain('blocked_by_source_policy');
+  });
+
+  it('refuses a production run against a source nobody has reviewed', async () => {
+    const fetcher = MapFetcher.from(NUMBERED);
+    const result = await engine(fetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        collectionMode: 'production',
+        sourcePolicy: SourcePolicyRegistry.empty(),
+      }),
+    );
+    expect(fetcher.requested).toHaveLength(0);
+    expect(result.stops.map((s) => s.reason)).toContain('blocked_by_source_policy');
+  });
+
+  it('allows a production run against a permitted source', async () => {
+    const fetcher = MapFetcher.from(NUMBERED);
+    const result = await engine(fetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        collectionMode: 'production',
+        sourcePolicy: new SourcePolicyRegistry([
+          policy({ id: 'p1', domain: 'sample-isd.example.org', collectionStatus: 'permitted' }),
+        ]),
+      }),
+    );
+    expect(result.records).toHaveLength(9);
+  });
+
+  it('does not gate a fixture run, because nothing is collected', async () => {
+    const fetcher = MapFetcher.from(NUMBERED);
+    const result = await engine(fetcher).run(
+      job({ seedUrl: 'https://sample-isd.example.org/staff-directory?page=1' }),
+    );
+    expect(result.records).toHaveLength(9);
   });
 });

@@ -8,7 +8,7 @@ function record(
   return {
     titlePublished: null,
     departmentPublished: null,
-    schoolPublished: null,
+    organizationPublished: null,
     phonePublished: null,
     emails: [],
     profileUrl: null,
@@ -84,19 +84,19 @@ describe('dedupeExtractedRecords', () => {
     expect(result).toHaveLength(2);
   });
 
-  it('keeps one name at two schools apart', () => {
+  it('keeps one name at two organizations apart', () => {
     const result = dedupeExtractedRecords([
       record({
         recordKey: 'k1',
         fullNamePublished: 'Jane Smith',
         titlePublished: 'Teacher',
-        schoolPublished: 'North Elementary',
+        organizationPublished: 'North Precinct',
       }),
       record({
         recordKey: 'k2',
         fullNamePublished: 'Jane Smith',
         titlePublished: 'Teacher',
-        schoolPublished: 'South Elementary',
+        organizationPublished: 'South Precinct',
       }),
     ]);
     expect(result).toHaveLength(2);
@@ -104,11 +104,11 @@ describe('dedupeExtractedRecords', () => {
 });
 
 describe('PersonResolver', () => {
-  const base = { stateCode: 'TX', orgScopeId: 'district-1' };
+  const base = { organizationId: 'org-1' };
 
   it('matches on a published email before anything else', () => {
     const resolver = new PersonResolver([
-      { id: 'p1', identityKey: 'tx|district-1|smith-jane', knownEmails: ['jsmith@x.example.org'] },
+      { id: 'p1', identityKey: 'org-1|smith-jane', knownEmails: ['jsmith@x.example.org'] },
     ]);
     const match = resolver.resolve({
       ...base,
@@ -120,7 +120,7 @@ describe('PersonResolver', () => {
 
   it('falls back to the identity key within one organization', () => {
     const resolver = new PersonResolver([
-      { id: 'p1', identityKey: 'tx|district-1|smith-jane', knownEmails: [] },
+      { id: 'p1', identityKey: 'org-1|smith-jane', knownEmails: [] },
     ]);
     const match = resolver.resolve({
       ...base,
@@ -130,13 +130,12 @@ describe('PersonResolver', () => {
     expect(match).toMatchObject({ personId: 'p1', strategy: 'identity_key' });
   });
 
-  it('does not match the same name in a different organization', () => {
+  it('does not match the same name at a different organization', () => {
     const resolver = new PersonResolver([
-      { id: 'p1', identityKey: 'tx|district-1|smith-jane', knownEmails: [] },
+      { id: 'p1', identityKey: 'org-1|smith-jane', knownEmails: [] },
     ]);
     const match = resolver.resolve({
-      stateCode: 'TX',
-      orgScopeId: 'district-2',
+      organizationId: 'org-2',
       fullNamePublished: 'Jane Smith',
       publishedEmails: [],
     });
@@ -145,7 +144,7 @@ describe('PersonResolver', () => {
 
   it('lowers confidence for an unsplittable name', () => {
     const resolver = new PersonResolver([
-      { id: 'p1', identityKey: 'tx|district-1|prince', knownEmails: [] },
+      { id: 'p1', identityKey: 'org-1|prince', knownEmails: [] },
     ]);
     const match = resolver.resolve({ ...base, fullNamePublished: 'Prince', publishedEmails: [] });
     expect(match.confidence).toBeLessThan(0.8);
@@ -154,7 +153,7 @@ describe('PersonResolver', () => {
 
 describe('mergeProvenance', () => {
   const provenance = (firstSeenAt: string, lastSeenAt: string, confidence = 0.5): Provenance => ({
-    sourcePageId: 'page-1',
+    sourceDocumentId: 'doc-1',
     inferenceEvidenceId: null,
     crawlRunId: 'run-1',
     extractionMethod: 'html_table',

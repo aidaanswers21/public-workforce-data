@@ -2,125 +2,14 @@ import type { EmailClassification, ObfuscationKind } from '@pan/shared-types';
 import { nameTokens, type ParsedName } from '../normalize/names.js';
 import { isSyntacticallyValidEmail } from './obfuscation.js';
 
-/**
- * Local parts that are role or office inboxes rather than one person.
- *
- * Kept broad on purpose: mislabelling a shared inbox as a person's address
- * pollutes person records and is the kind of error that only shows up after it
- * has already been exported.
- */
-const GENERAL_INBOX_LOCAL_PARTS = new Set([
-  'info',
-  'information',
-  'office',
-  'frontoffice',
-  'front-office',
-  'mainoffice',
-  'contact',
-  'contactus',
-  'webmaster',
-  'web',
-  'admin',
-  'administrator',
-  'help',
-  'helpdesk',
-  'support',
-  'service',
-  'services',
-  'hello',
-  'inquiries',
-  'enquiries',
-  'general',
-  'mail',
-  'email',
-  'noreply',
-  'no-reply',
-  'donotreply',
-  'postmaster',
-  'abuse',
-  'privacy',
-  'legal',
-  'compliance',
-  'security',
-  'hr',
-  'humanresources',
-  'jobs',
-  'careers',
-  'employment',
-  'recruiting',
-  'payroll',
-  'benefits',
-  'accounting',
-  'accountspayable',
-  'ap',
-  'ar',
-  'billing',
-  'finance',
-  'business',
-  'purchasing',
-  'registrar',
-  'enrollment',
-  'registration',
-  'attendance',
-  'transportation',
-  'bus',
-  'nutrition',
-  'foodservice',
-  'cafeteria',
-  'library',
-  'athletics',
-  'sports',
-  'boosters',
-  'pta',
-  'pto',
-  'volunteers',
-  'news',
-  'press',
-  'media',
-  'communications',
-  'marketing',
-  'technology',
-  'it',
-  'ithelp',
-  'techsupport',
-  'maintenance',
-  'facilities',
-  'safety',
-  'police',
-  'nurse',
-  'clinic',
-  'health',
-  'counseling',
-  'specialeducation',
-  'sped',
-  'transcripts',
-  'records',
-  'principal',
-  'superintendent',
-  'schoolboard',
-  'board',
-]);
-
-/** Local-part prefixes that mark a shared inbox even with a suffix attached. */
-const GENERAL_INBOX_PREFIXES = [
-  'info',
-  'office',
-  'contact',
-  'help',
-  'support',
-  'admin',
-  'noreply',
-  'no-reply',
-  'webmaster',
-  'hr',
-  'jobs',
-  'careers',
-  'library',
-  'athletics',
-  'attendance',
-];
-
 export type EmailOrigin = 'observed' | 'inferred';
+
+export interface SharedInboxVocabulary {
+  /** Local parts that name a shared or role inbox rather than one person. */
+  localParts: readonly string[];
+  /** Prefixes that mark a shared inbox even with a suffix attached. */
+  prefixes: readonly string[];
+}
 
 export interface ClassifyEmailInput {
   address: string;
@@ -128,6 +17,8 @@ export interface ClassifyEmailInput {
   origin: EmailOrigin;
   /** When known, used to decide "shared inbox" versus "this person's address". */
   personName?: Pick<ParsedName, 'firstName' | 'middleName' | 'lastName'> | null;
+  /** Supplied from the composed vocabulary. Empty means "no shared-inbox knowledge". */
+  sharedInbox?: SharedInboxVocabulary;
 }
 
 export interface ClassifyEmailResult {
@@ -162,10 +53,12 @@ export function classifyEmail(input: ClassifyEmailInput): ClassifyEmailResult {
 
   const localPart = address.split('@')[0] ?? '';
   const compactLocal = localPart.replace(/[._-]/g, '');
+  const knownLocalParts = new Set(input.sharedInbox?.localParts ?? []);
+  const knownPrefixes = input.sharedInbox?.prefixes ?? [];
   const isGeneralInbox =
-    GENERAL_INBOX_LOCAL_PARTS.has(localPart) ||
-    GENERAL_INBOX_LOCAL_PARTS.has(compactLocal) ||
-    GENERAL_INBOX_PREFIXES.some(
+    knownLocalParts.has(localPart) ||
+    knownLocalParts.has(compactLocal) ||
+    knownPrefixes.some(
       (prefix) =>
         compactLocal.startsWith(prefix) &&
         compactLocal.length <= prefix.length + 12 &&

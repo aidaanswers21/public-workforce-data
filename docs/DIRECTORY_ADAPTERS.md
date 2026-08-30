@@ -21,14 +21,33 @@ interface DirectoryAdapter {
 ```
 
 An adapter reports only what a page published. Name splitting, title
-normalization, email classification, identity resolution and storage all happen
-downstream, so an adapter cannot invent structure the source did not contain.
+normalization, email classification, identity resolution, the data boundary and
+storage all happen downstream, so an adapter cannot invent structure the source
+did not contain.
+
+## Vocabulary comes from the taxonomy
+
+`DetectionContext` and `AdapterContext` both carry a `DirectoryVocabulary`: the
+heading terms, URL hints, shared inbox local parts, organization label words,
+title indicator terms, field aliases and name suffixes that the composed sectors
+contributed.
+
+This is what lets one adapter handle a school staff table and a federal field
+office listing without a branch. An adapter that hard-codes the words a
+particular vertical uses has taken a job that belongs to a sector pack; the
+neutral core guard test will catch it if the adapter is one of the shipped
+generic ones.
+
+`AdapterContext` also carries `organizationName` and `parentOrganizationName`,
+which is how a listing that mentions its own organization can be recognized
+without the adapter knowing what kind of organization it is.
 
 ## Adding one
 
 1. Create `packages/directory-adapters/<platform>/` with a `package.json`, a
    `tsconfig.json` referencing `shared-types`, `core`, `extraction` and `kit`,
-   and add it to the root `tsconfig.json` and `vitest.config.ts` aliases.
+   and add it to the root `tsconfig.json`, the `tsconfig.eslint.json` paths and
+   the `vitest.config.ts` aliases.
 2. Implement the interface. Use `buildPersonRecord` from `@pan/adapter-kit`
    rather than constructing records by hand: it handles email decoding, shared
    inbox detection, phone normalization and deterministic record keys
@@ -39,7 +58,8 @@ downstream, so an adapter cannot invent structure the source did not contain.
 4. Write a test that runs `checkAdapterContract` over every fixture.
 5. Register it in `services/crawler-worker/src/registries.ts`.
 
-Nothing else changes. `tests/extensibility.test.ts` asserts that.
+Nothing else changes. `tests/extensibility.test.ts` asserts that by building an
+adapter inside the test file and running it through the unmodified engine.
 
 ## Detection and selection
 
@@ -58,7 +78,7 @@ adapter that actually recognizes the page.
 
 `PaginationPlan` covers numbered pages, next links, offset and page parameters,
 cursor APIs, load-more controls, infinite scroll endpoints, and alphabetical,
-department and school filters. Each request carries a `token`.
+department and organizational filters. Each request carries a `token`.
 
 The engine keys loop protection on the resolved destination URL (plus a hash of
 the request body, for APIs that paginate by POSTing a cursor), and it claims the
@@ -96,11 +116,15 @@ fallback attaches a warning and low confidence, because it exists so an
 unparseable page still yields something reviewable, not so it can be exported
 unexamined.
 
+It also reads `data-email` and similar attributes, because a directory that
+renders addresses from attributes rather than text is common enough that
+ignoring them silently loses people.
+
 **`generic-json`** (threshold 0.4). Locates a person-shaped collection inside
-whatever envelope an API uses, maps common field aliases, and paginates by
-cursor, explicit next URL, offset/limit or page/total_pages. It exists partly to
-serve API-backed directories and partly as the worked example that adding a
-platform touches nothing outside its own package.
+whatever envelope an API uses, maps field aliases from the composed vocabulary,
+and paginates by cursor, explicit next URL, offset/limit or page/total_pages. It
+exists partly to serve API-backed directories and partly as the worked example
+that adding a platform touches nothing outside its own package.
 
 ## Versioning
 

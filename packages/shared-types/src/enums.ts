@@ -1,28 +1,30 @@
 /**
- * Closed vocabularies shared across the platform.
+ * Closed vocabularies.
  *
- * Every list here is mirrored by a Postgres enum or CHECK constraint in
- * `supabase/migrations`. `packages/database/src/schema.test.ts` asserts the two
- * stay in sync, so adding a value means touching both sides.
+ * Only genuinely closed sets live here as Postgres enums. Anything a new
+ * public-sector vertical might need to extend, such as organization types,
+ * sectors, role categories, identifier systems and source types, is controlled
+ * reference data in `@pan/taxonomy` instead, so adding one never needs a
+ * migration. `packages/database/src/schema.test.ts` keeps this file and the
+ * database enums in step.
  */
 
 export const EMAIL_CLASSIFICATIONS = [
   /** Explicitly displayed, in plain text, by an official public source. */
   'published',
-  /** Publicly displayed but recovered from basic obfuscation (entities, "name at domain dot org", Cloudflare cfemail). */
+  /** Publicly displayed but recovered from basic obfuscation. */
   'decoded_published',
   /** Generated from a domain pattern. Never observed on a source page. */
   'inferred_candidate',
-  /** A shared school/department/office inbox, not attributable to one person. */
+  /** A shared organizational inbox, not attributable to one person. */
   'general_inbox',
-  /** Fails syntax or was returned undeliverable by a validation provider. */
+  /** Fails syntax, or a provider returned undeliverable. */
   'invalid',
   /** Matched a suppression entry. Retained for audit, never exportable. */
   'suppressed',
 ] as const;
 export type EmailClassification = (typeof EMAIL_CLASSIFICATIONS)[number];
 
-/** Classifications that represent an address a human actually published. */
 export const OBSERVED_EMAIL_CLASSIFICATIONS = [
   'published',
   'decoded_published',
@@ -51,30 +53,35 @@ export const EXTRACTION_METHODS = [
   'mailto_harvest',
   'profile_page',
   'browser_dom',
+  'pdf_text',
+  'spreadsheet_row',
+  'open_data_record',
+  'bulk_import',
   'ai_assisted',
   'file_import',
   'manual',
 ] as const;
 export type ExtractionMethod = (typeof EXTRACTION_METHODS)[number];
 
-export const SOURCE_TYPES = [
-  'state_agency',
-  'district_site',
-  'school_site',
-  'directory_platform',
-  'api',
-  'file_import',
-  'manual',
-] as const;
-export type SourceType = (typeof SOURCE_TYPES)[number];
-
+/**
+ * What a suppression entry covers.
+ *
+ * `organization_subtree` rolls down through every containment relationship, so
+ * suppressing a parent organization also suppresses every organization beneath
+ * it. Oversight relationships are excluded: a regulator does not employ the
+ * staff of the bodies it regulates.
+ */
 export const SUPPRESSION_SCOPES = [
+  'person',
   'email',
   'domain',
-  'person',
-  'school',
-  'district',
-  'state',
+  'organization',
+  'organization_subtree',
+  'source',
+  'jurisdiction',
+  'government_level',
+  'geographic_area',
+  'export_purpose',
   'global',
 ] as const;
 export type SuppressionScope = (typeof SUPPRESSION_SCOPES)[number];
@@ -83,6 +90,7 @@ export const SUPPRESSION_SOURCES = [
   'complaint',
   'opt_out_request',
   'legal_request',
+  'source_policy',
   'bounce',
   'manual_review',
   'policy',
@@ -100,58 +108,22 @@ export const COMPLAINT_CHANNELS = [
 ] as const;
 export type ComplaintChannel = (typeof COMPLAINT_CHANNELS)[number];
 
-/**
- * Coarse role buckets. Deliberately covers every staff role, not only
- * decision-makers: the platform is a directory, not a lead filter.
- */
-export const ROLE_CATEGORIES = [
-  'superintendent',
-  'district_leadership',
-  'board_member',
-  'principal',
-  'assistant_principal',
-  'school_leadership',
-  'teacher',
-  'instructional_support',
-  'special_education',
-  'counselor',
-  'psychologist',
-  'social_worker',
-  'nurse_health',
-  'librarian_media',
-  'coach_athletics',
-  'fine_arts',
-  'technology',
-  'finance_business',
-  'human_resources',
-  'communications',
-  'operations_facilities',
-  'transportation',
-  'food_service',
-  'safety_security',
-  'administrative_support',
-  'paraprofessional',
-  'custodial',
-  'substitute',
-  'volunteer_community',
-  'other',
+/** Whether a person currently holds an assignment. */
+export const ASSIGNMENT_STATUSES = ['active', 'inactive', 'historical', 'unknown'] as const;
+export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number];
+
+/** Whether we may collect from a source at all. */
+export const COLLECTION_STATUSES = [
+  'permitted',
+  'prohibited',
+  'review_required',
   'unknown',
 ] as const;
-export type RoleCategory = (typeof ROLE_CATEGORIES)[number];
+export type CollectionStatus = (typeof COLLECTION_STATUSES)[number];
 
-export const SENIORITY_LEVELS = [
-  'executive',
-  'director',
-  'manager',
-  'lead',
-  'staff',
-  'support',
-  'unknown',
-] as const;
-export type SeniorityLevel = (typeof SENIORITY_LEVELS)[number];
-
-export const ORG_SCOPES = ['state', 'county', 'district', 'school'] as const;
-export type OrgScope = (typeof ORG_SCOPES)[number];
+/** Whether a stated policy allows a particular downstream use. */
+export const POLICY_STANCES = ['permitted', 'prohibited', 'restricted', 'unknown'] as const;
+export type PolicyStance = (typeof POLICY_STANCES)[number];
 
 export const CRAWL_RUN_STATUSES = [
   'queued',
@@ -182,25 +154,22 @@ export const CRAWL_TARGET_STATUSES = [
   'failed',
   'blocked',
   'excluded',
+  'policy_hold',
   'unsupported_platform',
 ] as const;
 export type CrawlTargetStatus = (typeof CRAWL_TARGET_STATUSES)[number];
 
 export const CRAWL_TARGET_TYPES = [
-  'district_site',
-  'school_site',
-  'district_directory',
-  'school_directory',
-  'department_directory',
+  'organization_site',
+  'organization_directory',
+  'unit_directory',
   'profile_page',
   'api_endpoint',
+  'dataset',
+  'document',
 ] as const;
 export type CrawlTargetType = (typeof CRAWL_TARGET_TYPES)[number];
 
-/**
- * Why the engine stopped walking a directory. Recorded per run so that
- * "we finished" and "we hit a guard" are never confused in coverage reports.
- */
 export const CRAWL_STOP_REASONS = [
   'completed',
   'page_budget_exhausted',
@@ -213,6 +182,7 @@ export const CRAWL_STOP_REASONS = [
   'repeated_failures',
   'blocked_by_robots',
   'blocked_by_source',
+  'blocked_by_source_policy',
   'excluded_by_policy',
   'cancelled',
 ] as const;
@@ -226,6 +196,7 @@ export const CRAWL_ERROR_TYPES = [
   'adapter_error',
   'robots_disallowed',
   'blocked_by_source',
+  'source_policy_refusal',
   'requires_authentication',
   'captcha',
   'unsupported_platform',
@@ -259,3 +230,12 @@ export const OBFUSCATION_KINDS = [
   'reversed_text',
 ] as const;
 export type ObfuscationKind = (typeof OBFUSCATION_KINDS)[number];
+
+/** How a published title was turned into a normalized one. */
+export const NORMALIZATION_METHODS = [
+  'rule_table',
+  'exact_match',
+  'manual',
+  'assisted_review',
+] as const;
+export type NormalizationMethod = (typeof NORMALIZATION_METHODS)[number];

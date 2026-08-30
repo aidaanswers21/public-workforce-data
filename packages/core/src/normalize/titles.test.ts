@@ -1,78 +1,118 @@
 import { describe, expect, it } from 'vitest';
-import { looksLikeTitle, normalizeTitle } from './titles.js';
+import { looksLikeTitle, normalizeTitle, type TitleRuleSet } from './titles.js';
+
+/**
+ * A deliberately tiny rule set.
+ *
+ * These tests cover how rules are applied, not what any vertical's rules say.
+ * The real composed taxonomy is exercised in `tests/title-taxonomy.test.ts`,
+ * which keeps this file free of any knowledge about public-sector job titles.
+ */
+const RULES: TitleRuleSet = {
+  rules: [
+    {
+      test: /\bdeputy-director\b/,
+      roleCategoryCode: 'deputy_executive',
+      seniorityCode: 'director',
+      source: 'test',
+    },
+    {
+      test: /\bdirector\b/,
+      roleCategoryCode: 'department_head',
+      seniorityCode: 'director',
+      confidence: 0.7,
+      source: 'test',
+    },
+    {
+      test: /\bclerk\b/,
+      roleCategoryCode: 'administrative_support',
+      seniorityCode: 'support',
+      source: 'test',
+    },
+  ],
+  abbreviations: [{ pattern: /\bdir\b\.?/gi, expansion: 'Director' }],
+  seniorityModifiers: [{ test: /\bsenior\b/, seniorityCode: 'senior' }],
+  fallbackRoleCategoryCode: 'other',
+  unknownRoleCategoryCode: 'unknown',
+  jobFamilyForRole: (code) => (code === 'administrative_support' ? 'administration' : 'leadership'),
+  specialtyPatterns: [/\bTraffic\b/],
+  version: 'test-1',
+};
 
 describe('normalizeTitle', () => {
   it('returns unknown for a missing title rather than guessing', () => {
-    const result = normalizeTitle(null);
-    expect(result.roleCategory).toBe('unknown');
+    const result = normalizeTitle(null, RULES);
+    expect(result.roleCategoryCode).toBe('unknown');
     expect(result.confidence).toBe(0);
-    expect(result.titleNormalized).toBe('');
+    expect(result.titlePublished).toBeNull();
   });
 
-  it.each([
-    ['Superintendent', 'superintendent', 'executive'],
-    ['Deputy Superintendent', 'district_leadership', 'executive'],
-    ['Principal', 'principal', 'manager'],
-    ['Assistant Principal', 'assistant_principal', 'manager'],
-    ['4th Grade Teacher', 'teacher', 'staff'],
-    ['School Counselor', 'counselor', 'staff'],
-    ['Head Custodian', 'custodial', 'support'],
-    ['Bus Driver', 'transportation', 'support'],
-    ['Cafeteria Manager', 'food_service', 'support'],
-    ['Paraprofessional', 'paraprofessional', 'support'],
-    ['Athletic Director', 'coach_athletics', 'director'],
-    ['Head Football Coach', 'coach_athletics', 'staff'],
-    ['Library Media Specialist', 'librarian_media', 'staff'],
-    ['School Nurse', 'nurse_health', 'staff'],
-    ['Network Administrator', 'technology', 'staff'],
-    ['Payroll Clerk', 'human_resources', 'staff'],
-    ['Board President', 'board_member', 'executive'],
-    ['Special Education Diagnostician', 'special_education', 'staff'],
-    ['Orchestra Director', 'fine_arts', 'staff'],
-    ['Attendance Clerk', 'administrative_support', 'support'],
-  ])('classifies %s as %s', (title, category, seniority) => {
-    const result = normalizeTitle(title);
-    expect(result.roleCategory).toBe(category);
-    expect(result.seniority).toBe(seniority);
+  it('preserves the published title exactly', () => {
+    expect(normalizeTitle('  DEPUTY   DIRECTOR ', RULES).titlePublished).toBe('DEPUTY DIRECTOR');
   });
 
-  it('covers support roles, not only decision makers', () => {
-    const supportRoles = ['Groundskeeper', 'Substitute Teacher', 'Cafeteria Worker', 'Bus Monitor'];
-    for (const role of supportRoles) {
-      expect(normalizeTitle(role).roleCategory).not.toBe('unknown');
-    }
+  it('applies the first matching rule, so specific beats general', () => {
+    expect(normalizeTitle('Deputy Director', RULES).roleCategoryCode).toBe('deputy_executive');
+    expect(normalizeTitle('Director of Finance', RULES).roleCategoryCode).toBe('department_head');
   });
 
-  it('keeps an unmatched title as other with low confidence instead of dropping it', () => {
-    const result = normalizeTitle('Wellness Storyteller');
-    expect(result.roleCategory).toBe('other');
+  it('expands abbreviations and de-shouts before matching', () => {
+    const result = normalizeTitle('DEP. DIR.', RULES);
+    expect(result.titleNormalized).toContain('Director');
+  });
+
+  it('resolves the job family through the supplied mapping', () => {
+    expect(normalizeTitle('Clerk', RULES).jobFamilyCode).toBe('administration');
+  });
+
+  it('lets a seniority modifier override the matched rule', () => {
+    expect(normalizeTitle('Senior Clerk', RULES).seniorityCode).toBe('senior');
+  });
+
+  it('records which pack produced the match, for audit', () => {
+    expect(normalizeTitle('Clerk', RULES).ruleSource).toBe('test');
+    expect(normalizeTitle('Something Unmatched', RULES).ruleSource).toBeNull();
+  });
+
+  it('records the taxonomy version so a re-run is comparable', () => {
+    expect(normalizeTitle('Clerk', RULES).taxonomyVersion).toBe('test-1');
+    expect(normalizeTitle('Clerk', RULES).method).toBe('rule_table');
+  });
+
+  it('keeps an unmatched title as the fallback with low confidence, never dropping it', () => {
+    const result = normalizeTitle('Wombat Wrangler', RULES);
+    expect(result.roleCategoryCode).toBe('other');
     expect(result.confidence).toBeLessThan(0.5);
-    expect(result.titleNormalized).toBe('Wellness Storyteller');
+    expect(result.titleNormalized).toBe('Wombat Wrangler');
   });
 
-  it('expands abbreviations and de-shouts', () => {
-    expect(normalizeTitle('ASST. PRIN.').titleNormalized).toBe('Assistant Principal');
-    expect(normalizeTitle('DIR. OF HR').titleNormalized).toContain('Human Resources');
+  it('extracts a specialty when the title carries one', () => {
+    expect(normalizeTitle('Traffic Engineer', RULES).specialty).toBe('Traffic');
   });
 
-  it('picks out subject and grade specialties', () => {
-    expect(normalizeTitle('Math Teacher').specialty).toBe('Math');
-    expect(normalizeTitle('3rd Grade Teacher').specialty).toBe('3rd');
-  });
-
-  it('ranks assistant principal above principal so the specific rule wins', () => {
-    expect(normalizeTitle('Assistant Principal').roleCategory).toBe('assistant_principal');
-    expect(normalizeTitle('Vice Principal').roleCategory).toBe('assistant_principal');
+  it('carries no built-in vocabulary: an empty rule set matches nothing', () => {
+    const empty: TitleRuleSet = {
+      ...RULES,
+      rules: [],
+      abbreviations: [],
+      specialtyPatterns: [],
+    };
+    expect(normalizeTitle('Director', empty).roleCategoryCode).toBe('other');
+    expect(normalizeTitle('Traffic Engineer', empty).specialty).toBeNull();
   });
 });
 
 describe('looksLikeTitle', () => {
   it('recognizes table header labels', () => {
-    expect(looksLikeTitle('Name')).toBe(true);
-    expect(looksLikeTitle('Email')).toBe(true);
+    expect(looksLikeTitle('Name', RULES)).toBe(true);
+    expect(looksLikeTitle('Organization', RULES)).toBe(true);
+  });
+
+  it('recognizes a title covered by the supplied rules', () => {
+    expect(looksLikeTitle('Director', RULES)).toBe(true);
   });
 
   it('does not mistake a person name for a title', () => {
-    expect(looksLikeTitle('Jane Smith')).toBe(false);
+    expect(looksLikeTitle('Jane Smith', RULES)).toBe(false);
   });
 });

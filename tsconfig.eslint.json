@@ -16,8 +16,14 @@
       "@pan/adapter-kit": ["packages/directory-adapters/kit/src/index.ts"],
       "@pan/adapter-generic-html": ["packages/directory-adapters/generic-html/src/index.ts"],
       "@pan/adapter-generic-json": ["packages/directory-adapters/generic-json/src/index.ts"],
-      "@pan/state-kit": ["packages/state-config/kit/src/index.ts"],
-      "@pan/state-texas": ["packages/state-config/texas/src/index.ts"],
+      "@pan/taxonomy": ["packages/taxonomy/src/index.ts"],
+      "@pan/sector-education": ["packages/sectors/education/src/index.ts"],
+      "@pan/sector-state-local": ["packages/sectors/state-local-government/src/index.ts"],
+      "@pan/sector-federal": ["packages/sectors/federal-government/src/index.ts"],
+      "@pan/jurisdiction-kit": ["packages/jurisdiction-config/kit/src/index.ts"],
+      "@pan/jurisdiction-texas-education": [
+        "packages/jurisdiction-config/texas-education/src/index.ts"
+      ],
       "@pan/crawler-worker": ["services/crawler-worker/src/index.ts"],
       "@pan/discovery-worker": ["services/discovery-worker/src/index.ts"],
       "@pan/validation-worker": ["services/validation-worker/src/index.ts"]
