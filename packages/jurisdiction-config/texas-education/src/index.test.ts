@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { JurisdictionRegistry, validateJurisdictionConfig } from '@pan/jurisdiction-kit';
-import { Taxonomy } from '@pan/taxonomy';
-import { educationSectorPack } from '@pan/sector-education';
+import {
+  JurisdictionRegistry,
+  validateJurisdictionConfig,
+} from '@public-workforce/jurisdiction-kit';
+import { Taxonomy } from '@public-workforce/taxonomy';
+import { educationSectorPack } from '@public-workforce/sector-education';
 import { texasEducationJurisdiction as config } from './index.js';
 
 const TAXONOMY = new Taxonomy([educationSectorPack]);
@@ -30,7 +33,9 @@ describe('the Texas public education jurisdiction', () => {
 
   it('is a jurisdiction and a sector, not a state', () => {
     expect(config.key).toBe('texas-education');
-    expect(config.governmentLevelCode).toBe('education');
+    // Education is the sector. The level is what a Texas independent school
+    // district actually is: a special district.
+    expect(config.governmentLevelCode).toBe('special_district');
     expect(config.sectorCodes).toEqual(['education']);
     // It sits in a state without being one, which is what lets a second
     // configuration cover Texas state agencies without touching this file.
@@ -88,7 +93,8 @@ describe('the Texas public education jurisdiction', () => {
     const registry = new JurisdictionRegistry().register(config);
     expect(registry.keys()).toEqual(['texas-education']);
     expect(registry.get('texas-education').name).toBe('Texas public education');
-    expect(registry.atLevel('education')).toHaveLength(1);
+    expect(registry.atLevel('special_district')).toHaveLength(1);
+    expect(registry.atLevel('federal')).toHaveLength(0);
     expect(registry.atLevel('federal')).toHaveLength(0);
   });
 });

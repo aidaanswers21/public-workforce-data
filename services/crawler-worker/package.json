@@ -1,5 +1,5 @@
 {
-  "name": "@pan/crawler-worker",
+  "name": "@public-workforce/crawler-worker",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,20 +16,20 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@pan/shared-types": "workspace:*",
-    "@pan/core": "workspace:*",
-    "@pan/database": "workspace:*",
-    "@pan/extraction": "workspace:*",
-    "@pan/observability": "workspace:*",
-    "@pan/adapter-kit": "workspace:*",
-    "@pan/adapter-generic-html": "workspace:*",
-    "@pan/adapter-generic-json": "workspace:*",
-    "@pan/jurisdiction-kit": "workspace:*",
-    "@pan/jurisdiction-texas-education": "workspace:*",
-    "@pan/taxonomy": "workspace:*",
-    "@pan/sector-education": "workspace:*",
-    "@pan/sector-state-local": "workspace:*",
-    "@pan/sector-federal": "workspace:*"
+    "@public-workforce/shared-types": "workspace:*",
+    "@public-workforce/core": "workspace:*",
+    "@public-workforce/database": "workspace:*",
+    "@public-workforce/extraction": "workspace:*",
+    "@public-workforce/observability": "workspace:*",
+    "@public-workforce/adapter-kit": "workspace:*",
+    "@public-workforce/adapter-generic-html": "workspace:*",
+    "@public-workforce/adapter-generic-json": "workspace:*",
+    "@public-workforce/jurisdiction-kit": "workspace:*",
+    "@public-workforce/jurisdiction-texas-education": "workspace:*",
+    "@public-workforce/taxonomy": "workspace:*",
+    "@public-workforce/sector-education": "workspace:*",
+    "@public-workforce/sector-state-local": "workspace:*",
+    "@public-workforce/sector-federal": "workspace:*"
   },
   "devDependencies": {}
 }

@@ -1,4 +1,4 @@
-import type { RobotsDecision, RobotsProvider } from '@pan/shared-types';
+import type { RobotsDecision, RobotsProvider } from '@public-workforce/shared-types';
 import { DEFAULT_URL_EXCLUSION_PATTERNS, registrableDomain } from '../normalize/urls.js';
 
 /**
@@ -45,7 +45,7 @@ export interface CrawlPolicy {
 
 export const DEFAULT_CRAWL_POLICY: CrawlPolicy = {
   userAgent:
-    'PensionAppointmentNetworkBot/0.1 (+https://example.invalid/crawler-policy; contact configured per deployment)',
+    'PublicWorkforceDataBot/0.1 (+https://example.invalid/crawler-policy; contact configured per deployment)',
   contactUrl: 'https://example.invalid/crawler-policy',
   maxPagesPerRun: 250,
   maxPagesPerDomain: 250,

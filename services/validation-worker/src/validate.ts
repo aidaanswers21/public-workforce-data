@@ -3,10 +3,10 @@ import {
   qualifiesForPromotion,
   type EmailValidationProvider,
   type ValidationRequestItem,
-} from '@pan/core';
-import type { Uuid } from '@pan/shared-types';
-import type { Logger } from '@pan/observability';
-import type { SqlClient } from '@pan/database';
+} from '@public-workforce/core';
+import type { Uuid } from '@public-workforce/shared-types';
+import type { Logger } from '@public-workforce/observability';
+import type { SqlClient } from '@public-workforce/database';
 
 export interface ValidationRunSummary {
   requested: number;

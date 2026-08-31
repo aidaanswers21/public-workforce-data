@@ -1,4 +1,8 @@
-import type { EmailClassification, ObfuscationKind } from '@pan/shared-types';
+import type {
+  EmailClassification,
+  ObfuscationKind,
+  ObservedEmailClassification,
+} from '@public-workforce/shared-types';
 import { nameTokens, type ParsedName } from '../normalize/names.js';
 import { isSyntacticallyValidEmail } from './obfuscation.js';
 
@@ -123,23 +127,28 @@ export function localPartMatchesName(
 }
 
 /**
- * A published address always wins over an inferred one.
+ * Whether an incoming classification may replace a stored one.
  *
- * Returns true only when the incoming classification may replace the stored one.
- * The database enforces the same rule, so this is a fast pre-check rather than
- * the only line of defence.
+ * This is the whole rule, and it is deliberately narrower than a ranking:
+ * plain-text publication is the only thing that upgrades a stored address, and
+ * nothing downgrades one. A decoded address becomes `published` when a later
+ * page shows it in the clear; nothing moves the other way.
+ *
+ * Only observed classes appear here, because only observed classes can be
+ * stored: `email_addresses_observed_only` keeps inferred candidates in their
+ * own table entirely, so ranking them against stored addresses would be
+ * describing a comparison the schema makes impossible.
+ *
+ * The database performs the replacement, in the `on conflict` clause of
+ * `IngestionRepository.ingestPerson`. This function states the same rule for
+ * callers that need to reason about it before writing, and
+ * `packages/database/src/repositories/repositories.test.ts` asserts the two
+ * agree on every pair, so there is one policy rather than two that drift.
  */
 export function canReplaceClassification(
-  stored: EmailClassification,
-  incoming: EmailClassification,
+  stored: ObservedEmailClassification,
+  incoming: ObservedEmailClassification,
 ): boolean {
-  const rank: Record<EmailClassification, number> = {
-    invalid: 0,
-    suppressed: 0,
-    inferred_candidate: 1,
-    general_inbox: 2,
-    decoded_published: 3,
-    published: 4,
-  };
-  return rank[incoming] > rank[stored];
+  if (stored === 'published') return false;
+  return incoming === 'published';
 }

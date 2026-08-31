@@ -36,7 +36,7 @@ ancestry, and asserts the export still carries their duty location correctly.
 | `expectedAreaCount`           | Counties in the state               | Usually `null`; regions are not a fixed count |
 | Parent in `seedOrganizations` | Often the state or county           | Another federal body, or `null`               |
 
-Organization types come from `@pan/sector-federal`:
+Organization types come from `@public-workforce/sector-federal`:
 `federal_independent_agency`, `federal_regional_office`, `federal_laboratory`,
 alongside the neutral base types (department, agency, office, board,
 commission).

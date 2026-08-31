@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import type { AnyNode } from 'domhandler';
-import { collapseWhitespace } from '@pan/core';
+import { collapseWhitespace } from '@public-workforce/core';
 
 export type Html = cheerio.CheerioAPI;
 export type { AnyNode };

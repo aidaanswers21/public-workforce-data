@@ -1,5 +1,5 @@
 {
-  "name": "@pan/adapter-generic-json",
+  "name": "@public-workforce/adapter-generic-json",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,9 +16,9 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@pan/shared-types": "workspace:*",
-    "@pan/core": "workspace:*",
-    "@pan/adapter-kit": "workspace:*"
+    "@public-workforce/shared-types": "workspace:*",
+    "@public-workforce/core": "workspace:*",
+    "@public-workforce/adapter-kit": "workspace:*"
   },
   "devDependencies": {}
 }

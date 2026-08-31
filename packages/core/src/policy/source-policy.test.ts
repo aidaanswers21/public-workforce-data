@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SourcePolicyRecord } from '@pan/shared-types';
+import type { SourcePolicyRecord } from '@public-workforce/shared-types';
 import { SourcePolicyRegistry, SourcePolicyViolation } from './source-policy.js';
 
 function policy(overrides: Partial<SourcePolicyRecord> & { id: string }): SourcePolicyRecord {

@@ -5,6 +5,14 @@ import { indexByCode, type ReferenceRow } from './types.js';
  *
  * A level is not a hierarchy position: a federal agency is at the federal level
  * whether or not it has a parent, and it never needs a state above it.
+ *
+ * A level is also not a sector. The two are orthogonal: what kind of government
+ * a body is part of, and what kind of work it does. An independent school
+ * district is a special district doing education work; a school run by a city is
+ * a municipal body doing the same work; a state education agency is a state body
+ * doing it. There is deliberately no `education` level, because making one would
+ * force every education organization to share a government level it does not
+ * factually have, and would put a sector into a list that is not about sectors.
  */
 export const GOVERNMENT_LEVELS: readonly ReferenceRow[] = [
   { code: 'federal', name: 'Federal', description: 'United States federal government.' },
@@ -30,12 +38,6 @@ export const GOVERNMENT_LEVELS: readonly ReferenceRow[] = [
     code: 'tribal',
     name: 'Tribal',
     description: 'Federally or state recognized tribal government.',
-  },
-  {
-    code: 'education',
-    name: 'Education',
-    description:
-      'Public education governance, kept distinct because its reporting lines rarely match general government.',
   },
   {
     code: 'other_public_authority',

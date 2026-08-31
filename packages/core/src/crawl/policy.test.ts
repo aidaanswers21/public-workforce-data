@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { HttpRobotsProvider, RobotsTxt, isAllowedDomain, withPolicyDefaults } from './policy.js';
 
-const UA = 'PensionAppointmentNetworkBot/0.1';
+const UA = 'PublicWorkforceDataBot/0.1';
 
 describe('RobotsTxt', () => {
   const robots = RobotsTxt.parse(`
@@ -11,7 +11,7 @@ Disallow: /search
 Allow: /private/public-directory
 Crawl-delay: 5
 
-User-agent: PensionAppointmentNetworkBot
+User-agent: PublicWorkforceDataBot
 Disallow: /no-bots
 `);
 

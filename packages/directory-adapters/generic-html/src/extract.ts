@@ -1,5 +1,5 @@
-import type { DirectoryVocabulary, ExtractedPersonRecord } from '@pan/shared-types';
-import { collapseWhitespace, normalizePhone } from '@pan/core';
+import type { DirectoryVocabulary, ExtractedPersonRecord } from '@public-workforce/shared-types';
+import { collapseWhitespace, normalizePhone } from '@public-workforce/core';
 import {
   classifyHeader,
   cloudflareEncodedValues,
@@ -10,9 +10,9 @@ import {
   textOf,
   type DirectoryField,
   type Html,
-} from '@pan/extraction';
-import { extractJsonLdPersons, extractMicrodataPersons } from '@pan/extraction';
-import { buildPersonRecord, looksLikePersonName } from '@pan/adapter-kit';
+} from '@public-workforce/extraction';
+import { extractJsonLdPersons, extractMicrodataPersons } from '@public-workforce/extraction';
+import { buildPersonRecord, looksLikePersonName } from '@public-workforce/adapter-kit';
 
 export interface ExtractInput {
   $: Html;

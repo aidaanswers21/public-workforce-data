@@ -28,7 +28,7 @@ One row per relationship, each with:
 | `effective_to`           | When it ended, null while current  |
 | provenance               | The document that said so          |
 
-Relationship types, from `@pan/taxonomy`:
+Relationship types, from `@public-workforce/taxonomy`:
 
 | Code              | Implies subtree | Meaning                                    |
 | ----------------- | --------------- | ------------------------------------------ |
@@ -53,8 +53,10 @@ Two implementations, deliberately.
 walks the relationship table with a recursive CTE, filtered to relationship
 types where `implies_subtree` is true and to rows effective at the query time.
 `OrganizationRepository.ancestorsOf` and `descendantsOf` expose it directly.
+Neither has been measured against a national organization set; see production
+blocker C17.
 
-**In memory**, `OrganizationHierarchy` in `@pan/core` mirrors the same rule for
+**In memory**, `OrganizationHierarchy` in `@public-workforce/core` mirrors the same rule for
 code paths that already hold the graph, including the export re-check. It walks
 breadth-first and is cycle-safe: a relationship loop produced by bad source data
 yields a finite ancestor set rather than hanging.
@@ -74,6 +76,12 @@ When an organization moves, the old relationship is closed with an
 `effective_to` and a new one is opened. Nothing is deleted, so the record of the
 reorganization survives, and an export reproduced for an earlier date resolves
 the hierarchy that was true then.
+
+**Cycles are not yet prevented.** The table refuses a self-reference and nothing
+else, so a loop across three organizations is storable. The in-memory walk is
+cycle-safe; the recursive CTE relies on the data being acyclic. What
+re-observing an ended relationship means is also undefined. Both are production
+blocker C18 in `BACKLOG.md`, and they block a live crawl.
 
 `tests/extensibility.test.ts` construction 7 builds an organization whose parent
 changes over time and asserts that ancestry at the earlier date and ancestry at
@@ -104,3 +112,8 @@ The line is about who is the employer. A city's Parks Department is a unit of
 the city. A regional transit authority that the city helped create is a separate
 organization with a `part_of` or `affiliated_with` relationship, because it
 employs its own people and can be suppressed on its own.
+
+A unit carries provenance like every other material value: a NOT NULL foreign
+key to the source document that named it. That constraint was missing while the
+column was nullable, which briefly made `organizational_units` the one
+provenance-bearing table a row could enter with nothing behind it.

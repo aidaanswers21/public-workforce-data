@@ -1,11 +1,11 @@
-import type { NormalizationMethod } from '@pan/shared-types';
-import type { TitleAbbreviation, TitleRule } from '@pan/taxonomy';
+import type { NormalizationMethod } from '@public-workforce/shared-types';
+import type { TitleAbbreviation, TitleRule } from '@public-workforce/taxonomy';
 import { collapseWhitespace, decaseIfShouting, normalizeKey } from './text.js';
 
 /**
  * The rules a title normalization runs against.
  *
- * Supplied by the caller, composed in `@pan/taxonomy` from a neutral base plus
+ * Supplied by the caller, composed in `@public-workforce/taxonomy` from a neutral base plus
  * whatever the registered sectors contribute. The neutral core knows how to
  * apply rules and nothing at all about what any particular public body calls
  * its people.

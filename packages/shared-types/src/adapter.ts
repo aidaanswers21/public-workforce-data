@@ -5,7 +5,7 @@ import type { CrawlTargetType, ExtractionMethod, FetchedPage, ObfuscationKind } 
  * organizational label.
  *
  * Declared here because it is part of the adapter contract, and composed in
- * `@pan/taxonomy` from a neutral base plus whatever the registered sectors
+ * `@public-workforce/taxonomy` from a neutral base plus whatever the registered sectors
  * contribute. An adapter reads it without knowing which vertical supplied a
  * given term, which is what lets one adapter serve a school district, a county
  * and a federal bureau.
@@ -41,7 +41,7 @@ export interface ExtractedEmail {
   /** Decoded, lowercased address. */
   address: string;
   obfuscation: ObfuscationKind;
-  /** Adapter's hint. `classifyEmail` in @pan/core makes the final call. */
+  /** Adapter's hint. `classifyEmail` in @public-workforce/core makes the final call. */
   looksLikeGeneralInbox: boolean;
 }
 
@@ -49,7 +49,7 @@ export interface ExtractedEmail {
  * One person as published on one page.
  *
  * Adapters return only what the page said. Name splitting, title normalization,
- * classification and identity resolution all happen downstream in @pan/core, so
+ * classification and identity resolution all happen downstream in @public-workforce/core, so
  * an adapter can never quietly invent structure the source did not contain.
  */
 export interface ExtractedPersonRecord {
@@ -176,7 +176,7 @@ export interface AdapterContext {
  *
  * A new platform is added by implementing this interface and registering it.
  * Nothing in the crawl engine, normalization pipeline or state configuration
- * needs to change. `runAdapterContractTests` in @pan/adapter-kit enforces the
+ * needs to change. `runAdapterContractTests` in @public-workforce/adapter-kit enforces the
  * behavioural half of the contract that types cannot express.
  */
 export interface DirectoryAdapter {

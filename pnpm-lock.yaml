@@ -38,58 +38,58 @@ importers:
 
   apps/admin:
     dependencies:
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@pan/database':
+      '@public-workforce/database':
         specifier: workspace:*
         version: link:../../packages/database
-      '@pan/observability':
+      '@public-workforce/observability':
         specifier: workspace:*
         version: link:../../packages/observability
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
 
   apps/api:
     dependencies:
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@pan/database':
+      '@public-workforce/database':
         specifier: workspace:*
         version: link:../../packages/database
-      '@pan/observability':
+      '@public-workforce/observability':
         specifier: workspace:*
         version: link:../../packages/observability
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
 
   packages/core:
     dependencies:
-      '@pan/observability':
+      '@public-workforce/observability':
         specifier: workspace:*
         version: link:../observability
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../shared-types
-      '@pan/taxonomy':
+      '@public-workforce/taxonomy':
         specifier: workspace:*
         version: link:../taxonomy
 
   packages/database:
     dependencies:
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../core
-      '@pan/observability':
+      '@public-workforce/observability':
         specifier: workspace:*
         version: link:../observability
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../shared-types
-      '@pan/taxonomy':
+      '@public-workforce/taxonomy':
         specifier: workspace:*
         version: link:../taxonomy
       pg:
@@ -105,52 +105,52 @@ importers:
 
   packages/directory-adapters/generic-html:
     dependencies:
-      '@pan/adapter-kit':
+      '@public-workforce/adapter-kit':
         specifier: workspace:*
         version: link:../kit
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../../core
-      '@pan/extraction':
+      '@public-workforce/extraction':
         specifier: workspace:*
         version: link:../../extraction
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../shared-types
 
   packages/directory-adapters/generic-json:
     dependencies:
-      '@pan/adapter-kit':
+      '@public-workforce/adapter-kit':
         specifier: workspace:*
         version: link:../kit
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../../core
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../shared-types
 
   packages/directory-adapters/kit:
     dependencies:
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../../core
-      '@pan/extraction':
+      '@public-workforce/extraction':
         specifier: workspace:*
         version: link:../../extraction
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../shared-types
-      '@pan/taxonomy':
+      '@public-workforce/taxonomy':
         specifier: workspace:*
         version: link:../../taxonomy
 
   packages/extraction:
     dependencies:
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../core
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../shared-types
       cheerio:
@@ -162,28 +162,28 @@ importers:
 
   packages/jurisdiction-config/kit:
     dependencies:
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../../core
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../shared-types
-      '@pan/taxonomy':
+      '@public-workforce/taxonomy':
         specifier: workspace:*
         version: link:../../taxonomy
 
   packages/jurisdiction-config/texas-education:
     dependencies:
-      '@pan/jurisdiction-kit':
+      '@public-workforce/jurisdiction-kit':
         specifier: workspace:*
         version: link:../kit
-      '@pan/sector-education':
+      '@public-workforce/sector-education':
         specifier: workspace:*
         version: link:../../sectors/education
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../shared-types
-      '@pan/taxonomy':
+      '@public-workforce/taxonomy':
         specifier: workspace:*
         version: link:../../taxonomy
 
@@ -195,25 +195,25 @@ importers:
 
   packages/sectors/education:
     dependencies:
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../../core
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../shared-types
-      '@pan/taxonomy':
+      '@public-workforce/taxonomy':
         specifier: workspace:*
         version: link:../../taxonomy
 
   packages/sectors/federal-government:
     dependencies:
-      '@pan/taxonomy':
+      '@public-workforce/taxonomy':
         specifier: workspace:*
         version: link:../../taxonomy
 
   packages/sectors/state-local-government:
     dependencies:
-      '@pan/taxonomy':
+      '@public-workforce/taxonomy':
         specifier: workspace:*
         version: link:../../taxonomy
 
@@ -221,91 +221,91 @@ importers:
 
   packages/taxonomy:
     dependencies:
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../shared-types
 
   services/crawler-worker:
     dependencies:
-      '@pan/adapter-generic-html':
+      '@public-workforce/adapter-generic-html':
         specifier: workspace:*
         version: link:../../packages/directory-adapters/generic-html
-      '@pan/adapter-generic-json':
+      '@public-workforce/adapter-generic-json':
         specifier: workspace:*
         version: link:../../packages/directory-adapters/generic-json
-      '@pan/adapter-kit':
+      '@public-workforce/adapter-kit':
         specifier: workspace:*
         version: link:../../packages/directory-adapters/kit
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@pan/database':
+      '@public-workforce/database':
         specifier: workspace:*
         version: link:../../packages/database
-      '@pan/extraction':
+      '@public-workforce/extraction':
         specifier: workspace:*
         version: link:../../packages/extraction
-      '@pan/jurisdiction-kit':
+      '@public-workforce/jurisdiction-kit':
         specifier: workspace:*
         version: link:../../packages/jurisdiction-config/kit
-      '@pan/jurisdiction-texas-education':
+      '@public-workforce/jurisdiction-texas-education':
         specifier: workspace:*
         version: link:../../packages/jurisdiction-config/texas-education
-      '@pan/observability':
+      '@public-workforce/observability':
         specifier: workspace:*
         version: link:../../packages/observability
-      '@pan/sector-education':
+      '@public-workforce/sector-education':
         specifier: workspace:*
         version: link:../../packages/sectors/education
-      '@pan/sector-federal':
+      '@public-workforce/sector-federal':
         specifier: workspace:*
         version: link:../../packages/sectors/federal-government
-      '@pan/sector-state-local':
+      '@public-workforce/sector-state-local':
         specifier: workspace:*
         version: link:../../packages/sectors/state-local-government
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
-      '@pan/taxonomy':
+      '@public-workforce/taxonomy':
         specifier: workspace:*
         version: link:../../packages/taxonomy
 
   services/discovery-worker:
     dependencies:
-      '@pan/adapter-generic-html':
+      '@public-workforce/adapter-generic-html':
         specifier: workspace:*
         version: link:../../packages/directory-adapters/generic-html
-      '@pan/adapter-kit':
+      '@public-workforce/adapter-kit':
         specifier: workspace:*
         version: link:../../packages/directory-adapters/kit
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@pan/database':
+      '@public-workforce/database':
         specifier: workspace:*
         version: link:../../packages/database
-      '@pan/extraction':
+      '@public-workforce/extraction':
         specifier: workspace:*
         version: link:../../packages/extraction
-      '@pan/observability':
+      '@public-workforce/observability':
         specifier: workspace:*
         version: link:../../packages/observability
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
 
   services/validation-worker:
     dependencies:
-      '@pan/core':
+      '@public-workforce/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@pan/database':
+      '@public-workforce/database':
         specifier: workspace:*
         version: link:../../packages/database
-      '@pan/observability':
+      '@public-workforce/observability':
         specifier: workspace:*
         version: link:../../packages/observability
-      '@pan/shared-types':
+      '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../packages/shared-types
 

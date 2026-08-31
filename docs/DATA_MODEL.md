@@ -1,6 +1,6 @@
 # Data model
 
-Forty tables. Organizations, relationships, people, employment and contact are
+Forty-three tables. Organizations, relationships, people, employment and contact are
 modelled separately, so one person can hold several assignments and several
 addresses without any of them overwriting another, and so an organization can
 move under a new parent without its history being rewritten.
@@ -9,18 +9,26 @@ move under a new parent without its history being rewritten.
 
 Two different mechanisms, chosen on whether the set will grow.
 
-**Postgres enums** hold genuinely closed sets: record status, extraction method,
-email classification, validation status, collection status, policy stance,
-normalization method, assignment status, suppression scope, suppression source,
-crawl stop reason, error kind, export status. Adding a value here is a
-deliberate schema change because the code branches on every one of them.
+**Postgres enums** hold genuinely closed sets: record status, email
+classification, validation status, collection status, policy stance,
+normalization method, assignment status, organization identity tier, complaint
+channel, complaint resolution, suppression scope, suppression source, crawl stop
+reason, error kind, export status. Adding a value here is a deliberate schema
+change because the code branches on every one of them.
 
 **Controlled reference tables** hold everything that grows as sectors and
 jurisdictions are added: `government_levels`, `sectors`, `organization_types`,
 `relationship_types`, `geographic_area_types`, `identifier_systems`,
 `source_types`, `evidence_classes`, `job_families`, `role_categories`,
-`seniority_levels`, `contact_point_types`. Each has a stable `code` primary key
-and is seeded from `@pan/taxonomy` by `seedReferenceData`.
+`seniority_levels`, `contact_point_types`, `extraction_methods`,
+`obfuscation_kinds`. Each has a stable `code` primary key and is seeded from
+`@public-workforce/taxonomy` by `seedReferenceData`.
+
+`extraction_methods` and `obfuscation_kinds` were enums and are not any more.
+Both grow every time the platform meets a source format or an anti-harvesting
+trick it has not met before, and requiring a migration to record that a value
+came out of a PDF table is how such a value ends up recorded as `manual`
+instead.
 
 Adding a school type, a role category or an identifier system therefore needs no
 migration. That is the point: a platform that requires a schema change every
@@ -44,8 +52,54 @@ time a new kind of public body appears will stop being extended.
 
 `organizations` is neutral. It carries a name, a normalized name, a government
 level code, a sector code, an organization type code, an optional jurisdiction,
-a website and provenance. It has **no parent column**. See
-`ORGANIZATION_HIERARCHY.md` for why, and for how ancestry is queried.
+a website, an identity fingerprint and provenance. It has **no parent column**.
+See `ORGANIZATION_HIERARCHY.md` for why, and for how ancestry is queried.
+
+### Level and sector are orthogonal
+
+What kind of body an organization is, what level of government it belongs to,
+and what work it does are three separate facts, and the source decides all
+three.
+
+An independent school district is a `school_district` at the `special_district`
+level in the `education` sector. A city-run one is the same type at the
+`municipal` level in the same sector. A state education agency is a
+`state_education_agency` at the `state` level in the `education` sector.
+
+`organization_types.default_government_level_code` and `default_sector_code` are
+**defaults for onboarding**, both nullable, and neither constrains a row. There
+is deliberately no composite foreign key from an organization to a
+(type, level, sector) triple: such a key would force every school, and every
+public authority, into one level and one sector for good.
+
+There is no `education` government level. Education is a sector; making it a
+level would put a sector into a list that is not about sectors, and would force
+every education organization to claim a level it does not factually have.
+
+### Identity
+
+`identity_fingerprint` is unique, and `resolveIdentity` computes it from the
+strongest evidence available:
+
+| Tier                  | Key                                                |
+| --------------------- | -------------------------------------------------- |
+| `official_identifier` | The issuing system and the value                   |
+| `source_identifier`   | A stable key the source itself assigns             |
+| `parent_scoped_name`  | Jurisdiction, parent, type and normalized name     |
+| `domain_scoped_name`  | Jurisdiction, domain, type and normalized name     |
+| `ambiguous`           | The source record itself, and flagged for a person |
+
+The parent is part of the key at tier 3, and that is the whole point of the
+tier: two "Lincoln Elementary" schools in two districts are two schools, and a
+key of type plus name plus jurisdiction alone would merge them. The same applies
+to two Parks and Recreation departments in two municipalities.
+
+Because the fingerprint is deterministic and unique, an identifier-less recrawl
+of the same source record resolves to the same organization rather than adding
+another. An ambiguous record is kept, keyed on the source document so it is
+still idempotent, and listed by
+`OrganizationRepository.identityReviewQueue()` for a person to confirm. It is
+never merged into a look-alike and never silently duplicated.
 
 Related tables:
 
@@ -104,10 +158,21 @@ there to check it against.
 
 ## Provenance
 
-Every material value is traceable. `source_observations` is append-only and
-holds one row per field per record per document: the raw string, the normalized
-value, the extraction method, the confidence, the selector it came from, and an
-**evidence class**.
+Every material value is traceable.
+
+`source_documents` is the stable identity of a source: a URL, a dataset, a
+spreadsheet. `source_document_versions` is what that source said, once, and is
+immutable. A new content hash appends a version; identical content matches the
+existing one and only moves `last_seen_at`, which is what makes a recrawl
+idempotent without making it forgetful. What a page said in March is still
+readable after it changes in June.
+
+`source_observations` is append-only and holds one row per field per record per
+**document version**: the raw string, the normalized value, the extraction
+method, the confidence, the selector it came from, and an **evidence class**.
+Keying on the version rather than the URL is what lets a page change its mind
+about someone's title and produce a second observation beside the first, rather
+than overwriting it.
 
 The evidence classes are `organization`, `employment`, `contact`, `location` and
 `policy`. Employment evidence and contact evidence are separate rows, because
@@ -115,16 +180,25 @@ The evidence classes are `organization`, `employment`, `contact`, `location` and
 number is 555-0100" are different claims that can be true at different times and
 be superseded independently.
 
-Normalized rows carry `source_document_id` (or `inference_evidence_id`), the
-crawl run, the extraction method, the confidence and a first-seen/last-seen
-window. `first_seen_at` only ever moves earlier and `last_seen_at` only ever
+Normalized rows carry `source_document_id`, the crawl run, the extraction
+method, the confidence and a first-seen/last-seen window. There is no
+`inference_evidence_id`: it existed as a nullable column that any UUID would
+satisfy, backed by no inference-evidence model, so a row could claim provenance
+that pointed at nothing. Inferred addresses live in `email_candidates` with
+their own evidence columns, which is where inference belongs. `first_seen_at` only ever moves earlier and `last_seen_at` only ever
 moves later, so "still on the source" and "first found today" stay
 distinguishable after any number of recrawls.
 
-The constraint `<table>_has_provenance` on `organizations`,
-`organizational_units`, `organization_locations`, `external_identifiers`,
-`people`, `employment_assignments`, `contact_points` and `email_addresses` makes
-a row without evidence impossible to insert.
+Provenance is a **NOT NULL foreign key** to `source_documents` with
+`on delete restrict`, plus a named `<table>_has_provenance` CHECK, on
+`organizations`, `organization_relationships`, `organizational_units`,
+`organization_locations`, `external_identifiers`, `people`,
+`employment_assignments`, `contact_points`, `email_addresses` and
+`education_organization_attributes`. A row without evidence cannot be inserted,
+and a document something still cites cannot be deleted.
+
+`organizational_units` was the one provenance-bearing table missing its
+constraint while the column was nullable. It has one now, and a negative test.
 
 ## Source policy
 
@@ -207,9 +281,27 @@ tells you about the domain, not the mailbox.
 | `export_purpose`       | A named export purpose                                        |
 | `global`               | Everyone                                                      |
 
+`geographic_area` matches the areas listed on a row and does **not** walk up the
+area tree today, so suppressing a state does not suppress the counties inside
+it. That is a limitation, not a design: it is tracked as production blocker C15
+in `BACKLOG.md` and it blocks an outreach export.
+
 Each carries a reason, a source, an effective date and an optional expiry. Rows
 are immutable: a trigger rejects any update other than revocation, and rejects
-deletes outright.
+deletes outright. Every foreign key is `on delete restrict`, never cascade: a
+cascade would delete an opt-out because the thing it names was deleted, which is
+the one outcome suppression exists to prevent.
+
+### Revocation is monotonic
+
+`revoked_at` may go from null to a timestamp exactly once. It can never return
+to null, and it can never be moved to a different time. `revoked_reason` must be
+supplied with the revocation and is immutable afterwards. A trigger enforces all
+of it, so raw SQL cannot undo or rewrite a revocation either.
+
+Revocation writes an `audit_events` row through `audit_event_append`, the one
+canonical appender the repository also uses, so a revocation made outside the
+application still lands in the hash chain and the chain cannot fork.
 
 Enforcement is in the data layer. `QueryRepository.queryExportableRows` applies
 suppression in SQL, using a recursive CTE for the subtree scope, so a consumer
@@ -230,6 +322,15 @@ previous row's hash. Altering or removing an event breaks every event after it,
 which `ComplianceRepository.verifyAuditChain` detects.
 
 ## Required output fields
+
+A row is evaluated in three independent decisions: the record itself, its
+published address, and its inferred candidate. A suppressed published address
+withholds the row, because exporting a guess at the same mailbox would be an
+obvious way around the request. A suppressed candidate blanks that one column
+and keeps the row, unless the candidate was the row's only address.
+
+Candidates in the `rejected` and `suppressed` states never reach an export at
+all: the SQL excludes both before the in-memory re-check ever sees them.
 
 The CSV export carries 33 columns: first name, middle name, last name, full
 published name, title, normalized title, role category, job family, seniority,

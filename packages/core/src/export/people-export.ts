@@ -6,7 +6,7 @@ import type {
   RecordStatus,
   Timestamp,
   Uuid,
-} from '@pan/shared-types';
+} from '@public-workforce/shared-types';
 import { sha256 } from '../hash.js';
 import type { SuppressionIndex } from '../suppression.js';
 import { type SuppressionSubject } from '../suppression.js';
@@ -120,14 +120,29 @@ export interface ExportResult {
   suppressedCount: number;
   checksum: string;
   suppressionCheckedAt: Timestamp;
+  /**
+   * Rows kept whose inferred candidate was withheld.
+   *
+   * Counted separately from `suppressedCount`, because the row survived: the
+   * published address was permitted and only the guess was dropped.
+   */
+  withheldCandidateCount: number;
   /** Ids of records withheld, for the audit trail. Never their addresses. */
   suppressedPersonIds: readonly Uuid[];
 }
 
-/** Everything suppression is evaluated against for one row. */
+/**
+ * Everything suppression is evaluated against for one row, minus the addresses.
+ *
+ * The addresses are deliberately absent. A row carries two of them, a published
+ * one and an inferred candidate, and collapsing them into a single subject
+ * meant one decision had to stand for both: a suppressed guess dropped a
+ * permitted published address, and the second pass then threw and failed the
+ * whole export. They are evaluated separately below.
+ */
 export function exportSubject(row: ExportablePersonRow, purpose: string): SuppressionSubject {
   return {
-    emailAddress: row.publishedEmail ?? row.inferredEmailCandidate ?? null,
+    emailAddress: null,
     personId: row.personId,
     organizationId: row.organizationId,
     organizationAncestorIds: row.organizationAncestorIds,
@@ -145,8 +160,18 @@ export function exportSubject(row: ExportablePersonRow, purpose: string): Suppre
  * The re-check is the point of this function. Rows arrive already filtered by
  * the data layer, but an opt-out recorded between the query and the write must
  * still take effect, and a record that appeared in an older export gets no
- * grandfathering. Both addresses on a row are checked, so an inferred candidate
- * cannot smuggle out a person whose published address is suppressed.
+ * grandfathering.
+ *
+ * Three decisions, evaluated independently:
+ *
+ *   1. The record itself. A person, organization, jurisdiction, level, area,
+ *      source or purpose suppression withholds the whole row.
+ *   2. The published address. Suppressing it withholds the row, because
+ *      exporting a guess at the same mailbox would be an obvious way around the
+ *      person's request.
+ *   3. The inferred candidate. Suppressing it blanks that one column and keeps
+ *      the row, because a permitted published address is a fact the source
+ *      published and a withheld guess is not a reason to lose it.
  */
 export function exportPeopleCsv(input: {
   rows: readonly ExportablePersonRow[];
@@ -157,21 +182,58 @@ export function exportPeopleCsv(input: {
 }): ExportResult {
   const subjectOf = (row: ExportablePersonRow): SuppressionSubject =>
     exportSubject(row, input.purpose);
-  const { allowed, suppressed } = input.suppression.partition(input.rows, subjectOf, input.at);
 
-  // Second pass over the survivors. Cheap, and it means a bug in `partition`
-  // cannot put a suppressed address into a file.
+  const allowed: ExportablePersonRow[] = [];
+  const suppressedPersonIds: Uuid[] = [];
+  let withheldCandidates = 0;
+
+  for (const row of input.rows) {
+    const subject = subjectOf(row);
+    if (input.suppression.isSuppressed(subject, input.at)) {
+      suppressedPersonIds.push(row.personId);
+      continue;
+    }
+    if (
+      row.publishedEmail !== null &&
+      input.suppression.isSuppressed({ ...subject, emailAddress: row.publishedEmail }, input.at)
+    ) {
+      suppressedPersonIds.push(row.personId);
+      continue;
+    }
+
+    const candidateSuppressed =
+      row.inferredEmailCandidate !== null &&
+      input.suppression.isSuppressed(
+        { ...subject, emailAddress: row.inferredEmailCandidate },
+        input.at,
+      );
+
+    if (candidateSuppressed && row.publishedEmail === null) {
+      // The guess was the only address on the row. Keeping the row would
+      // export a person with no way to reach them and would still disclose
+      // that we hold them, so it goes.
+      suppressedPersonIds.push(row.personId);
+      continue;
+    }
+    if (candidateSuppressed) withheldCandidates += 1;
+
+    allowed.push(candidateSuppressed ? { ...row, inferredEmailCandidate: null } : row);
+  }
+
+  // Second pass over the survivors. Cheap, and it means a bug above cannot put
+  // a suppressed address into a file.
   for (const row of allowed) {
-    input.suppression.assertNotSuppressed(subjectOf(row), input.at);
+    const subject = subjectOf(row);
+    input.suppression.assertNotSuppressed(subject, input.at);
     if (row.publishedEmail !== null) {
       input.suppression.assertNotSuppressed(
-        { ...subjectOf(row), emailAddress: row.publishedEmail },
+        { ...subject, emailAddress: row.publishedEmail },
         input.at,
       );
     }
     if (row.inferredEmailCandidate !== null) {
       input.suppression.assertNotSuppressed(
-        { ...subjectOf(row), emailAddress: row.inferredEmailCandidate },
+        { ...subject, emailAddress: row.inferredEmailCandidate },
         input.at,
       );
     }
@@ -181,9 +243,10 @@ export function exportPeopleCsv(input: {
   return {
     csv,
     rowCount: allowed.length,
-    suppressedCount: suppressed.length,
+    suppressedCount: suppressedPersonIds.length,
+    withheldCandidateCount: withheldCandidates,
     checksum: sha256(csv),
     suppressionCheckedAt: input.at,
-    suppressedPersonIds: suppressed.map((entry) => entry.item.personId),
+    suppressedPersonIds,
   };
 }

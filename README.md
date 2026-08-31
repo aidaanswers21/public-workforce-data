@@ -1,4 +1,4 @@
-# pension-appointment-network
+# public-workforce-data
 
 An internal data platform for collecting publicly available U.S. public-sector
 organization and employee directory information.
@@ -25,10 +25,12 @@ Six levels of United States public employment, through one neutral core:
 | Special districts and authorities | Water, transit, port, utility and housing authorities     |
 | Federal government                | Departments, independent agencies, regional offices, labs |
 
-Education is one sector extension among several, not the shape of the platform.
-The core knows about organizations, relationships, jurisdictions and duty
-locations. It does not know what a school is. See
-[EDUCATION_IN_THE_PLATFORM](docs/EDUCATION_IN_THE_PLATFORM.md).
+Education is one sector extension among several, not the shape of the platform,
+and it is a **sector rather than a government level**: an independent school
+district is a special district doing education work, and a city-run school is a
+municipal body doing the same work. The core knows about organizations,
+relationships, jurisdictions and duty locations. It does not know what a school
+is. See [EDUCATION_IN_THE_PLATFORM](docs/EDUCATION_IN_THE_PLATFORM.md).
 
 Starting jurisdiction: **Texas K-12 education**. Adding a jurisdiction, a sector
 or a directory platform is configuration, not a change to the crawler.
@@ -82,12 +84,17 @@ docs/        the documentation set below
 
 ## Status
 
-Foundation complete and generalized across six levels of government. **No
-production crawl has been run**, and no official source has been verified yet:
-every source in the Texas education configuration is marked `verified: false`,
-the importer refuses to run against an unverified source, and the crawler
-refuses production collection from any source a person has not approved. See
-[CURRENT_STATE](docs/CURRENT_STATE.md).
+Foundation complete and generalized across six levels of government, then
+corrected against an independent architecture review. **No production crawl has
+been run**, and no official source has been verified yet: every source in the
+Texas education configuration is marked `verified: false`, the importer refuses
+to run against an unverified source, and the crawler refuses production
+collection from any source a person has not approved.
+
+**Nine production blockers are open** and are listed with their risk, required
+resolution and required tests at the top of [BACKLOG](docs/BACKLOG.md). No live
+source may be fetched and no real outreach export may be used until the
+applicable ones are resolved. See [CURRENT_STATE](docs/CURRENT_STATE.md).
 
 ## Stack
 

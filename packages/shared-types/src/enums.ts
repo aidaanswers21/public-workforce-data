@@ -4,7 +4,7 @@
  * Only genuinely closed sets live here as Postgres enums. Anything a new
  * public-sector vertical might need to extend, such as organization types,
  * sectors, role categories, identifier systems and source types, is controlled
- * reference data in `@pan/taxonomy` instead, so adding one never needs a
+ * reference data in `@public-workforce/taxonomy` instead, so adding one never needs a
  * migration. `packages/database/src/schema.test.ts` keeps this file and the
  * database enums in step.
  */
@@ -31,6 +31,18 @@ export const OBSERVED_EMAIL_CLASSIFICATIONS = [
   'general_inbox',
 ] as const satisfies readonly EmailClassification[];
 
+/**
+ * Classes an address can actually be stored as.
+ *
+ * `email_addresses_observed_only` restricts the table to these plus `invalid`,
+ * so ranking an inferred candidate against a stored address would describe a
+ * comparison the schema makes impossible.
+ */
+export type ObservedEmailClassification = Extract<
+  EmailClassification,
+  'published' | 'decoded_published' | 'general_inbox' | 'invalid'
+>;
+
 export const EMAIL_VALIDATION_STATUSES = [
   'unvalidated',
   'valid',
@@ -42,26 +54,24 @@ export const EMAIL_VALIDATION_STATUSES = [
 ] as const;
 export type EmailValidationStatus = (typeof EMAIL_VALIDATION_STATUSES)[number];
 
-export const EXTRACTION_METHODS = [
-  'html_table',
-  'html_card',
-  'html_list',
-  'html_definition_list',
-  'microdata',
-  'json_ld',
-  'json_api',
-  'mailto_harvest',
-  'profile_page',
-  'browser_dom',
-  'pdf_text',
-  'spreadsheet_row',
-  'open_data_record',
-  'bulk_import',
-  'ai_assisted',
-  'file_import',
-  'manual',
-] as const;
-export type ExtractionMethod = (typeof EXTRACTION_METHODS)[number];
+/**
+ * `ExtractionMethod` and `ObfuscationKind` deliberately live in `@public-workforce/taxonomy`
+ * as controlled reference data, not here.
+ *
+ * This file holds closed sets: vocabularies the code branches on, where adding
+ * a value is a deliberate change of behaviour. How a value was scraped off a
+ * page and how an address was hidden are neither. Both grow with every new
+ * source format, and a vocabulary that grows on contact with the world belongs
+ * in a table, not in a type.
+ *
+ * They are plain strings here, like `roleCategoryCode` and `sectorCode`
+ * elsewhere: the database foreign key and the taxonomy validate them, which is
+ * the same guarantee every other reference code gets.
+ */
+/** A code from the `extraction_methods` reference table. */
+export type ExtractionMethod = string;
+/** A code from the `obfuscation_kinds` reference table. */
+export type ObfuscationKind = string;
 
 /**
  * What a suppression entry covers.
@@ -108,7 +118,41 @@ export const COMPLAINT_CHANNELS = [
 ] as const;
 export type ComplaintChannel = (typeof COMPLAINT_CHANNELS)[number];
 
+/**
+ * What happened to a complaint.
+ *
+ * A closed lifecycle, so an enum is right: every complaint is waiting, acted
+ * on, waiting for a person, or closed without action. `needs_review` is the one
+ * that matters. A phone or postal complaint often arrives without an email
+ * address, which is the only thing suppression can match on its own, and the
+ * answer to that is a person looking at it, never a suppression row with a null
+ * target.
+ */
+export const COMPLAINT_RESOLUTIONS = [
+  'pending',
+  'suppressed',
+  'needs_review',
+  'dismissed',
+] as const;
+export type ComplaintResolution = (typeof COMPLAINT_RESOLUTIONS)[number];
+
 /** Whether a person currently holds an assignment. */
+/**
+ * How an organization's identity was resolved, strongest evidence first.
+ *
+ * Closed, because these are the only kinds of evidence the resolver weighs.
+ * `ambiguous` is not a failure: the row exists, it is stable across recrawls,
+ * and it is flagged for a person instead of being merged into a look-alike.
+ */
+export const ORGANIZATION_IDENTITY_TIERS = [
+  'official_identifier',
+  'source_identifier',
+  'parent_scoped_name',
+  'domain_scoped_name',
+  'ambiguous',
+] as const;
+export type OrganizationIdentityTier = (typeof ORGANIZATION_IDENTITY_TIERS)[number];
+
 export const ASSIGNMENT_STATUSES = ['active', 'inactive', 'historical', 'unknown'] as const;
 export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number];
 
@@ -219,17 +263,6 @@ export type ExportStatus = (typeof EXPORT_STATUSES)[number];
 
 export const RECORD_STATUSES = ['active', 'inactive', 'unconfirmed'] as const;
 export type RecordStatus = (typeof RECORD_STATUSES)[number];
-
-export const OBFUSCATION_KINDS = [
-  'none',
-  'html_entity',
-  'at_dot_words',
-  'bracketed_at',
-  'cloudflare_cfemail',
-  'data_attribute',
-  'reversed_text',
-] as const;
-export type ObfuscationKind = (typeof OBFUSCATION_KINDS)[number];
 
 /** How a published title was turned into a normalized one. */
 export const NORMALIZATION_METHODS = [

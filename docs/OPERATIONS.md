@@ -37,9 +37,29 @@ pnpm db:migrate -- --check           # validate the files, no database needed
 pnpm db:migrate -- --rollback 0005   # revert down to and including 0005
 ```
 
-Every migration has a down script. The runner records a checksum per migration
-and refuses to run when an applied one has been edited: the fix for a shipped
-migration is a new migration, never a rewritten one.
+### One authoritative migration system
+
+**Supabase owns production migration state.** The SQL in `supabase/migrations`
+is the source of truth, and Supabase applies it to the production project. The
+runner in `packages/database/src/migrations.ts` is a **local development and
+test harness** that applies the same SQL to a local or in-process PostgreSQL. It
+keeps its own `schema_migrations` bookkeeping for that purpose and must never be
+pointed at the production database, because two systems recording what has been
+applied is how environments diverge without anyone noticing.
+
+Each migration and its bookkeeping row commit in **one transaction**. PostgreSQL
+has transactional DDL, so a migration that fails halfway leaves nothing behind
+rather than a partly-changed schema that the next run replays into a second,
+unrelated error.
+
+The down scripts in `supabase/migrations/down/` are **test utilities**. They
+exist so the migration test can roll the schema down and back up, which is how a
+missing drop gets caught. They are not an operational rollback procedure: the
+answer to a bad shipped migration is a new migration.
+
+The runner records a checksum per migration and refuses to run when an applied
+one has been edited: the fix for a shipped migration is a new migration, never a
+rewritten one.
 
 Reference data is seeded from the composed taxonomy rather than from SQL, so
 adding a sector's organization types or role categories needs no migration.
@@ -58,13 +78,21 @@ pnpm admin sample         # lowest-confidence records, with source urls
 pnpm admin titles         # titles the composed rule table does not recognize
 ```
 
+Two review queues exist in the repositories and have no CLI command yet:
+`OrganizationRepository.identityReviewQueue()` lists organizations whose
+identity was too weakly evidenced to be sure, and
+`ComplianceRepository.complaintReviewQueue()` lists complaints that could not be
+matched to a person. Both are worked by a person.
+
 `coverage` takes an optional government level and sector, so
 `pnpm admin coverage education` and `pnpm admin coverage federal` are separate
 questions with separate denominators.
 
 `apps/api` serves `/health`, `/coverage` and `/records`. It is read-only: it
 rejects every method other than GET, and has no route that sends, exports around
-suppression, or mutates anything.
+suppression, or mutates anything. It is **unauthenticated**, and any caller may
+name any export purpose, so it must not be exposed. See production blocker C14
+in `BACKLOG.md`; it blocks deployment.
 
 ## Reading a crawl result
 
@@ -92,10 +120,14 @@ with backoff; if they persist, the site is down or slow, not blocking us.
 
 ## Orchestration
 
-Crawling runs in the Node worker, never in an orchestrator. n8n, if used, starts
-jobs and receives completion events over webhooks; it does not fetch pages. Set
-`N8N_WEBHOOK_URL` to receive run-completion notifications. Nothing is wired to
-n8n today.
+Crawling runs in the Node worker, never in an orchestrator. n8n, if used, would
+start jobs and receive completion events over webhooks; it would not fetch
+pages.
+
+`N8N_WEBHOOK_URL` is named in `.env.example` and **nothing reads it**. No code
+path posts a webhook. The same is true of any other variable in
+`.env.example` that this documentation does not show being read: naming a
+variable is not wiring it.
 
 ## Cost
 

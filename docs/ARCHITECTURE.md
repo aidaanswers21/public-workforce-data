@@ -49,33 +49,36 @@ directory platform vendor or state name in executable code, and on any import of
 a sector or jurisdiction package. Documentation examples in comments are
 permitted; branching on a vertical is not.
 
-One file is exempt by path,
-`packages/taxonomy/src/reference/domains.ts`, which lists the DNS labels
-published under `.us` so the crawler can tell `co.harris.tx.us` from
-`ci.austin.tx.us`. The test asserts that file holds no imports, no functions and
-no branching, so the exemption stays a table.
+Two files are exempt by path, each argued rather than assumed.
+`packages/taxonomy/src/reference/domains.ts` lists the DNS labels published
+under `.us` so the crawler can tell `co.harris.tx.us` from `ci.austin.tx.us`;
+the test asserts it holds no imports, no functions and no branching.
+`packages/core/src/policy/data-boundary.ts` names `student` and `pupil` in order
+to refuse them, which is the opposite of vertical logic, and the test strips its
+prohibition patterns and asserts no education term remains anywhere else.
 
 ## The four seams that make this extensible
 
-**Directory adapters.** `DirectoryAdapter` in `@pan/shared-types` is the whole
+**Directory adapters.** `DirectoryAdapter` in `@public-workforce/shared-types` is the whole
 contract: detect, discover, extract a listing, extract a profile, discover
 pagination. Adding a platform is a new class plus one `register` call in
 `services/crawler-worker/src/registries.ts`. See `DIRECTORY_ADAPTERS.md`.
 
-**Sector packs.** `SectorPack` in `@pan/taxonomy` contributes organization
-types, identifier systems, job families, role categories, title rules, specialty
-patterns and directory vocabulary. `Taxonomy` composes the base with every
-registered pack and calls `assertCoherent()`, which throws if a pack names a
-government level, sector, job family or role category that does not exist. No
-migration is needed, because these are reference rows and not enum values. See
-`SECTOR_EXTENSIONS.md`.
+**Sector packs.** `SectorPack` in `@public-workforce/taxonomy` contributes
+organization types, identifier systems, job families, role categories, title
+rules, specialty patterns and directory vocabulary, and declares an `appliesTo`
+scope saying whose records its rules may classify. `Taxonomy` composes the base
+with every registered pack, refuses any collision that is not an explicit
+`overrides` entry, and calls `assertCoherent()`. No migration is needed, because
+these are reference rows and not enum values. See `SECTOR_EXTENSIONS.md`.
 
-**Jurisdiction configuration.** `JurisdictionConfig` in `@pan/jurisdiction-kit`
+**Jurisdiction configuration.** `JurisdictionConfig` in `@public-workforce/jurisdiction-kit`
 holds a government level, the sectors in play, official sources, column
 mappings, identifier mappings, area aliases, seeds and crawl tuning. A
 jurisdiction is a state, a county, a city, a special district or the federal
 government, so `state-config` is deliberately not the abstraction: the federal
-government is not a state. `validateJurisdictionConfig` reports an error if a
+government is not a state. Government level and sector are separate fields on
+the configuration, because they are separate facts. `validateJurisdictionConfig` reports an error if a
 federal configuration names a state as an organizational parent. See
 `ONBOARDING_STATE_LOCAL.md` and `ONBOARDING_FEDERAL.md`.
 
@@ -90,7 +93,7 @@ test file and runs each through unmodified neutral core.
 
 ## Why the crawl engine is ours
 
-`CrawlEngine` in `@pan/core` owns everything that must not vary by platform or
+`CrawlEngine` in `@public-workforce/core` owns everything that must not vary by platform or
 vertical: source-policy gating, budgets, per-domain rate limiting, robots,
 retries, cross-domain refusal, URL exclusion, loop protection, empty-success
 detection and checkpointing. Adapters answer only "what is on this page" and
@@ -118,8 +121,11 @@ official file        ->  importer          ->  organizations, relationships, are
 organization website ->  discovery-worker  ->  crawl_targets
 source policy        ->  SourcePolicyGate  ->  allowed, or refused and recorded
 crawl target         ->  CrawlEngine       ->  harvested records + documents + errors
-harvested records    ->  data boundary     ->  prohibited fields dropped and counted
-surviving records    ->  IngestionPipeline ->  source_observations (evidence-classed),
+fetched document     ->  version appender  ->  a new source_document_version only
+                                               when the content hash changed
+harvested records    ->  data boundary     ->  sanitized values; drops counted
+sanitized records    ->  IngestionPipeline ->  source_observations (evidence-classed,
+                                               keyed to the document version),
                                                people, employment_assignments,
                                                contact_points, email_addresses
 published addresses  ->  CandidateGenerator->  email_candidates (separate pass)
@@ -133,9 +139,20 @@ These are enforced by the schema, not by convention. See `DATA_MODEL.md`.
 
 - An inferred address cannot be stored in `email_addresses`. A CHECK constraint
   restricts that table to classes a source actually displayed.
-- An organization, person, assignment, contact point or address cannot exist
-  without provenance. A CHECK constraint on eight tables requires a source
-  document or inference evidence.
+- An organization, relationship, unit, location, identifier, person, assignment,
+  contact point, address or education attribute cannot exist without provenance.
+  It is a NOT NULL foreign key to `source_documents` with `on delete restrict`
+  on all ten, so the row it names has to exist and cannot be deleted while cited.
+- Two organizations cannot share an identity fingerprint, so an identifier-less
+  recrawl updates rather than duplicates.
+- A source document version cannot be rewritten and an observation cannot be
+  deleted. A changed page appends.
+- A suppression entry cannot be un-revoked, re-timestamped, or revoked without a
+  reason, and revoking one writes an audit event.
+- A complaint cannot claim it suppressed something without naming the entry, and
+  cannot be marked for review without saying why.
+- Every table in the public schema has row level security enabled and forced,
+  with no policies.
 - A source policy row cannot be both `prohibited` and production-approved.
 - A suppression entry cannot be edited or deleted, only revoked. A trigger
   enforces it.
@@ -155,3 +172,10 @@ interface would otherwise fail only at run time.
 Database tests run against a real in-process PostgreSQL 16
 (`@electric-sql/pglite`), so constraints, triggers, recursive CTEs, `on conflict`
 behaviour and `nulls not distinct` are exercised for real rather than mocked.
+That is how the candidate generator's parameter-count defect was caught: nothing
+but a database executing the statement would have found it.
+
+PGlite has no `anon` role and no PostgREST, so it can prove that row level
+security is enabled and forced on every table and cannot prove that an anonymous
+PostgREST request is refused. That needs a Supabase integration test, tracked as
+blocker RLS-1 in `BACKLOG.md`.

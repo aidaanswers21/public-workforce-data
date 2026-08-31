@@ -1,4 +1,4 @@
-import type { SectorPack } from '@pan/taxonomy';
+import type { SectorPack } from '@public-workforce/taxonomy';
 
 /**
  * State, county, municipal and special-district government.
@@ -13,13 +13,52 @@ export const stateLocalGovernmentSectorPack: SectorPack = {
   description:
     'State agencies, counties, municipalities, townships, special districts and public authorities.',
 
+  /**
+   * General-purpose government below the federal level.
+   *
+   * Both dimensions are listed rather than left as wildcards, and the education
+   * sector is deliberately absent. Education organizations sit at these very
+   * levels now that `education` is a sector rather than a level, so scoping by
+   * level alone would let a county rule classify a school employee. Naming the
+   * sectors keeps the two apart while still covering the whole of general
+   * government.
+   */
+  appliesTo: {
+    sectorCodes: [
+      'general_government',
+      'public_safety',
+      'health_human_services',
+      'transportation',
+      'utilities',
+      'environment',
+      'finance_revenue',
+      'judicial',
+      'legislative',
+      'workforce_labor',
+      'housing_community',
+      'parks_recreation',
+      'library_culture',
+      'elections',
+      'other',
+    ],
+    governmentLevelCodes: [
+      'state',
+      'county',
+      'municipal',
+      'township',
+      'special_district',
+      'tribal',
+      'other_public_authority',
+    ],
+  },
+
   organizationTypes: [
     {
       code: 'state_board_commission',
       name: 'State board or commission',
       description: 'A state licensing board, regulatory commission or advisory body.',
-      governmentLevelCode: 'state',
-      sectorCode: 'general_government',
+      defaultGovernmentLevelCode: 'state',
+      defaultSectorCode: 'general_government',
       typicallySubordinate: false,
     },
     {
@@ -27,24 +66,24 @@ export const stateLocalGovernmentSectorPack: SectorPack = {
       name: 'County elected office',
       description:
         'A separately elected county office such as sheriff, clerk, assessor or treasurer.',
-      governmentLevelCode: 'county',
-      sectorCode: 'general_government',
+      defaultGovernmentLevelCode: 'county',
+      defaultSectorCode: 'general_government',
       typicallySubordinate: true,
     },
     {
       code: 'municipal_utility',
       name: 'Municipal utility',
       description: 'A utility operated by a municipality.',
-      governmentLevelCode: 'municipal',
-      sectorCode: 'utilities',
+      defaultGovernmentLevelCode: 'municipal',
+      defaultSectorCode: 'utilities',
       typicallySubordinate: true,
     },
     {
       code: 'court',
       name: 'Court',
       description: 'A court or court administration office at any level.',
-      governmentLevelCode: 'other_public_authority',
-      sectorCode: 'judicial',
+      defaultGovernmentLevelCode: 'other_public_authority',
+      defaultSectorCode: 'judicial',
       typicallySubordinate: false,
     },
   ],

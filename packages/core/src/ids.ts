@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Uuid } from '@pan/shared-types';
+import type { Uuid } from '@public-workforce/shared-types';
 import { shortHash } from './hash.js';
 
 export function newUuid(): Uuid {

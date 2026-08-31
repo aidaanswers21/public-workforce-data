@@ -55,8 +55,10 @@ are true, and neither is derived from the other.
 Two of the eleven suppression scopes work on these separately:
 
 - `jurisdiction` withholds everyone governed by one jurisdiction.
-- `geographic_area` withholds everyone whose duty location falls inside one
-  area.
+- `geographic_area` withholds everyone whose duty location names that exact
+  area. It does **not** walk up the area tree today, so suppressing a state does
+  not suppress the counties inside it. That is production blocker C15 in
+  `BACKLOG.md`, and it blocks an outreach export.
 
 A request to stop contacting a state's employees is a jurisdiction suppression.
 A request to stop contacting everyone working in one county, whoever employs

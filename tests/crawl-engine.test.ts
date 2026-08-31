@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { CrawlEngine, SourcePolicyRegistry, fixedClock, withPolicyDefaults } from '@pan/core';
-import { createSilentLogger } from '@pan/observability';
-import { genericHtmlAdapter } from '@pan/adapter-generic-html';
-import { genericJsonAdapter } from '@pan/adapter-generic-json';
-import type { CrawlJob } from '@pan/core';
-import type { CrawlCheckpoint, SourcePolicyRecord } from '@pan/shared-types';
+import {
+  CrawlEngine,
+  SourcePolicyRegistry,
+  fixedClock,
+  withPolicyDefaults,
+} from '@public-workforce/core';
+import { createSilentLogger } from '@public-workforce/observability';
+import { genericHtmlAdapter } from '@public-workforce/adapter-generic-html';
+import { genericJsonAdapter } from '@public-workforce/adapter-generic-json';
+import type { CrawlJob } from '@public-workforce/core';
+import type { CrawlCheckpoint, SourcePolicyRecord } from '@public-workforce/shared-types';
 import { MapFetcher, StubRobotsProvider, recordingSleep } from './support/fetchers.js';
 import { readFixture } from './support/fixtures.js';
 import { allSectorsTaxonomy } from './support/taxonomy.js';

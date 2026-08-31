@@ -1,5 +1,5 @@
 {
-  "name": "@pan/sector-state-local",
+  "name": "@public-workforce/sector-state-local",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,7 +16,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@pan/taxonomy": "workspace:*"
+    "@public-workforce/taxonomy": "workspace:*"
   },
   "devDependencies": {}
 }

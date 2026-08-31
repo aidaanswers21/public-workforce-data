@@ -1,5 +1,5 @@
-import type { Taxonomy } from '@pan/taxonomy';
-import { SENIORITY_LEVELS } from '@pan/taxonomy';
+import type { Taxonomy } from '@public-workforce/taxonomy';
+import { SENIORITY_LEVELS } from '@public-workforce/taxonomy';
 import type { SqlClient } from './client.js';
 
 export interface SeedSummary {
@@ -12,7 +12,7 @@ export interface SeedSummary {
  *
  * This is why organization types, sectors, role categories, identifier systems
  * and source types are reference tables rather than enums: adding one is a row
- * here, seeded from `@pan/taxonomy`, and a registered sector pack brings its own
+ * here, seeded from `@public-workforce/taxonomy`, and a registered sector pack brings its own
  * along automatically. No migration, no downtime, no schema change.
  *
  * Idempotent. Re-running updates names and descriptions and leaves codes alone,
@@ -61,18 +61,28 @@ export async function seedReferenceData(
       'code',
       'name',
       'description',
-      'government_level_code',
-      'sector_code',
+      'default_government_level_code',
+      'default_sector_code',
       'typically_subordinate',
     ],
     taxonomy.organizationTypes.map((row) => [
       row.code,
       row.name,
       row.description,
-      row.governmentLevelCode,
-      row.sectorCode,
+      row.defaultGovernmentLevelCode,
+      row.defaultSectorCode,
       row.typicallySubordinate,
     ]),
+  );
+  await upsert(
+    'extraction_methods',
+    ['code', 'name', 'description'],
+    taxonomy.extractionMethods.map((row) => [row.code, row.name, row.description]),
+  );
+  await upsert(
+    'obfuscation_kinds',
+    ['code', 'name', 'description'],
+    taxonomy.obfuscationKinds.map((row) => [row.code, row.name, row.description]),
   );
   await upsert(
     'relationship_types',

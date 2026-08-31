@@ -20,13 +20,45 @@ create table sectors (
   retired_at timestamptz
 );
 
+-- What kind of public body an organization is.
+--
+-- The level and sector here are defaults for onboarding, not constraints on the
+-- data. Government level and sector are orthogonal attributes recorded on the
+-- organization itself, because a school district is an independent special
+-- district in most states and a department of a city or county in others. Both
+-- defaults are nullable for exactly that reason, and there is deliberately no
+-- composite key from an organization back to this triple: such a key would
+-- force every school, and every public authority, into one level and one sector
+-- for good.
 create table organization_types (
   code text primary key,
   name text not null,
   description text not null,
-  government_level_code text not null references government_levels (code),
-  sector_code text not null references sectors (code),
+  default_government_level_code text references government_levels (code),
+  default_sector_code text references sectors (code),
   typically_subordinate boolean not null default false,
+  retired_at timestamptz
+);
+
+-- How a value was pulled off a source. Open by construction.
+--
+-- Reference data rather than an enum because this list grows every time a new
+-- source format appears: a new document type, a new API shape, a new extraction
+-- strategy. Requiring a migration to record that a value came out of a PDF
+-- table is how a platform ends up recording it as `other` instead.
+create table extraction_methods (
+  code text primary key,
+  name text not null,
+  description text not null,
+  retired_at timestamptz
+);
+
+-- How a published address was hidden before it was decoded. Also open: every
+-- new anti-harvesting trick is another row here.
+create table obfuscation_kinds (
+  code text primary key,
+  name text not null,
+  description text not null,
   retired_at timestamptz
 );
 
@@ -113,12 +145,6 @@ create type email_validation_status as enum (
   'unvalidated', 'valid', 'invalid', 'risky', 'accept_all', 'unknown', 'error'
 );
 
-create type extraction_method as enum (
-  'html_table', 'html_card', 'html_list', 'html_definition_list', 'microdata', 'json_ld',
-  'json_api', 'mailto_harvest', 'profile_page', 'browser_dom', 'pdf_text', 'spreadsheet_row',
-  'open_data_record', 'bulk_import', 'ai_assisted', 'file_import', 'manual'
-);
-
 create type suppression_scope as enum (
   'person', 'email', 'domain', 'organization', 'organization_subtree', 'source',
   'jurisdiction', 'government_level', 'geographic_area', 'export_purpose', 'global'
@@ -130,6 +156,22 @@ create type suppression_source as enum (
 );
 
 create type complaint_channel as enum ('email', 'phone', 'web_form', 'mail', 'regulator', 'other');
+
+-- What happened to a complaint. A closed lifecycle: every complaint is waiting,
+-- acted on, waiting for a person, or closed without action.
+create type complaint_resolution as enum ('pending', 'suppressed', 'needs_review', 'dismissed');
+
+-- How an organization's identity was resolved, strongest first.
+--
+-- A closed set: these are the only kinds of evidence the resolver knows how to
+-- weigh, and adding one is a deliberate change to how records are matched.
+create type organization_identity_tier as enum (
+  'official_identifier',
+  'source_identifier',
+  'parent_scoped_name',
+  'domain_scoped_name',
+  'ambiguous'
+);
 
 create type assignment_status as enum ('active', 'inactive', 'historical', 'unknown');
 
@@ -165,9 +207,5 @@ create type export_status as enum ('requested', 'building', 'completed', 'failed
 
 create type record_status as enum ('active', 'inactive', 'unconfirmed');
 
-create type obfuscation_kind as enum (
-  'none', 'html_entity', 'at_dot_words', 'bracketed_at', 'cloudflare_cfemail',
-  'data_attribute', 'reversed_text'
-);
 
 create type normalization_method as enum ('rule_table', 'exact_match', 'manual', 'assisted_review');

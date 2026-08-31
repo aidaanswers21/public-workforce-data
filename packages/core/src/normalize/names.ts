@@ -1,4 +1,4 @@
-import type { NameParts } from '@pan/shared-types';
+import type { NameParts } from '@public-workforce/shared-types';
 import { collapseWhitespace, decaseIfShouting, normalizeKey } from './text.js';
 
 const PREFIXES = new Set([

@@ -124,17 +124,30 @@ describe('localPartMatchesName', () => {
 });
 
 describe('canReplaceClassification', () => {
-  it('never lets an inferred candidate overwrite a published address', () => {
-    expect(canReplaceClassification('published', 'inferred_candidate')).toBe(false);
-    expect(canReplaceClassification('decoded_published', 'inferred_candidate')).toBe(false);
+  it('never replaces a published address', () => {
+    for (const incoming of [
+      'published',
+      'decoded_published',
+      'general_inbox',
+      'invalid',
+    ] as const) {
+      expect(canReplaceClassification('published', incoming), incoming).toBe(false);
+    }
   });
 
-  it('lets a published address replace a decoded or inferred one', () => {
+  it('upgrades to published when a later page shows the address in the clear', () => {
     expect(canReplaceClassification('decoded_published', 'published')).toBe(true);
-    expect(canReplaceClassification('inferred_candidate', 'published')).toBe(true);
+    expect(canReplaceClassification('general_inbox', 'published')).toBe(true);
+    expect(canReplaceClassification('invalid', 'published')).toBe(true);
   });
 
-  it('does not replace a published address with another published one', () => {
-    expect(canReplaceClassification('published', 'published')).toBe(false);
+  it('changes nothing else', () => {
+    // Not a ranking. Anything other than plain-text publication leaves the
+    // stored classification alone, which is exactly what the SQL does.
+    for (const stored of ['decoded_published', 'general_inbox', 'invalid'] as const) {
+      for (const incoming of ['decoded_published', 'general_inbox', 'invalid'] as const) {
+        expect(canReplaceClassification(stored, incoming), `${stored} <- ${incoming}`).toBe(false);
+      }
+    }
   });
 });

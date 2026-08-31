@@ -1,4 +1,4 @@
-import type { ColumnMapping, JurisdictionConfig } from '@pan/jurisdiction-kit';
+import type { ColumnMapping, JurisdictionConfig } from '@public-workforce/jurisdiction-kit';
 
 /**
  * Texas public education, the first jurisdiction onboarded.
@@ -48,7 +48,11 @@ const NCES_CCD: ColumnMapping = {
 export const texasEducationJurisdiction: JurisdictionConfig = {
   key: 'texas-education',
   name: 'Texas public education',
-  governmentLevelCode: 'education',
+  // Texas independent school districts are political subdivisions of the state
+  // with their own boards and taxing authority, which makes them special
+  // districts. The sector is what they do; the level is what they are. See
+  // docs/DATA_MODEL.md on why `education` is never a government level.
+  governmentLevelCode: 'special_district',
   sectorCodes: ['education'],
 
   jurisdiction: {

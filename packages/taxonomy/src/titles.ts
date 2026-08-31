@@ -301,7 +301,11 @@ export const BASE_TITLE_RULES: readonly TitleRule[] = [
   },
 
   {
-    test: /\b(administrative-(assistant|specialist|coordinator|aide)|secretary|receptionist|office-(manager|assistant|specialist)|clerk|clerical)\b/,
+    // "Executive assistant" is administrative support, not an executive. It
+    // has to be matched before the seniority modifier reads the word
+    // "executive", which is why it sits in the rule rather than being left to
+    // the generic assistant fallback.
+    test: /\b(administrative-(assistant|specialist|coordinator|aide)|executive-(assistant|secretary)|secretary|receptionist|office-(manager|assistant|specialist)|clerk|clerical)\b/,
     roleCategoryCode: 'administrative_support',
     seniorityCode: 'support',
   },
@@ -340,7 +344,13 @@ export const BASE_TITLE_RULES: readonly TitleRule[] = [
 
 /** Modifiers that raise or lower seniority regardless of the matched rule. */
 export const SENIORITY_MODIFIERS: readonly { test: RegExp; seniorityCode: string }[] = [
-  { test: /\b(chief|executive)\b/, seniorityCode: 'executive' },
+  // "Executive" promotes a title unless it is qualifying an assistant. An
+  // executive assistant supports an executive and is not one, and reading the
+  // word without that exception put every one of them at executive seniority.
+  {
+    test: /\bchief\b|\bexecutive\b(?!-(assistant|secretary|aide))/,
+    seniorityCode: 'executive',
+  },
   {
     test: /\b(deputy|assistant|associate|vice)-(director|administrator|chief)\b/,
     seniorityCode: 'director',

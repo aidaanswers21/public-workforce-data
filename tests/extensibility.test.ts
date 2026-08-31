@@ -10,13 +10,13 @@ import type {
   ListingExtraction,
   PaginationPlan,
   Uuid,
-} from '@pan/shared-types';
+} from '@public-workforce/shared-types';
 import {
   AdapterRegistry,
   buildPersonRecord,
   checkAdapterContract,
   fixturePage,
-} from '@pan/adapter-kit';
+} from '@public-workforce/adapter-kit';
 import {
   CrawlEngine,
   OrganizationHierarchy,
@@ -25,25 +25,25 @@ import {
   parsePersonName,
   personIdentityKey,
   withPolicyDefaults,
-} from '@pan/core';
-import { createSilentLogger } from '@pan/observability';
+} from '@public-workforce/core';
+import { createSilentLogger } from '@public-workforce/observability';
 import {
   DelimitedOrganizationImporter,
   JurisdictionRegistry,
   validateJurisdictionConfig,
   type JurisdictionConfig,
-} from '@pan/jurisdiction-kit';
+} from '@public-workforce/jurisdiction-kit';
 import {
   ComplianceRepository,
   IngestionRepository,
   OrganizationRepository,
   QueryRepository,
   TestDatabase,
-} from '@pan/database';
-import { educationSectorPack } from '@pan/sector-education';
-import { federalGovernmentSectorPack } from '@pan/sector-federal';
-import { stateLocalGovernmentSectorPack } from '@pan/sector-state-local';
-import { buildAdapterRegistry, buildJurisdictionRegistry } from '@pan/crawler-worker';
+} from '@public-workforce/database';
+import { educationSectorPack } from '@public-workforce/sector-education';
+import { federalGovernmentSectorPack } from '@public-workforce/sector-federal';
+import { stateLocalGovernmentSectorPack } from '@public-workforce/sector-state-local';
+import { buildAdapterRegistry, buildJurisdictionRegistry } from '@public-workforce/crawler-worker';
 import { MapFetcher } from './support/fetchers.js';
 import { allSectorsTaxonomy } from './support/taxonomy.js';
 
@@ -65,12 +65,14 @@ interface World {
   compliance: ComplianceRepository;
   queries: QueryRepository;
   documentId: Uuid;
+  documentVersionId: Uuid;
   org: (input: {
     name: string;
     typeCode: string;
     levelCode: string;
     sectorCode?: string;
     jurisdictionId?: Uuid;
+    parentOrganizationId?: Uuid;
   }) => Promise<Uuid>;
   jurisdiction: (code: string, name: string, levelCode: string, areaId?: Uuid) => Promise<Uuid>;
   area: (typeCode: string, name: string, stateCode?: string, parentId?: Uuid) => Promise<Uuid>;
@@ -99,7 +101,7 @@ async function world(): Promise<World> {
   const organizations = new OrganizationRepository(database);
   const ingestion = new IngestionRepository(database);
 
-  const documentId = await ingestion.upsertSourceDocument({
+  const document = await ingestion.recordSourceDocument({
     url: 'https://example.gov/source',
     urlCanonical: 'https://example.gov/source',
     urlHash: 'world-source',
@@ -114,6 +116,8 @@ async function world(): Promise<World> {
     crawlRunId: null,
     retrievedAt: AT,
   });
+  const documentId = document.documentId;
+  const documentVersionId = document.versionId;
 
   let counter = 0;
   const common = {
@@ -130,6 +134,7 @@ async function world(): Promise<World> {
     compliance: new ComplianceRepository(database),
     queries: new QueryRepository(database),
     documentId,
+    documentVersionId,
     area: async (typeCode, name, stateCode, parentId) =>
       organizations.upsertGeographicArea({
         areaTypeCode: typeCode,
@@ -152,6 +157,9 @@ async function world(): Promise<World> {
         governmentLevelCode: input.levelCode,
         sectorCode: input.sectorCode ?? 'general_government',
         ...(input.jurisdictionId === undefined ? {} : { jurisdictionId: input.jurisdictionId }),
+        ...(input.parentOrganizationId === undefined
+          ? {}
+          : { parentOrganizationId: input.parentOrganizationId }),
         name: input.name,
         nameNormalized: `${input.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${counter}`,
         ...common,
@@ -225,25 +233,29 @@ async function world(): Promise<World> {
 
 describe('the neutral model represents every level of government', () => {
   it('1: a public school under a school district', async () => {
+    // An independent school district: education-sector work at the
+    // special-district level. `education` is a sector, not a level, so the two
+    // are recorded separately and neither is inferred from the other.
     const w = await world();
     const jurisdiction = await w.jurisdiction(
       'us-tx-education',
       'Texas public education',
-      'education',
+      'special_district',
     );
     const district = await w.org({
       name: 'Sample Independent School District',
       typeCode: 'school_district',
-      levelCode: 'education',
+      levelCode: 'special_district',
       sectorCode: 'education',
       jurisdictionId: jurisdiction,
     });
     const school = await w.org({
       name: 'Sample High School',
       typeCode: 'school',
-      levelCode: 'education',
+      levelCode: 'special_district',
       sectorCode: 'education',
       jurisdictionId: jurisdiction,
+      parentOrganizationId: district,
     });
     await w.partOf(district, school);
     await w.person({
@@ -258,8 +270,32 @@ describe('the neutral model represents every level of government', () => {
     expect(rows[0]).toMatchObject({
       organizationName: 'Sample High School',
       parentOrganizationName: 'Sample Independent School District',
-      governmentLevelCode: 'education',
+      governmentLevelCode: 'special_district',
       sectorCode: 'education',
+    });
+  });
+
+  it('1b: the same district run by a city, at the municipal level', async () => {
+    // The C9 ruling in one assertion: one organization type, two factually
+    // supported government levels, both education-sector.
+    const w = await world();
+    const city = await w.jurisdiction('us-tx-springfield', 'Springfield', 'municipal');
+    const cityRun = await w.org({
+      name: 'Springfield City Schools',
+      typeCode: 'school_district',
+      levelCode: 'municipal',
+      sectorCode: 'education',
+      jurisdictionId: city,
+    });
+    const rows = await w.queries.queryExportableRows(AT, PURPOSE);
+    expect(rows).toEqual([]);
+    const stored = await w.database.query<{
+      government_level_code: string;
+      sector_code: string;
+    }>('select government_level_code, sector_code from organizations where id = $1', [cityRun]);
+    expect(stored.rows[0]).toEqual({
+      government_level_code: 'municipal',
+      sector_code: 'education',
     });
   });
 
@@ -668,7 +704,16 @@ describe('a non-HTML official data source', () => {
 
   it('imports organizations from a CSV with no adapter and no crawl', () => {
     const importer = new DelimitedOrganizationImporter('csv');
-    const result = importer.import(CSV, config.columnMappings['agencyList']!, config);
+    const result = importer.import(
+      CSV,
+      config.officialSources[0]!,
+      config.columnMappings['agencyList']!,
+      config,
+      {
+        // The shipped configuration is deliberately unverified.
+        allowUnverified: true,
+      },
+    );
 
     expect(result.organizations).toHaveLength(3);
     expect(result.rejected).toEqual([]);
@@ -684,12 +729,34 @@ describe('a non-HTML official data source', () => {
     expect(result.organizations[2]?.countyName).toBeNull();
   });
 
+  it('refuses an unverified source before it parses a byte', () => {
+    // The gate used to be a function anyone could call and nobody did. It is
+    // now the first statement of the only path into the parser, so an unread
+    // government file cannot be imported by forgetting a line.
+    const importer = new DelimitedOrganizationImporter('csv');
+    const source = config.officialSources[0]!;
+    expect(source.verified).toBe(false);
+
+    expect(() =>
+      importer.import(CSV, source, config.columnMappings['agencyList']!, config),
+    ).toThrow(/is not marked verified/);
+  });
+
+  it('imports once a person has confirmed the source', () => {
+    const importer = new DelimitedOrganizationImporter('csv');
+    const verified = { ...config.officialSources[0]!, verified: true };
+    const result = importer.import(CSV, verified, config.columnMappings['agencyList']!, config);
+    expect(result.organizations).toHaveLength(3);
+  });
+
   it('rejects an unmappable row with a reason rather than dropping it', () => {
     const importer = new DelimitedOrganizationImporter('csv');
     const result = importer.import(
       `${CSV}\n,126,Bureau of Sample Affairs,,`,
+      config.officialSources[0]!,
       config.columnMappings['agencyList']!,
       config,
+      { allowUnverified: true },
     );
     expect(result.rejected).toHaveLength(1);
     expect(result.rejected[0]?.reason).toContain('no organization name');

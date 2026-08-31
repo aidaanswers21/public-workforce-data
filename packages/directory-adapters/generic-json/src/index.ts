@@ -10,9 +10,13 @@ import type {
   ListingExtraction,
   PaginationPlan,
   PaginationRequest,
-} from '@pan/shared-types';
-import { canonicalizeUrl, collapseWhitespace, dedupeExtractedRecords } from '@pan/core';
-import { buildPersonRecord, clamp01, looksLikePersonName } from '@pan/adapter-kit';
+} from '@public-workforce/shared-types';
+import {
+  canonicalizeUrl,
+  collapseWhitespace,
+  dedupeExtractedRecords,
+} from '@public-workforce/core';
+import { buildPersonRecord, clamp01, looksLikePersonName } from '@public-workforce/adapter-kit';
 
 export const GENERIC_JSON_ADAPTER_KEY = 'generic-json';
 

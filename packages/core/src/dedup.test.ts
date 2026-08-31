@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ExtractedPersonRecord, Provenance } from '@pan/shared-types';
+import type { ExtractedPersonRecord, Provenance } from '@public-workforce/shared-types';
 import { PersonResolver, dedupeExtractedRecords, mergeProvenance } from './dedup.js';
 
 function record(

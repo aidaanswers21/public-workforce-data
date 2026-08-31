@@ -1,4 +1,4 @@
-import type { DirectoryVocabulary } from '@pan/shared-types';
+import type { DirectoryVocabulary } from '@public-workforce/shared-types';
 
 /**
  * The words the crawler uses to recognize a directory, a shared inbox and an

@@ -1,5 +1,5 @@
-import type { ExportablePersonRow } from '@pan/core';
-import type { Timestamp, Uuid } from '@pan/shared-types';
+import type { ExportablePersonRow } from '@public-workforce/core';
+import type { Timestamp, Uuid } from '@public-workforce/shared-types';
 import type { SqlClient } from '../client.js';
 
 export interface ExportFilters {
@@ -135,7 +135,7 @@ export class QueryRepository {
          p.status as person_status,
          emp.title_published, emp.title_normalized, emp.role_category_code, emp.job_family_code,
          emp.seniority_code, emp.department_published, emp.assignment_status,
-         emp.extraction_method, emp.confidence, emp.first_seen_at, emp.last_seen_at, emp.crawl_run_id,
+         emp.extraction_method_code, emp.confidence, emp.first_seen_at, emp.last_seen_at, emp.crawl_run_id,
          emp.source_document_id,
          unit.name as unit_name,
          org.id as organization_id, org.name as organization_name,
@@ -175,7 +175,11 @@ export class QueryRepository {
        ) ea on true
        left join lateral (
          select * from email_candidates c
-         where c.person_id = p.id and c.state <> 'rejected'
+         -- Both terminal states are excluded. A rejected candidate was a wrong
+         -- inference; a suppressed one is an address somebody asked us not to
+         -- use, and letting that through would put a withheld address into an
+         -- export before the in-memory re-check ever saw it.
+         where c.person_id = p.id and c.state not in ('rejected', 'suppressed')
          order by c.confidence desc limit 1
        ) ec on true
        left join source_documents sd on sd.id = emp.source_document_id
@@ -211,7 +215,8 @@ export class QueryRepository {
             where ${orgFilter} and ea.classification in ('published','decoded_published')) as published_emails,
          (select count(*) from email_addresses ea join organizations o on o.id = ea.organization_id
             where ${orgFilter} and ea.classification = 'general_inbox') as general_inboxes,
-         (select count(*) from email_candidates) as inferred_candidates,
+         (select count(*) from email_candidates
+            where state not in ('rejected', 'suppressed')) as inferred_candidates,
          (select count(*) from email_candidates where validation_status = 'valid') as validated_candidates,
          (select count(*) from contact_points) as contact_points,
          (select count(*) from suppression_entries where revoked_at is null) as suppression_entries,
@@ -344,7 +349,7 @@ function toExportRow(row: Record<string, unknown>): ExportablePersonRow {
     firstSeenAt: toIso(row['first_seen_at']),
     lastSeenAt: toIso(row['last_seen_at']),
     crawlRunId: (row['crawl_run_id'] as Uuid | null) ?? null,
-    extractionMethod: row['extraction_method'] as ExportablePersonRow['extractionMethod'],
+    extractionMethod: row['extraction_method_code'] as ExportablePersonRow['extractionMethod'],
     confidence: Number(row['confidence'] ?? 0),
     assignmentStatus:
       (row['assignment_status'] as ExportablePersonRow['assignmentStatus']) ?? 'unknown',

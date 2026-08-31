@@ -1,4 +1,9 @@
-import type { SuppressionEntryRecord, SuppressionScope, Timestamp, Uuid } from '@pan/shared-types';
+import type {
+  SuppressionEntryRecord,
+  SuppressionScope,
+  Timestamp,
+  Uuid,
+} from '@public-workforce/shared-types';
 import { isEffectiveAt } from './time.js';
 
 /**

@@ -1,4 +1,4 @@
-import type { Uuid } from '@pan/shared-types';
+import type { Uuid } from '@public-workforce/shared-types';
 
 /**
  * Education-specific attributes, held in an extension table keyed to

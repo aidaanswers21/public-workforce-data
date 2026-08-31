@@ -1,4 +1,8 @@
-import { collapseWhitespace, normalizeCountyName, normalizeOrganizationName } from '@pan/core';
+import {
+  collapseWhitespace,
+  normalizeCountyName,
+  normalizeOrganizationName,
+} from '@public-workforce/core';
 import type { ColumnMapping, JurisdictionConfig, OfficialSource } from './types.js';
 
 /** One organization as an official file published it. */
@@ -32,10 +36,36 @@ export interface ImportResult {
  * the column mapping, and the same CSV importer serves every state that
  * publishes a CSV. That is the reuse the onboarding process depends on.
  */
+export interface ImportOptions {
+  /**
+   * Import from a source nobody has confirmed.
+   *
+   * Exists for fixtures and for a deliberate, recorded decision. It defaults to
+   * false and has to be written down at the call site, which is the point: an
+   * unverified import should be visible in a diff.
+   */
+  allowUnverified?: boolean;
+}
+
 export interface InstitutionImporter {
   readonly key: string;
   readonly format: OfficialSource['format'];
-  import(content: string, mapping: ColumnMapping, config: JurisdictionConfig): ImportResult;
+  /**
+   * Read an official file.
+   *
+   * The source is a required argument, not context the caller may forget.
+   * Verification used to be a function anyone could call and nobody did, so an
+   * unread government file could be imported by writing one line. Now the only
+   * way to reach the parser is through a source, and the first thing the parser
+   * does is refuse an unverified one.
+   */
+  import(
+    content: string,
+    source: OfficialSource,
+    mapping: ColumnMapping,
+    config: JurisdictionConfig,
+    options?: ImportOptions,
+  ): ImportResult;
 }
 
 export class UnverifiedSourceError extends Error {
@@ -116,7 +146,16 @@ export class DelimitedOrganizationImporter implements InstitutionImporter {
 
   constructor(readonly format: OfficialSource['format'] = 'csv') {}
 
-  import(content: string, mapping: ColumnMapping, config: JurisdictionConfig): ImportResult {
+  import(
+    content: string,
+    source: OfficialSource,
+    mapping: ColumnMapping,
+    config: JurisdictionConfig,
+    options: ImportOptions = {},
+  ): ImportResult {
+    // Before anything is parsed, and long before anything is written.
+    assertSourceVerified(source, options.allowUnverified ?? false);
+
     const delimiter = this.format === 'tsv' ? '\t' : ',';
     const rows = parseCsv(content, delimiter);
     const header = rows[0];

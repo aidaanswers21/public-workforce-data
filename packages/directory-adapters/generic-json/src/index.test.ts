@@ -4,7 +4,7 @@ import {
   fixtureContext,
   fixturePage,
   type AdapterFixture,
-} from '@pan/adapter-kit';
+} from '@public-workforce/adapter-kit';
 import { allSectorsTaxonomy } from '../../../../tests/support/taxonomy.js';
 import { loadAdapterFixture } from '../../../../tests/support/fixtures.js';
 import { genericJsonAdapter } from './index.js';

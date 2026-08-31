@@ -1,5 +1,5 @@
 {
-  "name": "@pan/core",
+  "name": "@public-workforce/core",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,9 +16,9 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@pan/shared-types": "workspace:*",
-    "@pan/observability": "workspace:*",
-    "@pan/taxonomy": "workspace:*"
+    "@public-workforce/shared-types": "workspace:*",
+    "@public-workforce/observability": "workspace:*",
+    "@public-workforce/taxonomy": "workspace:*"
   },
   "devDependencies": {}
 }

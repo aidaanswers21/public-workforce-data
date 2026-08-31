@@ -1,5 +1,5 @@
 {
-  "name": "@pan/database",
+  "name": "@public-workforce/database",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,11 +16,11 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@pan/shared-types": "workspace:*",
-    "@pan/core": "workspace:*",
-    "@pan/observability": "workspace:*",
+    "@public-workforce/shared-types": "workspace:*",
+    "@public-workforce/core": "workspace:*",
+    "@public-workforce/observability": "workspace:*",
     "pg": "^8.13.0",
-    "@pan/taxonomy": "workspace:*"
+    "@public-workforce/taxonomy": "workspace:*"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.2.0",

@@ -1,13 +1,24 @@
-import { AdapterRegistry } from '@pan/adapter-kit';
-import { genericHtmlAdapter } from '@pan/adapter-generic-html';
-import { genericJsonAdapter } from '@pan/adapter-generic-json';
-import { JurisdictionRegistry } from '@pan/jurisdiction-kit';
-import { texasEducationJurisdiction } from '@pan/jurisdiction-texas-education';
-import { educationSectorPack } from '@pan/sector-education';
-import { federalGovernmentSectorPack } from '@pan/sector-federal';
-import { stateLocalGovernmentSectorPack } from '@pan/sector-state-local';
-import { SENIORITY_MODIFIERS, Taxonomy, US_LOCALITY_DOMAIN_LABELS } from '@pan/taxonomy';
-import { hashObject, withPolicyDefaults, type CrawlPolicy, type TitleRuleSet } from '@pan/core';
+import { AdapterRegistry } from '@public-workforce/adapter-kit';
+import { genericHtmlAdapter } from '@public-workforce/adapter-generic-html';
+import { genericJsonAdapter } from '@public-workforce/adapter-generic-json';
+import { JurisdictionRegistry } from '@public-workforce/jurisdiction-kit';
+import { texasEducationJurisdiction } from '@public-workforce/jurisdiction-texas-education';
+import { educationSectorPack } from '@public-workforce/sector-education';
+import { federalGovernmentSectorPack } from '@public-workforce/sector-federal';
+import { stateLocalGovernmentSectorPack } from '@public-workforce/sector-state-local';
+import {
+  SENIORITY_MODIFIERS,
+  Taxonomy,
+  US_LOCALITY_DOMAIN_LABELS,
+  type TaxonomyScope,
+} from '@public-workforce/taxonomy';
+import {
+  hashObject,
+  withPolicyDefaults,
+  type CrawlPolicy,
+  type TitleRuleSet,
+} from '@public-workforce/core';
+import type { DirectoryVocabulary } from '@public-workforce/shared-types';
 
 /**
  * The composition root.
@@ -36,7 +47,7 @@ export function buildTaxonomy(): Taxonomy {
  */
 export function taxonomyVersion(taxonomy: Taxonomy): string {
   return hashObject({
-    packs: taxonomy.packs.map((pack) => pack.key),
+    packs: taxonomy.packs.map((pack) => ({ key: pack.key, scope: pack.appliesTo })),
     rules: taxonomy.titleRules.map(
       (rule) => `${rule.source ?? ''}:${rule.test.source}:${rule.roleCategoryCode}`,
     ),
@@ -44,19 +55,54 @@ export function taxonomyVersion(taxonomy: Taxonomy): string {
   }).slice(0, 16);
 }
 
-export function buildTitleRuleSet(taxonomy: Taxonomy): TitleRuleSet {
+/**
+ * The title rules that apply to one organization.
+ *
+ * Scope is required, not optional. A rule set built without one would be the
+ * union of every pack, which is how an education rule ends up classifying a
+ * federal contracting officer. Passing `{ sectorCode: null, governmentLevelCode:
+ * null }` is legal and means "the neutral base only", which is the right answer
+ * for an organization nobody has classified yet.
+ *
+ * The version is the whole taxonomy's, not the scoped subset's, so two records
+ * normalized under the same taxonomy compare equal even when different packs
+ * applied to them.
+ */
+export function buildTitleRuleSet(taxonomy: Taxonomy, scope: TaxonomyScope): TitleRuleSet {
   const jobFamilyByRole = new Map(
     taxonomy.roleCategories.map((row) => [row.code, row.jobFamilyCode]),
   );
+  const scoped = taxonomy.forScope(scope);
   return {
-    rules: taxonomy.titleRules,
-    abbreviations: taxonomy.titleAbbreviations,
+    rules: scoped.titleRules,
+    abbreviations: scoped.titleAbbreviations,
     seniorityModifiers: SENIORITY_MODIFIERS,
-    specialtyPatterns: taxonomy.specialtyPatterns,
+    specialtyPatterns: scoped.specialtyPatterns,
     fallbackRoleCategoryCode: 'other',
     unknownRoleCategoryCode: 'unknown',
     jobFamilyForRole: (code) => jobFamilyByRole.get(code) ?? 'unknown',
     version: taxonomyVersion(taxonomy),
+  };
+}
+
+/**
+ * Everything interpretive that one organization's records should be read with.
+ *
+ * Vocabulary and title rules travel together because they answer the same
+ * question from two directions: what words this kind of body uses on its pages,
+ * and what its job titles mean. Building them from one scope keeps them from
+ * drifting apart, which is how a directory gets parsed with education headings
+ * and then classified with federal rules.
+ */
+export function buildScopedRules(
+  taxonomy: Taxonomy,
+  scope: TaxonomyScope,
+): { vocabulary: DirectoryVocabulary; titleRules: TitleRuleSet; packKeys: readonly string[] } {
+  const scoped = taxonomy.forScope(scope);
+  return {
+    vocabulary: scoped.vocabulary,
+    titleRules: buildTitleRuleSet(taxonomy, scope),
+    packKeys: scoped.packKeys,
   };
 }
 

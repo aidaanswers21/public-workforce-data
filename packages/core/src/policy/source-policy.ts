@@ -1,4 +1,4 @@
-import type { CollectionStatus, SourcePolicyRecord, Uuid } from '@pan/shared-types';
+import type { CollectionStatus, SourcePolicyRecord, Uuid } from '@public-workforce/shared-types';
 import { domainOf, registrableDomain } from '../normalize/urls.js';
 
 export type CollectionMode = 'production' | 'fixture';

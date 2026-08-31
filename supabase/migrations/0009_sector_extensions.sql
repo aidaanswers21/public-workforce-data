@@ -18,12 +18,12 @@ create table education_organization_attributes (
   enrollment integer,
   enrollment_as_of date,
   title_one_status text,
-  source_document_id uuid references source_documents (id) on delete set null,
+  source_document_id uuid not null references source_documents (id) on delete restrict,
   crawl_run_id uuid references crawl_runs (id) on delete set null,
   first_seen_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now(),
-  constraint education_attributes_enrollment_positive check (enrollment is null or enrollment >= 0),
-  constraint education_attributes_has_provenance check (source_document_id is not null)
+  constraint education_organization_attributes_enrollment_positive check (enrollment is null or enrollment >= 0),
+  constraint education_organization_attributes_has_provenance check (source_document_id is not null)
 );
 
 -- A guard, not decoration: this extension may only describe organizations whose

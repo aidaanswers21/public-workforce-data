@@ -95,7 +95,7 @@ describe('rollback', () => {
     database = await TestDatabase.create({ seed: false });
     const migrations = loadMigrations();
     const reverted = await rollback(database, migrations, '0007');
-    expect(reverted).toEqual(['0009', '0008', '0007']);
+    expect(reverted).toEqual(['0010', '0009', '0008', '0007']);
     expect(await database.count('people')).toBe(0);
   });
 });

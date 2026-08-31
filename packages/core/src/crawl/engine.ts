@@ -15,8 +15,8 @@ import type {
   RobotsProvider,
   Timestamp,
   Uuid,
-} from '@pan/shared-types';
-import type { Logger } from '@pan/observability';
+} from '@public-workforce/shared-types';
+import type { Logger } from '@public-workforce/observability';
 import { canonicalizeUrl, registrableDomain, resolveUrl } from '../normalize/urls.js';
 import { dedupeExtractedRecords, recordIdentityFingerprint } from '../dedup.js';
 import { shortHash } from '../hash.js';

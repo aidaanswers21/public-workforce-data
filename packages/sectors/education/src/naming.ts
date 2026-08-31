@@ -1,4 +1,4 @@
-import { collapseDottedAcronyms, collapseWhitespace, normalizeKey } from '@pan/core';
+import { collapseDottedAcronyms, collapseWhitespace, normalizeKey } from '@public-workforce/core';
 
 /**
  * Education organization name normalization.

@@ -15,9 +15,26 @@ export interface ReferenceRow {
   retiredAt?: string;
 }
 
+/**
+ * A kind of public body.
+ *
+ * The level and sector here are **defaults**, not constraints. Government level
+ * and sector are orthogonal, independently recorded attributes of an
+ * organization, and the source decides both. A school district is an
+ * independent special district in most states and a department of a city or
+ * county in others; both are `school_district`, and the platform records what
+ * the source actually supports rather than what the type would prefer.
+ *
+ * A null default means the type genuinely varies and the caller must state the
+ * value. There is no composite foreign key from an organization to a
+ * (type, level, sector) triple, because such a key would force every school, or
+ * every public authority, into one level and one sector forever.
+ */
 export interface OrganizationTypeRow extends ReferenceRow {
-  governmentLevelCode: string;
-  sectorCode: string;
+  /** Usual level for this type. Null when it genuinely varies. */
+  defaultGovernmentLevelCode: string | null;
+  /** Usual sector for this type. Null when it genuinely varies. */
+  defaultSectorCode: string | null;
   /** True when organizations of this type are normally subordinate to another. */
   typicallySubordinate: boolean;
 }

@@ -23,16 +23,33 @@ source published about a person's public role.
 organization, professional office address, public work phone, public work email.
 
 **Never collected or inferred**, whatever a page displays: student information;
-Social Security or other government identification numbers; dates of birth;
-personal financial information; medical information; personal email addresses,
-unless a specific future lawful use is explicitly approved; home addresses;
-family information; anything behind authentication.
+parent and guardian information; Social Security or other government
+identification numbers; dates of birth; personal financial information; medical
+information; personal email addresses, unless a specific future lawful use is
+explicitly approved; home addresses; family information; anything behind
+authentication.
 
-`applyDataBoundary` in `@pan/core` runs on every extracted record before
-anything is stored. `scanForProhibitedData` matches on the field label and on
-the value, so both `date_of_birth: 1970-01-01` and a birth date under a
-differently spelled heading are caught. A drop is counted and the reason is
-recorded; the offending value is never written anywhere, including the logs.
+Student and guardian detection is deliberately narrow. "Director of Student
+Services" is a public employee, and a rule that rejected the word would throw
+away real people and train whoever reads the drop counter to ignore it. The
+patterns match a field that names a student or guardian as its subject
+(`student_name`, `pupil_dob`, `parent_email`) or a value that identifies someone
+by school position, and they never run against a title or a department, because
+those describe a job rather than a person.
+
+`applyDataBoundary` in `@public-workforce/core` runs on every extracted record
+before anything is stored, and **the pipeline reads its output, not the original
+record**. The sanitized values are what reach the person row, the employment
+assignment, the organizational unit, the contact points and the source
+observations. That last one matters most: observations are the platform's most
+durable evidence, so a raw value written into one would outlive every other
+place the boundary removed it.
+
+`scanForProhibitedData` matches on the field label and on the value, so both
+`date_of_birth: 1970-01-01` and a birth date under a differently spelled heading
+are caught. A drop is counted and the reason is recorded; the offending value is
+never written anywhere, including the logs, which carry the field and the kind
+and never the value.
 
 Personal-domain email addresses are dropped during ingestion and counted as
 `personalEmailsDropped`, so a source publishing them shows up as a number rather
@@ -75,7 +92,11 @@ says `permitted`, and it can never make a suppressed person contactable.
 
 Enforced in the data layer, not left to whoever writes an export. Eleven scopes,
 from one email address up to an entire organization subtree, a jurisdiction, a
-level of government, a geographic area or everyone.
+level of government, a geographic area or everyone. The geographic scope matches
+an exact area and does not yet inherit down the area tree; see production
+blocker C15 in `BACKLOG.md`.
+
+Revocation is monotonic and audited. See `DATA_MODEL.md`.
 
 Every export re-checks immediately before writing, so an opt-out recorded a
 second earlier still takes effect, and appearing in a previous export grants
@@ -106,6 +127,25 @@ with its own obligations, and the suppression list is not optional for it.
 - Confirm the export's `suppression_checked_at` and checksum were recorded.
 - Confirm nobody is treating an inferred candidate as a verified address. It is
   a separate column, with its own confidence, for exactly that reason.
+
+## Row level security
+
+Every table in the public schema has row level security enabled **and forced**,
+with no policies at all. Supabase exposes the public schema through PostgREST,
+and anything reachable there is reachable by anyone holding the project's
+publishable key, which ships in client code. Default deny with no policy is the
+whole rule: the pipeline connects with the service role or a direct database
+connection and is unaffected, and PostgREST returns nothing to anyone else.
+
+There are deliberately no permissive placeholder policies. A policy that allows
+a read "for now" is worse than none, because it reads as a considered decision.
+
+`packages/database/src/schema.test.ts` asserts the schema-side half: every table
+protected, no policies. It cannot assert the PostgREST half, because the
+in-process PostgreSQL the tests run against has no `anon` role and no PostgREST
+in front of it. Proving that an anonymous request with a publishable key is
+refused needs an integration test against a real Supabase project, tracked as
+blocker RLS-1 in `BACKLOG.md`.
 
 ## Reporting a problem
 

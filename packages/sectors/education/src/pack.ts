@@ -1,4 +1,4 @@
-import type { SectorPack } from '@pan/taxonomy';
+import type { SectorPack } from '@public-workforce/taxonomy';
 
 /**
  * Public education as one supported vertical.
@@ -14,47 +14,72 @@ export const educationSectorPack: SectorPack = {
   description:
     'Public school districts, schools, charter organizations and education service agencies.',
 
+  /**
+   * Education work, at whatever level of government performs it.
+   *
+   * Scoped by sector and not by level, because that is what education is: an
+   * independent district is a special district, a dependent one is part of a
+   * city or county, and a state education agency is a state body. All three do
+   * education-sector work and all three should read a school directory the same
+   * way. Scoping by sector also keeps these rules off general-government
+   * records at the same levels, so a county's Veterans Counselor is never
+   * classified as a school counsellor.
+   */
+  appliesTo: { sectorCodes: ['education'], governmentLevelCodes: null },
+
+  /**
+   * Education organization types.
+   *
+   * Every one of these is education-sector, and none of them has a fixed
+   * government level. An independent school district is a special district; a
+   * dependent one is a department of a city, a county or a state. The level is
+   * a fact about how a particular body is constituted, so it comes from the
+   * source rather than from the type, and these defaults are null wherever the
+   * real world varies.
+   */
   organizationTypes: [
     {
       code: 'school_district',
       name: 'School district',
-      description: 'A local education agency governing one or more schools.',
-      governmentLevelCode: 'education',
-      sectorCode: 'education',
+      description:
+        'A local education agency governing one or more schools. Independent in most states, a unit of a general-purpose government in others, so its government level is recorded per organization.',
+      defaultGovernmentLevelCode: null,
+      defaultSectorCode: 'education',
       typicallySubordinate: false,
     },
     {
       code: 'school',
       name: 'School',
       description:
-        'An individual school. Organizationally part of a district; physically located in a county and a municipality.',
-      governmentLevelCode: 'education',
-      sectorCode: 'education',
+        'An individual school. Organizationally part of a district; physically located in a county and a municipality. Takes the government level of the body that operates it.',
+      defaultGovernmentLevelCode: null,
+      defaultSectorCode: 'education',
       typicallySubordinate: true,
     },
     {
       code: 'charter_organization',
       name: 'Charter organization',
       description: 'A charter management or holding organization operating one or more schools.',
-      governmentLevelCode: 'education',
-      sectorCode: 'education',
+      defaultGovernmentLevelCode: null,
+      defaultSectorCode: 'education',
       typicallySubordinate: false,
     },
     {
       code: 'education_service_agency',
       name: 'Education service agency',
-      description: 'A regional service centre or intermediate unit serving several districts.',
-      governmentLevelCode: 'education',
-      sectorCode: 'education',
+      description:
+        'A regional service centre or intermediate unit serving several districts. Usually a special district, occasionally a state body.',
+      defaultGovernmentLevelCode: 'special_district',
+      defaultSectorCode: 'education',
       typicallySubordinate: false,
     },
     {
       code: 'state_education_agency',
       name: 'State education agency',
       description:
-        'The state body overseeing public education. Sits at the state level, not the education level.',
-      governmentLevelCode: 'state',
-      sectorCode: 'education',
+        'The state body overseeing public education. A state-level organization doing education-sector work.',
+      defaultGovernmentLevelCode: 'state',
+      defaultSectorCode: 'education',
       typicallySubordinate: false,
     },
   ],
@@ -220,7 +245,11 @@ export const educationSectorPack: SectorPack = {
       seniorityCode: 'manager',
     },
     {
-      test: /\bprincipal\b(?!-(analyst|engineer|planner|investigator))/,
+      // "Principal" is a job in a school and a seniority prefix everywhere
+      // else. A bare match claimed Principal Architect and Principal
+      // Scientist, so the rule is now the school senses only: the word
+      // standing alone, or naming a school it leads.
+      test: /^principal$|\b(school|campus|building|site)-principal\b|\bprincipal-of-the?-\w+/,
       roleCategoryCode: 'school_principal',
       seniorityCode: 'manager',
     },
@@ -250,7 +279,9 @@ export const educationSectorPack: SectorPack = {
       seniorityCode: 'staff',
     },
     {
-      test: /\b(school-counselor|guidance-counselor|academic-counselor|counselor)\b/,
+      // A bare `counselor` claimed a county's Veterans Counselor, so the
+      // school senses are named explicitly instead.
+      test: /\b(school|guidance|academic|college|career|crisis)-counselor\b|^counselor$/,
       roleCategoryCode: 'school_counselor',
       seniorityCode: 'staff',
     },
@@ -280,7 +311,11 @@ export const educationSectorPack: SectorPack = {
       seniorityCode: 'staff',
     },
     {
-      test: /\b(teacher|instructor|educator|faculty)\b/,
+      // `instructor` alone claimed a district's Fitness Instructor. Teaching
+      // titles are named directly; a bare instructor falls through to the
+      // neutral base, which is the honest answer for a role that exists in
+      // parks departments and school districts alike.
+      test: /\b(teacher|educator|faculty|classroom-instructor|lead-instructor)\b/,
       roleCategoryCode: 'teacher',
       seniorityCode: 'staff',
     },

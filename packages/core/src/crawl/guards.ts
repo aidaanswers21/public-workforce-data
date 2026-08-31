@@ -1,4 +1,4 @@
-import type { CrawlStopReason, CrawlStopSignal } from '@pan/shared-types';
+import type { CrawlStopReason, CrawlStopSignal } from '@public-workforce/shared-types';
 import { registrableDomain } from '../normalize/urls.js';
 import type { CrawlPolicy } from './policy.js';
 

@@ -1,4 +1,9 @@
-import type { ExtractionMethod, Timestamp, Uuid } from '@pan/shared-types';
+import type {
+  ExtractionMethod,
+  OrganizationIdentityTier,
+  Timestamp,
+  Uuid,
+} from '@public-workforce/shared-types';
 import type { SqlClient } from '../client.js';
 
 export interface UpsertGeographicAreaInput {
@@ -37,6 +42,31 @@ export interface UpsertOrganizationInput {
   observedAt: Timestamp;
   /** Official identifier to key on, when one exists. Preferred over the name. */
   identifier?: { systemCode: string; value: string; issuingStateCode?: string | null } | null;
+  /**
+   * A key the source itself assigns and keeps stable between publications.
+   *
+   * Not an official identifier: a row id in a directory API, a slug in a URL, a
+   * campus number in a spreadsheet. Weaker than an official identifier and much
+   * stronger than a name, and it is what makes an identifier-less recrawl land
+   * on the same row.
+   */
+  sourceIdentifier?: { system: string; value: string } | null;
+  /**
+   * The organization this one sits inside, when the source says so.
+   *
+   * Two schools called "Lincoln Elementary" in two districts are two
+   * organizations, so the parent is part of the identity rather than a detail
+   * recorded afterwards.
+   */
+  parentOrganizationId?: Uuid | null;
+}
+
+/** How an organization was identified, and whether a person needs to look. */
+export interface OrganizationIdentity {
+  tier: OrganizationIdentityTier;
+  fingerprint: string;
+  needsReview: boolean;
+  reviewReason: string | null;
 }
 
 export interface UpsertRelationshipInput {
@@ -106,37 +136,111 @@ export class OrganizationRepository {
   }
 
   /**
+   * Resolve which organization a source record is about.
+   *
+   * Five tiers, strongest evidence first. The tier that fires becomes part of
+   * the stored fingerprint, so a record identified by an official identifier
+   * can never collide with one identified by a name, and two records identified
+   * the same way collide only when they really are the same body.
+   *
+   *   1. An official identifier. Names change; identifiers do not.
+   *   2. A stable key the source assigns. Weaker, and still exact.
+   *   3. Type, normalized name, containing parent and jurisdiction. This is why
+   *      the parent is part of the key: two "Lincoln Elementary" schools in two
+   *      districts are two schools, and a key without the parent would merge
+   *      them. That is the specific merge this design exists to prevent.
+   *   4. With no parent: type, normalized name, jurisdiction and stable domain
+   *      evidence. A city's own domain distinguishes its Parks Department from
+   *      the next city's.
+   *   5. Nothing left to distinguish them. The record is kept, keyed on the
+   *      source record itself so a recrawl is still idempotent, and flagged for
+   *      a person. It is never merged into a look-alike and never duplicated.
+   */
+  resolveIdentity(input: UpsertOrganizationInput): OrganizationIdentity {
+    const jurisdiction = input.jurisdictionId ?? '-';
+    const type = input.organizationTypeCode;
+    const name = input.nameNormalized;
+
+    if (input.identifier != null) {
+      return {
+        tier: 'official_identifier',
+        fingerprint: `oid:${input.identifier.systemCode}:${input.identifier.value}`,
+        needsReview: false,
+        reviewReason: null,
+      };
+    }
+    if (input.sourceIdentifier != null) {
+      return {
+        tier: 'source_identifier',
+        fingerprint: `sid:${input.sourceIdentifier.system}:${input.sourceIdentifier.value}`,
+        needsReview: false,
+        reviewReason: null,
+      };
+    }
+    if (input.parentOrganizationId != null) {
+      return {
+        tier: 'parent_scoped_name',
+        fingerprint: `psn:${jurisdiction}:${input.parentOrganizationId}:${type}:${name}`,
+        needsReview: false,
+        reviewReason: null,
+      };
+    }
+    const domain = input.primaryDomain ?? domainOf(input.websiteUrl ?? null);
+    if (domain !== null && input.jurisdictionId != null) {
+      return {
+        tier: 'domain_scoped_name',
+        fingerprint: `dsn:${jurisdiction}:${domain}:${type}:${name}`,
+        needsReview: false,
+        reviewReason: null,
+      };
+    }
+
+    // Nothing above the name. Keyed on the source record so the next crawl of
+    // the same page finds this row again rather than adding a second one.
+    return {
+      tier: 'ambiguous',
+      fingerprint: `amb:${input.sourceDocumentId}:${type}:${name}`,
+      needsReview: true,
+      reviewReason:
+        domain === null && input.jurisdictionId == null
+          ? 'no official identifier, no source identifier, no parent, no jurisdiction and no domain'
+          : domain === null
+            ? 'no official identifier, no source identifier, no parent and no domain evidence'
+            : 'no official identifier, no source identifier, no parent and no jurisdiction',
+    };
+  }
+
+  /**
    * Insert or refresh an organization.
    *
-   * When an official identifier is supplied it is the key, because names change
-   * and identifiers do not. Without one, the fallback is type plus normalized
-   * name plus jurisdiction, which is weaker and is why the importer is the
-   * preferred path for institution lists.
+   * Idempotent by construction: `resolveIdentity` produces the same fingerprint
+   * for the same source record every time, and the fingerprint is unique, so a
+   * recrawl updates rather than duplicates whether or not an identifier exists.
    */
   async upsertOrganization(
     input: UpsertOrganizationInput,
-  ): Promise<{ id: Uuid; created: boolean }> {
-    if (input.identifier != null) {
-      const existing = await this.client.query<{ entity_id: Uuid }>(
-        `select entity_id from external_identifiers
-         where identifier_system_code = $1 and identifier_value = $2 and entity_type = 'organization'`,
-        [input.identifier.systemCode, input.identifier.value],
-      );
-      const existingId = existing.rows[0]?.entity_id;
-      if (existingId !== undefined) {
-        await this.refreshOrganization(existingId, input);
-        return { id: existingId, created: false };
-      }
-    }
+  ): Promise<{ id: Uuid; created: boolean; identity: OrganizationIdentity }> {
+    const identity = this.resolveIdentity(input);
 
     const result = await this.client.query<{ id: Uuid; created: boolean }>(
       `insert into organizations (
          organization_type_code, government_level_code, sector_code, jurisdiction_id, name,
          name_normalized, name_source_value, legal_name, short_name, website_url, primary_domain,
-         email_domains, source_document_id, crawl_run_id, extraction_method, confidence,
-         first_seen_at, last_seen_at
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17)
-       returning id, true as created`,
+         email_domains, source_document_id, crawl_run_id, extraction_method_code, confidence,
+         first_seen_at, last_seen_at,
+         identity_tier, identity_fingerprint, needs_identity_review, identity_review_reason
+       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$17,$18,$19,$20,$21)
+       on conflict (identity_fingerprint) do update set
+         name = case
+           when length(excluded.name) > length(organizations.name) then excluded.name
+           else organizations.name
+         end,
+         website_url = coalesce(excluded.website_url, organizations.website_url),
+         primary_domain = coalesce(excluded.primary_domain, organizations.primary_domain),
+         jurisdiction_id = coalesce(organizations.jurisdiction_id, excluded.jurisdiction_id),
+         confidence = greatest(organizations.confidence, excluded.confidence),
+         last_seen_at = greatest(organizations.last_seen_at, excluded.last_seen_at)
+       returning id, (xmax = 0) as created`,
       [
         input.organizationTypeCode,
         input.governmentLevelCode,
@@ -155,9 +259,14 @@ export class OrganizationRepository {
         input.extractionMethod,
         input.confidence,
         input.observedAt,
+        identity.tier,
+        identity.fingerprint,
+        identity.needsReview,
+        identity.reviewReason,
       ],
     );
     const id = requireId(result.rows[0], 'organizations');
+    const created = result.rows[0]?.created ?? false;
 
     if (input.identifier != null) {
       await this.upsertExternalIdentifier({
@@ -175,34 +284,32 @@ export class OrganizationRepository {
       });
     }
 
-    return { id, created: true };
+    return { id, created, identity };
   }
 
-  private async refreshOrganization(id: Uuid, input: UpsertOrganizationInput): Promise<void> {
-    await this.client.query(
-      `update organizations set
-         name = case when length($2) > length(name) then $2 else name end,
-         website_url = coalesce($3, website_url),
-         primary_domain = coalesce($4, primary_domain),
-         confidence = greatest(confidence, $5),
-         last_seen_at = greatest(last_seen_at, $6::timestamptz)
-       where id = $1`,
-      [
-        id,
-        input.name,
-        input.websiteUrl ?? null,
-        input.primaryDomain ?? null,
-        input.confidence,
-        input.observedAt,
-      ],
+  /** Organizations whose identity a person still has to confirm. */
+  async identityReviewQueue(
+    limit = 50,
+  ): Promise<{ id: Uuid; name: string; tier: string; reason: string | null }[]> {
+    const result = await this.client.query<Record<string, unknown>>(
+      `select id, name, identity_tier, identity_review_reason
+       from organizations where needs_identity_review
+       order by first_seen_at limit $1`,
+      [limit],
     );
+    return result.rows.map((row) => ({
+      id: row['id'] as Uuid,
+      name: row['name'] as string,
+      tier: row['identity_tier'] as string,
+      reason: (row['identity_review_reason'] as string | null) ?? null,
+    }));
   }
 
   async upsertRelationship(input: UpsertRelationshipInput): Promise<Uuid> {
     const result = await this.client.query<{ id: Uuid }>(
       `insert into organization_relationships (
          parent_organization_id, child_organization_id, relationship_type_code, effective_from,
-         effective_to, notes, source_document_id, crawl_run_id, extraction_method, confidence,
+         effective_to, notes, source_document_id, crawl_run_id, extraction_method_code, confidence,
          first_seen_at, last_seen_at
        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
        on conflict (parent_organization_id, child_organization_id, relationship_type_code, effective_from)
@@ -292,7 +399,7 @@ export class OrganizationRepository {
     const result = await this.client.query<{ id: Uuid }>(
       `insert into organizational_units (
          organization_id, parent_unit_id, name, name_normalized, name_source_value,
-         source_document_id, crawl_run_id, extraction_method, confidence, first_seen_at, last_seen_at
+         source_document_id, crawl_run_id, extraction_method_code, confidence, first_seen_at, last_seen_at
        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10)
        on conflict (organization_id, parent_unit_id, name_normalized) do update set
          name = excluded.name,
@@ -334,7 +441,7 @@ export class OrganizationRepository {
     const result = await this.client.query<{ id: Uuid }>(
       `insert into organization_locations (
          organization_id, location_type, name, address_line1, city, state_code, postal_code,
-         geographic_area_id, is_primary, source_document_id, crawl_run_id, extraction_method,
+         geographic_area_id, is_primary, source_document_id, crawl_run_id, extraction_method_code,
          confidence, first_seen_at, last_seen_at
        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14)
        returning id`,
@@ -374,7 +481,7 @@ export class OrganizationRepository {
     const result = await this.client.query<{ id: Uuid }>(
       `insert into external_identifiers (
          entity_type, entity_id, identifier_system_code, identifier_value, issuing_state_code,
-         is_primary, source_document_id, crawl_run_id, extraction_method, confidence,
+         is_primary, source_document_id, crawl_run_id, extraction_method_code, confidence,
          first_seen_at, last_seen_at
        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
        on conflict (identifier_system_code, identifier_value) do update set
@@ -403,4 +510,14 @@ function requireId(row: { id?: Uuid } | undefined, table: string): Uuid {
   const id = row?.id;
   if (id === undefined) throw new Error(`${table}: upsert returned no id`);
   return id;
+}
+
+/** The host of a URL, or null. Kept local: this is identity, not normalization. */
+function domainOf(url: string | null): string | null {
+  if (url === null) return null;
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, '');
+  } catch {
+    return null;
+  }
 }

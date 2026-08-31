@@ -1,4 +1,4 @@
-import type { EmailPatternEvidence } from '@pan/shared-types';
+import type { EmailPatternEvidence } from '@public-workforce/shared-types';
 import { nameTokens, type ParsedName } from '../normalize/names.js';
 import { isSyntacticallyValidEmail } from './obfuscation.js';
 

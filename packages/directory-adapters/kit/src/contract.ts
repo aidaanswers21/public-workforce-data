@@ -4,10 +4,10 @@ import type {
   DirectoryVocabulary,
   FetchedPage,
   PaginationKind,
-} from '@pan/shared-types';
-import { EXTRACTION_METHODS, type ExtractedPersonRecord } from '@pan/shared-types';
-import { canonicalizeUrl, contentHash, isSyntacticallyValidEmail } from '@pan/core';
-import { baseTaxonomy } from '@pan/taxonomy';
+} from '@public-workforce/shared-types';
+import type { ExtractedPersonRecord } from '@public-workforce/shared-types';
+import { canonicalizeUrl, contentHash, isSyntacticallyValidEmail } from '@public-workforce/core';
+import { EXTRACTION_METHODS_BY_CODE, baseTaxonomy } from '@public-workforce/taxonomy';
 
 export interface ExpectedRecord {
   fullNamePublished: string;
@@ -271,9 +271,7 @@ function checkRecords(
       .join(','),
   });
 
-  const badMethod = bad(
-    (record) => !(EXTRACTION_METHODS as readonly string[]).includes(record.extractionMethod),
-  );
+  const badMethod = bad((record) => !EXTRACTION_METHODS_BY_CODE.has(record.extractionMethod));
   checks.push({
     name: `${label}: extraction method is a known value`,
     passed: badMethod.length === 0,

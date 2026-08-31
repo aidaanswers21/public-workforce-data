@@ -1,13 +1,14 @@
 import type {
   ComplaintChannel,
+  ComplaintResolution,
   SuppressionEntryRecord,
   SuppressionScope,
   SuppressionSource,
   Timestamp,
   Uuid,
-} from '@pan/shared-types';
-import { hashObject } from '@pan/core';
-import type { SqlClient } from '../client.js';
+} from '@public-workforce/shared-types';
+import { hashObject } from '@public-workforce/core';
+import { runAtomically, type SqlClient } from '../client.js';
 
 export interface AddSuppressionInput {
   scope: SuppressionScope;
@@ -31,14 +32,30 @@ export interface AddSuppressionInput {
 
 export interface RecordComplaintInput {
   channel: ComplaintChannel;
+  /** `email`, `phone`, `postal`, or whatever the complainant actually gave us. */
   contactType: string;
   contactValue: string;
   reason: string;
   notes?: string | null;
   receivedAt?: Timestamp;
-  /** Whether to create the matching suppression entry in the same transaction. */
+  /**
+   * The person the complaint is about, when the operator already knows.
+   *
+   * Supplying it skips resolution, which is how a postal complaint that a
+   * person has matched by hand becomes a suppression.
+   */
+  personId?: Uuid | null;
+  /** Whether to create the matching suppression entry. Defaults to true. */
   suppress?: boolean;
   createdBy: string;
+}
+
+export interface RecordComplaintResult {
+  complaintId: Uuid;
+  suppressionEntryId: Uuid | null;
+  resolution: ComplaintResolution;
+  /** Set when a person has to look at it. Never the reason it failed to parse. */
+  reviewReason: string | null;
 }
 
 /**
@@ -117,36 +134,200 @@ export class ComplianceRepository {
     return result.rows.map(toSuppressionEntry);
   }
 
-  async recordComplaint(
-    input: RecordComplaintInput,
-  ): Promise<{ complaintId: Uuid; suppressionEntryId: Uuid | null }> {
-    let suppressionEntryId: Uuid | null = null;
-    if (input.suppress !== false) {
-      suppressionEntryId = await this.addSuppression({
-        scope: input.contactType === 'email' ? 'email' : 'person',
-        value: input.contactValue,
-        reason: input.reason,
-        source: 'complaint',
-        createdBy: input.createdBy,
+  /**
+   * Record a complaint, and suppress whoever it is about when that is knowable.
+   *
+   * The complaint is written first and unconditionally. Someone asking not to
+   * be contacted has done their part, and losing that because the platform
+   * could not work out which row they meant would be the worst possible
+   * outcome. An email complaint usually resolves to a person; a phone or postal
+   * one usually does not, and that is a queue for a person rather than an
+   * error.
+   *
+   * The one thing never done here is a person-scope suppression with no person.
+   * The schema rejects it, and the reason the schema rejects it is that such a
+   * row matches nobody while looking like protection.
+   *
+   * The whole operation is one transaction, so a complaint and the suppression
+   * it produced are either both stored or neither is.
+   */
+  async recordComplaint(input: RecordComplaintInput): Promise<RecordComplaintResult> {
+    return runAtomically(this.client, async (tx) => {
+      const scoped = new ComplianceRepository(tx);
+      const contactValue = input.contactValue.trim();
+      const contactType = input.contactType.trim().toLowerCase();
+
+      // 1. The complaint exists from here on, whatever happens next.
+      const inserted = await tx.query<{ id: Uuid }>(
+        `insert into complaints (
+           received_at, channel, contact_type, contact_value, reason, notes, resolution
+         ) values (coalesce($1::timestamptz, now()), $2, $3, $4, $5, $6, 'pending')
+         returning id`,
+        [
+          input.receivedAt ?? null,
+          input.channel,
+          contactType,
+          contactValue,
+          input.reason,
+          input.notes ?? null,
+        ],
+      );
+      const complaintId = inserted.rows[0]?.id;
+      if (complaintId === undefined) throw new Error('complaints: insert returned no id');
+
+      await scoped.appendAudit({
+        actor: input.createdBy,
+        action: 'complaint.received',
+        entityType: 'complaint',
+        entityId: complaintId,
+        payload: { channel: input.channel, contactType },
       });
+
+      if (input.suppress === false) {
+        await tx.query(
+          `update complaints set resolution = 'dismissed', review_reason = $2 where id = $1`,
+          [complaintId, 'recorded without suppression at the operator’s request'],
+        );
+        return {
+          complaintId,
+          suppressionEntryId: null,
+          resolution: 'dismissed' as const,
+          reviewReason: 'recorded without suppression at the operator’s request',
+        };
+      }
+
+      // 2. An email address suppresses itself, whether or not it maps to a
+      //    person we hold. That is the one contact type the list can match on.
+      let suppressionEntryId: Uuid | null = null;
+      if (contactType === 'email' && contactValue.includes('@')) {
+        suppressionEntryId = await scoped.addSuppression({
+          scope: 'email',
+          value: contactValue,
+          reason: input.reason,
+          source: 'complaint',
+          createdBy: input.createdBy,
+        });
+      }
+
+      // 3. A person, when one can be found. Never invented.
+      const personId = input.personId ?? (await scoped.resolvePerson(contactType, contactValue));
+      if (personId !== null) {
+        const personEntry = await scoped.addSuppression({
+          scope: 'person',
+          value: personId,
+          personId,
+          reason: input.reason,
+          source: 'complaint',
+          createdBy: input.createdBy,
+        });
+        suppressionEntryId = suppressionEntryId ?? personEntry;
+        await tx.query(
+          `update complaints set person_id = $2, resolution = 'suppressed',
+             suppression_entry_id = $3 where id = $1`,
+          [complaintId, personId, suppressionEntryId],
+        );
+        return {
+          complaintId,
+          suppressionEntryId,
+          resolution: 'suppressed' as const,
+          reviewReason: null,
+        };
+      }
+
+      if (suppressionEntryId !== null) {
+        // An address was suppressed but no person matched it. That is a real
+        // outcome, not a gap: the address stops being exported immediately.
+        await tx.query(
+          `update complaints set resolution = 'suppressed', suppression_entry_id = $2
+           where id = $1`,
+          [complaintId, suppressionEntryId],
+        );
+        return {
+          complaintId,
+          suppressionEntryId,
+          resolution: 'suppressed' as const,
+          reviewReason: null,
+        };
+      }
+
+      // 4. Nothing to match on. Queue it, suppress nothing, invent nothing.
+      const reviewReason =
+        `a ${input.channel} complaint arrived with a ${contactType} contact, ` +
+        'which cannot be matched to a person automatically';
+      await tx.query(
+        `update complaints set resolution = 'needs_review', review_reason = $2 where id = $1`,
+        [complaintId, reviewReason],
+      );
+      await scoped.appendAudit({
+        actor: input.createdBy,
+        action: 'complaint.needs_review',
+        entityType: 'complaint',
+        entityId: complaintId,
+        payload: { channel: input.channel, contactType },
+      });
+      return {
+        complaintId,
+        suppressionEntryId: null,
+        resolution: 'needs_review' as const,
+        reviewReason,
+      };
+    });
+  }
+
+  /**
+   * Find the person a complaint is about, or admit that we cannot.
+   *
+   * An email address is held on the person, so it resolves. A phone number is
+   * held as a contact point, so it resolves when the source published it. A
+   * postal address is held nowhere, so it does not, and returning null is the
+   * honest answer rather than a guess.
+   */
+  async resolvePerson(contactType: string, contactValue: string): Promise<Uuid | null> {
+    const value = contactValue.trim().toLowerCase();
+    if (value.length === 0) return null;
+
+    if (contactType === 'email') {
+      const result = await this.client.query<{ person_id: Uuid | null }>(
+        `select person_id from email_addresses
+         where address_normalized = $1 and person_id is not null limit 1`,
+        [value],
+      );
+      return result.rows[0]?.person_id ?? null;
     }
 
-    const result = await this.client.query<{ id: Uuid }>(
-      `insert into complaints (received_at, channel, contact_type, contact_value, reason, notes, suppression_entry_id)
-       values (coalesce($1::timestamptz, now()), $2, $3, $4, $5, $6, $7) returning id`,
-      [
-        input.receivedAt ?? null,
-        input.channel,
-        input.contactType,
-        input.contactValue,
-        input.reason,
-        input.notes ?? null,
-        suppressionEntryId,
-      ],
+    if (contactType === 'phone') {
+      const digits = value.replace(/\D/g, '');
+      if (digits.length === 0) return null;
+      const result = await this.client.query<{ person_id: Uuid | null }>(
+        `select person_id from contact_points
+         where value_normalized = $1 and person_id is not null limit 1`,
+        [digits],
+      );
+      return result.rows[0]?.person_id ?? null;
+    }
+
+    return null;
+  }
+
+  /** Complaints waiting for a person to match them to a record. */
+  async complaintReviewQueue(
+    limit = 50,
+  ): Promise<
+    { id: Uuid; channel: string; contactType: string; reason: string; reviewReason: string }[]
+  > {
+    const result = await this.client.query<Record<string, unknown>>(
+      `select id, channel, contact_type, reason, review_reason
+       from complaints where resolution = 'needs_review'
+       order by received_at limit $1`,
+      [limit],
     );
-    const complaintId = result.rows[0]?.id;
-    if (complaintId === undefined) throw new Error('complaints: insert returned no id');
-    return { complaintId, suppressionEntryId };
+    return result.rows.map((row) => ({
+      id: row['id'] as Uuid,
+      channel: row['channel'] as string,
+      contactType: row['contact_type'] as string,
+      reason: row['reason'] as string,
+      reviewReason: (row['review_reason'] as string | null) ?? '',
+    }));
   }
 
   /**

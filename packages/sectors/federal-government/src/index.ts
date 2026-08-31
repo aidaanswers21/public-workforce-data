@@ -1,4 +1,4 @@
-import type { SectorPack } from '@pan/taxonomy';
+import type { SectorPack } from '@public-workforce/taxonomy';
 
 /**
  * Federal government.
@@ -14,13 +14,25 @@ export const federalGovernmentSectorPack: SectorPack = {
   description:
     'Federal departments, agencies, bureaus, field offices and independent establishments.',
 
+  /**
+   * Federal work, in any sector.
+   *
+   * Scoped by level rather than by sector, because "federal" is a level: a
+   * federal laboratory does environment-sector work and a federal bureau does
+   * general-government work, and both use the same grade scale, the same
+   * abbreviations and the same office vocabulary. Level scoping is what stops a
+   * federal abbreviation expanding on a city or school record, which is the
+   * leak that matters.
+   */
+  appliesTo: { sectorCodes: null, governmentLevelCodes: ['federal'] },
+
   organizationTypes: [
     {
       code: 'federal_independent_agency',
       name: 'Federal independent agency',
       description: 'An independent establishment outside any cabinet department.',
-      governmentLevelCode: 'federal',
-      sectorCode: 'general_government',
+      defaultGovernmentLevelCode: 'federal',
+      defaultSectorCode: 'general_government',
       typicallySubordinate: false,
     },
     {
@@ -28,16 +40,16 @@ export const federalGovernmentSectorPack: SectorPack = {
       name: 'Federal regional office',
       description:
         'A multi-state regional office of a federal body. Regional, not state-subordinate.',
-      governmentLevelCode: 'federal',
-      sectorCode: 'general_government',
+      defaultGovernmentLevelCode: 'federal',
+      defaultSectorCode: 'general_government',
       typicallySubordinate: true,
     },
     {
       code: 'federal_laboratory',
       name: 'Federal laboratory or centre',
       description: 'A federal research laboratory, centre or institute.',
-      governmentLevelCode: 'federal',
-      sectorCode: 'general_government',
+      defaultGovernmentLevelCode: 'federal',
+      defaultSectorCode: 'general_government',
       typicallySubordinate: true,
     },
   ],

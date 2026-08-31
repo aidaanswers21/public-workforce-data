@@ -6,5 +6,6 @@ export * from './relationship-types.js';
 export * from './geographic-area-types.js';
 export * from './identifier-systems.js';
 export * from './source-types.js';
+export * from './extraction.js';
 export * from './roles.js';
 export * from './domains.js';

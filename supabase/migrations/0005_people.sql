@@ -17,17 +17,14 @@ create table people (
   -- are different people.
   identity_key text not null unique,
   status record_status not null default 'active',
-  source_document_id uuid references source_documents (id) on delete set null,
-  inference_evidence_id uuid,
+  source_document_id uuid not null references source_documents (id) on delete restrict,
   crawl_run_id uuid references crawl_runs (id) on delete set null,
-  extraction_method extraction_method not null,
+  extraction_method_code text not null references extraction_methods (code),
   confidence numeric(4, 3) not null default 0,
   first_seen_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now(),
   constraint people_confidence_range check (confidence >= 0 and confidence <= 1),
-  constraint people_has_provenance check (
-    source_document_id is not null or inference_evidence_id is not null
-  )
+  constraint people_has_provenance check (source_document_id is not null)
 );
 
 create index people_last_name_idx on people (last_name);
@@ -56,17 +53,14 @@ create table employment_assignments (
   assignment_status assignment_status not null default 'active',
   effective_from date,
   effective_to date,
-  source_document_id uuid references source_documents (id) on delete set null,
-  inference_evidence_id uuid,
+  source_document_id uuid not null references source_documents (id) on delete restrict,
   crawl_run_id uuid references crawl_runs (id) on delete set null,
-  extraction_method extraction_method not null,
+  extraction_method_code text not null references extraction_methods (code),
   confidence numeric(4, 3) not null default 0,
   first_seen_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now(),
   constraint employment_assignments_confidence_range check (confidence >= 0 and confidence <= 1),
-  constraint employment_assignments_has_provenance check (
-    source_document_id is not null or inference_evidence_id is not null
-  ),
+  constraint employment_assignments_has_provenance check (source_document_id is not null),
   constraint employment_assignments_dates check (effective_to is null or effective_to >= effective_from),
   -- NULLS NOT DISTINCT: an assignment with no unit and no title is still one
   -- assignment, and re-observing it must update rather than duplicate.
@@ -97,10 +91,9 @@ create table contact_points (
   source_value text,
   is_primary boolean not null default false,
   status record_status not null default 'active',
-  source_document_id uuid references source_documents (id) on delete set null,
-  inference_evidence_id uuid,
+  source_document_id uuid not null references source_documents (id) on delete restrict,
   crawl_run_id uuid references crawl_runs (id) on delete set null,
-  extraction_method extraction_method not null,
+  extraction_method_code text not null references extraction_methods (code),
   confidence numeric(4, 3) not null default 0,
   first_seen_at timestamptz not null default now(),
   last_seen_at timestamptz not null default now(),

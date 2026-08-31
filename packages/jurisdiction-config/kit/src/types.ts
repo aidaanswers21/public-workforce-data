@@ -1,4 +1,4 @@
-import type { CrawlPolicy } from '@pan/core';
+import type { CrawlPolicy } from '@public-workforce/core';
 
 /**
  * An authoritative published list of organizations, people or contacts.

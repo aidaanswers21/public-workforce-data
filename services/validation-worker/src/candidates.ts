@@ -4,10 +4,10 @@ import {
   parsePersonName,
   type LearnedPattern,
   type PublishedNamePair,
-} from '@pan/core';
-import type { Uuid } from '@pan/shared-types';
-import type { Logger } from '@pan/observability';
-import type { QueryRepository, SqlClient } from '@pan/database';
+} from '@public-workforce/core';
+import type { Uuid } from '@public-workforce/shared-types';
+import type { Logger } from '@public-workforce/observability';
+import type { QueryRepository, SqlClient } from '@public-workforce/database';
 
 export interface CandidateGenerationOptions {
   /** Minimum published examples before a domain's pattern may be used. */
@@ -94,11 +94,8 @@ export class CandidateGenerator {
       );
 
       // Only people with no observed address at all get a candidate. Guessing
-      // an address for someone whose real one is published would be pointless
+      // an address for someone whose real one is published would be pointless,
       // and would risk the guess being mistaken for the published value.
-      // Only people with no observed address at all get a candidate. Guessing
-      // for someone whose real address is published would be pointless and
-      // would risk the guess being mistaken for the published value.
       const targets = await this.deps.client.query<{
         id: Uuid;
         full_name_published: string;
@@ -136,6 +133,10 @@ export class CandidateGenerator {
              updated_at = now()`,
           [
             target.id,
+            // Bound explicitly. It was missing, which shifted every parameter
+            // after it: the organization column received a domain string and
+            // the confidence had no value at all.
+            target.organization_id,
             candidate.domain,
             candidate.address,
             candidate.pattern,

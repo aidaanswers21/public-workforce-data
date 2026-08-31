@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SuppressionEntryRecord } from '@pan/shared-types';
+import type { SuppressionEntryRecord } from '@public-workforce/shared-types';
 import { OrganizationHierarchy, SuppressionError, SuppressionIndex } from '../suppression.js';
 import { csvEscape, renderCsv } from './csv.js';
 import {
@@ -205,6 +205,53 @@ describe('exportPeopleCsv', () => {
       purpose: PURPOSE,
     });
     expect(result.rowCount).toBe(0);
+  });
+
+  it('withholds a suppressed candidate without failing the row or the export', () => {
+    // The regression: both addresses were collapsed into one subject, so a
+    // suppressed guess dropped a permitted published address, and the
+    // second-pass assertion then threw and failed the whole export.
+    const result = exportPeopleCsv({
+      rows: [
+        row({
+          personId: 'p1',
+          publishedEmail: 'jane.smith@agency.example.gov',
+          inferredEmailCandidate: 'j.smith@agency.example.gov',
+        }),
+        row({ personId: 'p2', publishedEmail: 'ravi.patel@agency.example.gov' }),
+      ],
+      suppression: SuppressionIndex.fromEntries([
+        suppress({ scope: 'email', value: 'j.smith@agency.example.gov' }),
+      ]),
+      at: NOW,
+      purpose: PURPOSE,
+    });
+
+    expect(result.rowCount).toBe(2);
+    expect(result.suppressedCount).toBe(0);
+    expect(result.withheldCandidateCount).toBe(1);
+    expect(result.csv).toContain('jane.smith@agency.example.gov');
+    expect(result.csv).not.toContain('j.smith@agency.example.gov');
+  });
+
+  it('still withholds the row when the published address is the suppressed one', () => {
+    const result = exportPeopleCsv({
+      rows: [
+        row({
+          personId: 'p1',
+          publishedEmail: 'jane.smith@agency.example.gov',
+          inferredEmailCandidate: 'j.smith@agency.example.gov',
+        }),
+      ],
+      suppression: SuppressionIndex.fromEntries([
+        suppress({ scope: 'email', value: 'jane.smith@agency.example.gov' }),
+      ]),
+      at: NOW,
+      purpose: PURPOSE,
+    });
+    // Exporting the guess instead would be an obvious way around the request.
+    expect(result.rowCount).toBe(0);
+    expect(result.csv).not.toContain('j.smith@agency.example.gov');
   });
 
   it('keeps published and inferred addresses in separate columns', () => {

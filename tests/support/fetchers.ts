@@ -4,8 +4,8 @@ import type {
   Fetcher,
   RobotsDecision,
   RobotsProvider,
-} from '@pan/shared-types';
-import { canonicalizeUrl, contentHash } from '@pan/core';
+} from '@public-workforce/shared-types';
+import { canonicalizeUrl, contentHash } from '@public-workforce/core';
 
 export interface MapEntry {
   body: string;

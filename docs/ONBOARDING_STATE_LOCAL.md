@@ -36,7 +36,10 @@ Pick the level first:
 aliases, and `buildJurisdictionRegistry()` in
 `services/crawler-worker/src/registries.ts`.
 
-Set `governmentLevelCode` and `sectorCodes` from the taxonomy.
+Set `governmentLevelCode` and `sectorCodes` from the taxonomy. They are separate
+questions: the level is what kind of government the bodies are, the sector is
+what work they do, and neither is derived from the other. Texas public education
+is `special_district` plus `education`.
 `validateJurisdictionConfig` reports an error for a code that does not exist, so
 a typo fails at configuration time.
 
@@ -86,10 +89,17 @@ catches the ones nobody predicted.
 
 ### 8. Import organizations
 
-Run the importer against a verified source. `DelimitedOrganizationImporter`
-handles CSV and TSV including quoted fields with embedded commas and newlines.
-Every unmappable row is reported in `rejected` with a reason: an import is never
-silently lossy.
+Run the importer against a verified source. The source is a **required
+argument** to `import()`, and the first thing the importer does is refuse an
+unverified one, so an unread government file cannot be imported by forgetting a
+line. `DelimitedOrganizationImporter` handles CSV and TSV including quoted
+fields with embedded commas and newlines. Every unmappable row is reported in
+`rejected` with a reason: an import is never silently lossy.
+
+Supply a stable source identifier or a parent wherever the file offers one.
+Without either, an organization resolves on its name plus its domain, and
+without a domain it lands in the identity review queue rather than being merged
+or duplicated. See the identity tiers in `DATA_MODEL.md`.
 
 Where the file names a parent, the importer records an
 `organization_relationships` row rather than a parent column, so a later

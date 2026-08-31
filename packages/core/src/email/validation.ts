@@ -1,4 +1,4 @@
-import type { EmailValidationStatus, Timestamp } from '@pan/shared-types';
+import type { EmailValidationStatus, Timestamp } from '@public-workforce/shared-types';
 
 export interface ValidationRequestItem {
   /** Our id for the address or candidate being checked. */

@@ -7,7 +7,7 @@ import type {
   ObfuscationKind,
   Timestamp,
   Uuid,
-} from '@pan/shared-types';
+} from '@public-workforce/shared-types';
 import type { SqlClient } from '../client.js';
 
 export interface UpsertSourceDocumentInput {
@@ -27,8 +27,17 @@ export interface UpsertSourceDocumentInput {
   retrievedAt: Timestamp;
 }
 
+export interface SourceDocumentVersionRef {
+  documentId: Uuid;
+  versionId: Uuid;
+  version: number;
+  /** False when this exact content had already been recorded. */
+  isNewVersion: boolean;
+}
+
 export interface ObservationInput {
-  sourceDocumentId: Uuid;
+  /** The exact version that produced this value, not merely the URL. */
+  sourceDocumentVersionId: Uuid;
   crawlRunId: Uuid | null;
   /** What this observation proves: organization, employment, contact, location, policy. */
   evidenceClass: string;
@@ -115,23 +124,27 @@ export interface IngestPersonResult {
 export class IngestionRepository {
   constructor(private readonly client: SqlClient) {}
 
-  async upsertSourceDocument(input: UpsertSourceDocumentInput): Promise<Uuid> {
-    const result = await this.client.query<{ id: Uuid }>(
+  /**
+   * Record that a source was fetched, appending a version when it changed.
+   *
+   * The document row is the URL and never changes. The version row is what that
+   * URL said, and is immutable once written. Identical content matches the
+   * existing version by content hash and only moves `last_seen_at`, so a
+   * recrawl of an unchanged page is idempotent. Changed content appends a new
+   * version beside the old one, so what the page used to say stays readable.
+   *
+   * The old single-row shape overwrote `content_hash` on every fetch, which
+   * silently destroyed the record of the previous content and made "the page
+   * changed" indistinguishable from "the page never said that".
+   */
+  async recordSourceDocument(input: UpsertSourceDocumentInput): Promise<SourceDocumentVersionRef> {
+    const document = await this.client.query<{ id: Uuid }>(
       `insert into source_documents (
-         url, url_canonical, url_hash, domain, source_type_code, http_status, content_hash,
-         content_type, storage_key, robots_allowed, robots_policy_note, source_policy_id,
-         crawl_run_id, retrieved_at, first_seen_at, last_seen_at
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$14,$14)
+         url, url_canonical, url_hash, domain, source_type_code, source_policy_id,
+         first_seen_at, last_seen_at
+       ) values ($1,$2,$3,$4,$5,$6,$7,$7)
        on conflict (url_hash) do update set
-         http_status = excluded.http_status,
-         content_hash = excluded.content_hash,
-         content_type = excluded.content_type,
-         storage_key = coalesce(excluded.storage_key, source_documents.storage_key),
-         robots_allowed = excluded.robots_allowed,
-         robots_policy_note = excluded.robots_policy_note,
          source_policy_id = coalesce(excluded.source_policy_id, source_documents.source_policy_id),
-         crawl_run_id = excluded.crawl_run_id,
-         retrieved_at = excluded.retrieved_at,
          last_seen_at = greatest(source_documents.last_seen_at, excluded.last_seen_at)
        returning id`,
       [
@@ -140,27 +153,60 @@ export class IngestionRepository {
         input.urlHash,
         input.domain,
         input.sourceTypeCode,
+        input.sourcePolicyId ?? null,
+        input.retrievedAt,
+      ],
+    );
+    const documentId = requireId(document.rows[0], 'source_documents');
+
+    // A fetch with no content hash cannot be versioned by content, so it gets
+    // one version keyed on the retrieval itself rather than silently joining
+    // whatever version happens to exist.
+    const contentHash = input.contentHash ?? `unhashed:${input.retrievedAt}`;
+
+    const version = await this.client.query<{ id: Uuid; version: number; created: boolean }>(
+      `insert into source_document_versions (
+         source_document_id, version, content_hash, http_status, content_type, storage_key,
+         robots_allowed, robots_policy_note, crawl_run_id, retrieved_at, first_seen_at, last_seen_at
+       )
+       select $1,
+              coalesce((select max(version) from source_document_versions where source_document_id = $1), 0) + 1,
+              $2,$3,$4,$5,$6,$7,$8,$9,$9,$9
+       on conflict (source_document_id, content_hash) do update set
+         last_seen_at = greatest(
+           source_document_versions.last_seen_at, excluded.last_seen_at
+         )
+       returning id, version, (xmax = 0) as created`,
+      [
+        documentId,
+        contentHash,
         input.httpStatus,
-        input.contentHash,
         input.contentType,
         input.storageKey,
         input.robotsAllowed,
         input.robotsPolicyNote,
-        input.sourcePolicyId ?? null,
         input.crawlRunId,
         input.retrievedAt,
       ],
     );
-    return requireId(result.rows[0], 'source_documents');
+    const row = version.rows[0];
+    if (row === undefined) throw new Error('source_document_versions: insert returned no row');
+    return {
+      documentId,
+      versionId: row.id,
+      version: Number(row.version),
+      isNewVersion: row.created,
+    };
   }
 
   async recordObservation(input: ObservationInput): Promise<Uuid> {
     const result = await this.client.query<{ id: Uuid }>(
       `insert into source_observations (
-         source_document_id, crawl_run_id, evidence_class, entity_type, entity_id, record_key,
-         field, value_raw, value_normalized, extraction_method, confidence, selector, observed_at
+         source_document_version_id, crawl_run_id, evidence_class, entity_type, entity_id,
+         record_key, field, value_raw, value_normalized, extraction_method_code, confidence,
+         selector, observed_at
        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       on conflict (source_document_id, record_key, field) do update set
+       on conflict (source_document_version_id, record_key, field) do update set
          entity_id = coalesce(excluded.entity_id, source_observations.entity_id),
          value_raw = excluded.value_raw,
          value_normalized = excluded.value_normalized,
@@ -168,7 +214,7 @@ export class IngestionRepository {
          observed_at = excluded.observed_at
        returning id`,
       [
-        input.sourceDocumentId,
+        input.sourceDocumentVersionId,
         input.crawlRunId,
         input.evidenceClass,
         input.entityType,
@@ -198,7 +244,7 @@ export class IngestionRepository {
     const personResult = await this.client.query<{ id: Uuid; created: boolean }>(
       `insert into people (
          full_name_published, name_prefix, first_name, middle_name, last_name, name_suffix,
-         identity_key, source_document_id, crawl_run_id, extraction_method, confidence,
+         identity_key, source_document_id, crawl_run_id, extraction_method_code, confidence,
          first_seen_at, last_seen_at
        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)
        on conflict (identity_key) do update set
@@ -237,7 +283,7 @@ export class IngestionRepository {
          title_normalized, role_category_code, job_family_code, seniority_code, specialty,
          normalization_method, normalization_rule_source, taxonomy_version, normalization_confidence,
          department_published, assignment_status, effective_from, source_document_id, crawl_run_id,
-         extraction_method, confidence, first_seen_at, last_seen_at
+         extraction_method_code, confidence, first_seen_at, last_seen_at
        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$22)
        on conflict (person_id, organization_id, organizational_unit_id, title_normalized, effective_from)
        do update set
@@ -288,17 +334,17 @@ export class IngestionRepository {
       const emailResult = await this.client.query<{ id: Uuid }>(
         `insert into email_addresses (
            person_id, employment_assignment_id, organization_id, address, address_normalized,
-           domain, local_part, classification, obfuscation, source_value, source_document_id,
-           crawl_run_id, extraction_method, confidence, first_seen_at, last_seen_at
+           domain, local_part, classification, obfuscation_kind_code, source_value, source_document_id,
+           crawl_run_id, extraction_method_code, confidence, first_seen_at, last_seen_at
          ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
          on conflict (person_id, organization_id, address_normalized) do update set
            classification = case
              when email_addresses.classification = 'published' then email_addresses.classification
              when excluded.classification = 'published' then excluded.classification
              else email_addresses.classification end,
-           obfuscation = case
-             when excluded.classification = 'published' then excluded.obfuscation
-             else email_addresses.obfuscation end,
+           obfuscation_kind_code = case
+             when excluded.classification = 'published' then excluded.obfuscation_kind_code
+             else email_addresses.obfuscation_kind_code end,
            employment_assignment_id = coalesce(excluded.employment_assignment_id, email_addresses.employment_assignment_id),
            confidence = greatest(email_addresses.confidence, excluded.confidence),
            first_seen_at = least(email_addresses.first_seen_at, excluded.first_seen_at),
@@ -330,7 +376,7 @@ export class IngestionRepository {
       const contactResult = await this.client.query<{ id: Uuid }>(
         `insert into contact_points (
            person_id, employment_assignment_id, organization_id, contact_point_type_code, value,
-           value_normalized, source_value, source_document_id, crawl_run_id, extraction_method,
+           value_normalized, source_value, source_document_id, crawl_run_id, extraction_method_code,
            confidence, first_seen_at, last_seen_at
          ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$12)
          on conflict (person_id, organization_id, contact_point_type_code, value_normalized)

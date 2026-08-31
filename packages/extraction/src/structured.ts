@@ -1,4 +1,4 @@
-import { collapseWhitespace } from '@pan/core';
+import { collapseWhitespace } from '@public-workforce/core';
 import type { Html } from './html.js';
 
 export interface StructuredPerson {

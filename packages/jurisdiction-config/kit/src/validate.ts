@@ -1,4 +1,4 @@
-import type { Taxonomy } from '@pan/taxonomy';
+import type { Taxonomy } from '@public-workforce/taxonomy';
 import type { JurisdictionConfig } from './types.js';
 
 export interface ConfigIssue {

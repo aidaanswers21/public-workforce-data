@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createLogger, type Logger } from '@pan/observability';
-import { QueryRepository, type SqlClient } from '@pan/database';
+import { createLogger, type Logger } from '@public-workforce/observability';
+import { QueryRepository, type SqlClient } from '@public-workforce/database';
 
 export interface ApiOptions {
   client: SqlClient;

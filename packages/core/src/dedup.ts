@@ -1,4 +1,9 @@
-import type { ExtractedPersonRecord, Provenance, Timestamp, Uuid } from '@pan/shared-types';
+import type {
+  ExtractedPersonRecord,
+  Provenance,
+  Timestamp,
+  Uuid,
+} from '@public-workforce/shared-types';
 import { normalizeKey } from './normalize/text.js';
 import { parsePersonName, personIdentityKey } from './normalize/names.js';
 

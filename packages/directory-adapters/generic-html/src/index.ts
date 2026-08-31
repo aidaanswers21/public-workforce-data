@@ -9,10 +9,15 @@ import type {
   FetchedPage,
   ListingExtraction,
   PaginationPlan,
-} from '@pan/shared-types';
-import { dedupeExtractedRecords, escapeRegExp, resolveUrl, scoreDirectoryUrl } from '@pan/core';
-import { loadHtml, textOf, type Html } from '@pan/extraction';
-import { clamp01 } from '@pan/adapter-kit';
+} from '@public-workforce/shared-types';
+import {
+  dedupeExtractedRecords,
+  escapeRegExp,
+  resolveUrl,
+  scoreDirectoryUrl,
+} from '@public-workforce/core';
+import { loadHtml, textOf, type Html } from '@public-workforce/extraction';
+import { clamp01 } from '@public-workforce/adapter-kit';
 import {
   extractFromCards,
   extractFromDefinitionLists,

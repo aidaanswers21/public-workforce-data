@@ -1,7 +1,8 @@
 # Current state
 
-Last updated: 2026-08-29. Phase: foundation generalized across six levels of
-government. No production crawl run.
+Last updated: 2026-08-30. Phase: foundation generalized across six levels of
+government, then corrected against an independent architecture review. No
+production crawl run.
 
 ## What works
 
@@ -47,6 +48,15 @@ government. No production crawl run.
   blocked in the environment this was built in, so no URL here has been fetched.
 - **No source policy has been reviewed or approved.** The gate therefore refuses
   every production collection today, which is the correct state before a review.
+  It is also not yet loaded from the database at run time (C12), and the
+  discovery worker does not consult it at all (C13).
+- **Nine production blockers are open.** C12 to C18, C20, C21 and RLS-1 are
+  documented in `BACKLOG.md` with their risk, resolution, required tests and
+  what each one blocks. No live source may be fetched and no real outreach
+  export may be used until the applicable ones are resolved.
+- **Three environment variables groups are named and unwired.** The crawler
+  identity, the object storage credentials and the n8n webhook are declared in
+  `.env.example` and read by nothing. `.env.example` says so per variable.
 - **Only the education sector has an extension table.** State, local and federal
   packs contribute types, roles, titles and vocabulary, and none of them needs
   attributes the neutral core does not already carry.
@@ -62,7 +72,7 @@ government. No production crawl run.
 
 ## Test coverage
 
-677 tests across 24 files, all passing. Database tests run against real
+788 tests across 26 files, all passing. Database tests run against real
 PostgreSQL 16 in-process. No test touches the network.
 
 The three tests that carry the generalization guarantees:
@@ -72,8 +82,12 @@ The three tests that carry the generalization guarantees:
 - `tests/neutral-core-guard.test.ts`, 10 tests: reads every neutral source file
   and fails on education terms, platform vendors, state names and forbidden
   imports.
-- `tests/title-taxonomy.test.ts`, 54 tests: composed title resolution across all
-  three sector packs, which is where an over-broad rule gets caught.
+- `tests/title-taxonomy.test.ts`, 68 tests: scoped title resolution across all
+  three sector packs, including nine titles one vertical owns and another uses
+  differently.
+- `services/validation-worker/src/candidates.test.ts`, 9 tests: the email
+  candidate generator against real PostgreSQL, which is the only thing that
+  would have caught its parameter-count defect.
 
 ## Immediate next steps
 

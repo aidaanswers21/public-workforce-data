@@ -77,14 +77,21 @@ These are real and are not hidden by the code.
 - **Titles outside the composed rule table become the fallback** at low
   confidence. Run `pnpm admin titles` to see what the vocabulary is missing;
   that report exists so the gap is visible rather than silently absorbed.
-- **A sector pack can shadow another pack's title rule.** The rules join one
-  ordered table, so an over-broad pattern from one vertical will swallow another
-  vertical's titles. `tests/title-taxonomy.test.ts` composes every pack and
-  asserts specific resolutions, which is the only reliable way to notice.
+- **An over-broad rule can still shadow another rule inside its own scope.**
+  Cross-vertical leakage is now structurally impossible, because a pack's rules
+  are only consulted for organizations its scope covers. What scoping does not
+  prevent is a rule being too broad within its own vertical: a bare `counselor`
+  rule in the education pack claimed a county's Veterans Counselor before
+  scoping, and would still claim a district's if the district employed one.
+  `tests/title-taxonomy.test.ts` asserts nine specific titles for that reason.
 - **The mailto fallback is low quality by design.** It attaches the nearest
   name-shaped text to an address. Review before relying on those records.
 - **Geographic area matching is exact after normalization.** No fuzzy matching.
   An unmatched area surfaces as a count mismatch against `expectedAreaCount`.
+- **An organization with no identifier, no parent and no domain enters review.**
+  It is stored, it is stable across recrawls, and it is listed by
+  `identityReviewQueue()`. It is neither merged into a look-alike nor
+  duplicated, but nothing resolves it automatically either.
 - **Organizational unit resolution is shallow.** A published department string
   resolves to an `organizational_units` row by normalized name. Sub-units and
   renames are not reconciled.
@@ -107,6 +114,17 @@ These are real and are not hidden by the code.
   refuses to run when an applied migration has been edited.
 - Type checking of the test suite itself, so a fixture that drifts from an
   interface fails the gate rather than a test run.
+- Sector pack collision detection, so two packs defining the same code fail at
+  start-up instead of resolving by argument order.
+- Cross-sector title resolution on nine deliberately ambiguous titles.
+- Identifier-less recrawl idempotency, and same-named organizations under
+  different parents staying separate.
+- Append-only evidence: a changed content hash appends a version and the earlier
+  observation stays readable.
+- Monotonic suppression revocation, attempted through raw SQL.
+- Row level security enabled and forced on every table, with no policies.
+- The data boundary asserted through the real pipeline: a poisoned record leaves
+  nothing behind in any of seven columns it could have reached.
 
 ## Checks a person should run
 

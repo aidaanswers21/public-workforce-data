@@ -1,4 +1,4 @@
-import type { ObfuscationKind } from '@pan/shared-types';
+import type { ObfuscationKind } from '@public-workforce/shared-types';
 
 export interface DecodedEmail {
   /** Text exactly as it appeared on the page. */

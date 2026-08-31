@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { SuppressionEntryRecord, SuppressionScope } from '@pan/shared-types';
+import type { SuppressionEntryRecord, SuppressionScope } from '@public-workforce/shared-types';
 import { OrganizationHierarchy, SuppressionError, SuppressionIndex } from './suppression.js';
 
 const NOW = '2026-06-01T00:00:00.000Z';

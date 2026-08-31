@@ -6,12 +6,17 @@ import {
   urlHash,
   withPolicyDefaults,
   type CrawlPolicy,
-} from '@pan/core';
-import type { DirectoryVocabulary, Fetcher, RobotsProvider, Uuid } from '@pan/shared-types';
-import type { Logger } from '@pan/observability';
-import type { AdapterRegistry } from '@pan/adapter-kit';
-import { UnsupportedPlatformError } from '@pan/adapter-kit';
-import type { SqlClient } from '@pan/database';
+} from '@public-workforce/core';
+import type {
+  DirectoryVocabulary,
+  Fetcher,
+  RobotsProvider,
+  Uuid,
+} from '@public-workforce/shared-types';
+import type { Logger } from '@public-workforce/observability';
+import type { AdapterRegistry } from '@public-workforce/adapter-kit';
+import { UnsupportedPlatformError } from '@public-workforce/adapter-kit';
+import type { SqlClient } from '@public-workforce/database';
 
 export interface DiscoveryTarget {
   /** The organization whose site this is. Any public body, at any level. */

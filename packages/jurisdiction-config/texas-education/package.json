@@ -1,5 +1,5 @@
 {
-  "name": "@pan/jurisdiction-texas-education",
+  "name": "@public-workforce/jurisdiction-texas-education",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,10 +16,10 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@pan/shared-types": "workspace:*",
-    "@pan/jurisdiction-kit": "workspace:*",
-    "@pan/taxonomy": "workspace:*",
-    "@pan/sector-education": "workspace:*"
+    "@public-workforce/shared-types": "workspace:*",
+    "@public-workforce/jurisdiction-kit": "workspace:*",
+    "@public-workforce/taxonomy": "workspace:*",
+    "@public-workforce/sector-education": "workspace:*"
   },
   "devDependencies": {}
 }

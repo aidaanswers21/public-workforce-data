@@ -1,5 +1,5 @@
 {
-  "name": "@pan/extraction",
+  "name": "@public-workforce/extraction",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -16,8 +16,8 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@pan/shared-types": "workspace:*",
-    "@pan/core": "workspace:*",
+    "@public-workforce/shared-types": "workspace:*",
+    "@public-workforce/core": "workspace:*",
     "cheerio": "^1.0.0",
     "domhandler": "^5.0.3"
   },

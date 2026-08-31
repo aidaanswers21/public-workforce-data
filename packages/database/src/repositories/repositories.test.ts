@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { parsePersonName, personIdentityKey } from '@pan/core';
-import type { Uuid } from '@pan/shared-types';
-import { educationSectorPack } from '@pan/sector-education';
-import { federalGovernmentSectorPack } from '@pan/sector-federal';
-import { stateLocalGovernmentSectorPack } from '@pan/sector-state-local';
+import {
+  canReplaceClassification,
+  parsePersonName,
+  personIdentityKey,
+} from '@public-workforce/core';
+import type { Uuid } from '@public-workforce/shared-types';
+import { educationSectorPack } from '@public-workforce/sector-education';
+import { federalGovernmentSectorPack } from '@public-workforce/sector-federal';
+import { stateLocalGovernmentSectorPack } from '@public-workforce/sector-state-local';
 import { TestDatabase } from '../testing.js';
 import { IngestionRepository, type IngestPersonInput } from './ingestion.js';
 import { OrganizationRepository } from './organizations.js';
@@ -25,6 +29,7 @@ interface Harness {
   compliance: ComplianceRepository;
   queries: QueryRepository;
   documentId: Uuid;
+  documentVersionId: Uuid;
   jurisdictionId: Uuid;
   makeOrganization: (input: {
     name: string;
@@ -49,7 +54,7 @@ async function harness(): Promise<Harness> {
   const ingestion = new IngestionRepository(database);
   const organizations = new OrganizationRepository(database);
 
-  const documentId = await ingestion.upsertSourceDocument({
+  const document = await ingestion.recordSourceDocument({
     url: 'https://agency.example.gov/directory',
     urlCanonical: 'https://agency.example.gov/directory',
     urlHash: 'hash-directory',
@@ -64,6 +69,8 @@ async function harness(): Promise<Harness> {
     crawlRunId: null,
     retrievedAt: AT,
   });
+  const documentId = document.documentId;
+  const documentVersionId = document.versionId;
 
   const jurisdictionId = await organizations.upsertJurisdiction({
     code: 'us-federal',
@@ -117,6 +124,7 @@ async function harness(): Promise<Harness> {
     compliance: new ComplianceRepository(database),
     queries: new QueryRepository(database),
     documentId,
+    documentVersionId,
     jurisdictionId,
     makeOrganization,
     relate,
@@ -186,7 +194,9 @@ describe('OrganizationRepository', () => {
     const school = await h.makeOrganization({
       name: 'Sample High',
       typeCode: 'school',
-      levelCode: 'education',
+      // An independent district's school. Education-sector work at the
+      // special-district level; `education` is not a level.
+      levelCode: 'special_district',
       sectorCode: 'education',
     });
 
@@ -197,6 +207,220 @@ describe('OrganizationRepository', () => {
     );
     expect(row.rows[0]?.jurisdiction_id).toBe(h.jurisdictionId);
     expect(county).not.toBe(school);
+  });
+
+  it('records one organization type at several government levels', async () => {
+    // C9: level and sector are orthogonal, source-supported facts. A district
+    // is an independent special district in most states and a department of a
+    // city or a county in others, and all three are `school_district`. Nothing
+    // pairs a type with a level, so all three can be stored.
+    const h = await harness();
+    const independent = await h.makeOrganization({
+      name: 'Independent District',
+      typeCode: 'school_district',
+      levelCode: 'special_district',
+      sectorCode: 'education',
+    });
+    const cityRun = await h.makeOrganization({
+      name: 'City Schools',
+      typeCode: 'school_district',
+      levelCode: 'municipal',
+      sectorCode: 'education',
+    });
+    const countyRun = await h.makeOrganization({
+      name: 'County Schools',
+      typeCode: 'school_district',
+      levelCode: 'county',
+      sectorCode: 'education',
+    });
+
+    expect(new Set([independent, cityRun, countyRun]).size).toBe(3);
+    const levels = await h.database.query<{ government_level_code: string }>(
+      `select government_level_code from organizations
+       where organization_type_code = 'school_district' order by government_level_code`,
+    );
+    expect(levels.rows.map((row) => row.government_level_code)).toEqual([
+      'county',
+      'municipal',
+      'special_district',
+    ]);
+
+    // The type's own default is null, precisely because it varies.
+    const type = await h.database.query<{ default_government_level_code: string | null }>(
+      `select default_government_level_code from organization_types
+       where code = 'school_district'`,
+    );
+    expect(type.rows[0]?.default_government_level_code).toBeNull();
+  });
+
+  it('resolves an identifier-less recrawl to the same organization', async () => {
+    // The old fallback inserted unconditionally without an identifier, so every
+    // recrawl of a directory duplicated every organization on it.
+    const h = await harness();
+    const input = {
+      organizationTypeCode: 'county_government',
+      governmentLevelCode: 'county',
+      sectorCode: 'general_government',
+      jurisdictionId: h.jurisdictionId,
+      name: 'Sample County',
+      nameNormalized: 'sample-county',
+      primaryDomain: 'co.sample.example.gov',
+      sourceDocumentId: h.documentId,
+      extractionMethod: 'html_table',
+      confidence: 0.9,
+      observedAt: AT,
+    } as const;
+
+    const first = await h.organizations.upsertOrganization(input);
+    const second = await h.organizations.upsertOrganization(input);
+
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(second.id).toBe(first.id);
+    expect(second.identity.tier).toBe('domain_scoped_name');
+    expect(await h.database.count('organizations')).toBe(1);
+  });
+
+  it('keeps same-named schools in different districts apart', async () => {
+    const h = await harness();
+    const northDistrict = await h.makeOrganization({
+      name: 'North District',
+      typeCode: 'school_district',
+      levelCode: 'special_district',
+      sectorCode: 'education',
+    });
+    const southDistrict = await h.makeOrganization({
+      name: 'South District',
+      typeCode: 'school_district',
+      levelCode: 'special_district',
+      sectorCode: 'education',
+    });
+
+    const school = (parentOrganizationId: Uuid) =>
+      h.organizations.upsertOrganization({
+        organizationTypeCode: 'school',
+        governmentLevelCode: 'special_district',
+        sectorCode: 'education',
+        jurisdictionId: h.jurisdictionId,
+        parentOrganizationId,
+        name: 'Lincoln Elementary',
+        nameNormalized: 'lincoln-elementary',
+        sourceDocumentId: h.documentId,
+        extractionMethod: 'html_table',
+        confidence: 0.9,
+        observedAt: AT,
+      });
+
+    const north = await school(northDistrict);
+    const south = await school(southDistrict);
+
+    expect(north.id).not.toBe(south.id);
+    expect(north.identity.tier).toBe('parent_scoped_name');
+    // And re-observing either one is still idempotent.
+    expect((await school(northDistrict)).id).toBe(north.id);
+    expect(await h.database.count('organizations')).toBe(4);
+  });
+
+  it('keeps same-named departments in different municipalities apart', async () => {
+    const h = await harness();
+    const springfield = await h.makeOrganization({
+      name: 'Springfield',
+      typeCode: 'municipality',
+      levelCode: 'municipal',
+    });
+    const shelbyville = await h.makeOrganization({
+      name: 'Shelbyville',
+      typeCode: 'municipality',
+      levelCode: 'municipal',
+    });
+
+    const department = (parentOrganizationId: Uuid) =>
+      h.organizations.upsertOrganization({
+        organizationTypeCode: 'municipal_department',
+        governmentLevelCode: 'municipal',
+        sectorCode: 'parks_recreation',
+        jurisdictionId: h.jurisdictionId,
+        parentOrganizationId,
+        name: 'Parks and Recreation',
+        nameNormalized: 'parks-and-recreation',
+        sourceDocumentId: h.documentId,
+        extractionMethod: 'html_table',
+        confidence: 0.9,
+        observedAt: AT,
+      });
+
+    const first = await department(springfield);
+    const second = await department(shelbyville);
+    expect(first.id).not.toBe(second.id);
+  });
+
+  it('sends an ambiguous organization to review instead of merging it', async () => {
+    const h = await harness();
+    const ambiguous = {
+      organizationTypeCode: 'other_public_body',
+      governmentLevelCode: 'other_public_authority',
+      sectorCode: 'other',
+      jurisdictionId: null,
+      name: 'Regional Board',
+      nameNormalized: 'regional-board',
+      sourceDocumentId: h.documentId,
+      extractionMethod: 'mailto_harvest',
+      confidence: 0.4,
+      observedAt: AT,
+    } as const;
+
+    const created = await h.organizations.upsertOrganization(ambiguous);
+    expect(created.identity.tier).toBe('ambiguous');
+    expect(created.identity.needsReview).toBe(true);
+    expect(created.identity.reviewReason).toContain('no official identifier');
+
+    // Still idempotent: the same source record finds the same row.
+    const again = await h.organizations.upsertOrganization(ambiguous);
+    expect(again.id).toBe(created.id);
+    expect(await h.database.count('organizations')).toBe(1);
+
+    const queue = await h.organizations.identityReviewQueue();
+    expect(queue.map((row) => row.name)).toEqual(['Regional Board']);
+  });
+
+  it('prefers the strongest evidence available, in order', async () => {
+    const h = await harness();
+    const base = {
+      organizationTypeCode: 'state_agency',
+      governmentLevelCode: 'state',
+      sectorCode: 'general_government',
+      jurisdictionId: h.jurisdictionId,
+      name: 'Department of Samples',
+      nameNormalized: 'department-of-samples',
+      primaryDomain: 'samples.example.gov',
+      sourceDocumentId: h.documentId,
+      extractionMethod: 'html_table',
+      confidence: 0.9,
+      observedAt: AT,
+    } as const;
+
+    expect(
+      h.organizations.resolveIdentity({
+        ...base,
+        identifier: { systemCode: 'fips_state', value: '48' },
+        sourceIdentifier: { system: 'portal', value: 'A1' },
+        parentOrganizationId: h.jurisdictionId,
+      }).tier,
+    ).toBe('official_identifier');
+    expect(
+      h.organizations.resolveIdentity({
+        ...base,
+        sourceIdentifier: { system: 'portal', value: 'A1' },
+        parentOrganizationId: h.jurisdictionId,
+      }).tier,
+    ).toBe('source_identifier');
+    expect(
+      h.organizations.resolveIdentity({ ...base, parentOrganizationId: h.jurisdictionId }).tier,
+    ).toBe('parent_scoped_name');
+    expect(h.organizations.resolveIdentity(base).tier).toBe('domain_scoped_name');
+    expect(
+      h.organizations.resolveIdentity({ ...base, primaryDomain: null, jurisdictionId: null }).tier,
+    ).toBe('ambiguous');
   });
 
   it('keys on an official identifier when one is supplied', async () => {
@@ -590,11 +814,241 @@ describe('IngestionRepository', () => {
     expect(await h.database.count('contact_points')).toBe(1);
   });
 
+  it('appends a version when the content changes, keeping the old one', async () => {
+    // The old shape overwrote content_hash on every fetch, so the record of
+    // what the page used to say was destroyed by the crawl that noticed it had
+    // changed.
+    const h = await harness();
+    const recordFetch = (contentHash: string, retrievedAt: string) =>
+      h.ingestion.recordSourceDocument({
+        url: 'https://agency.example.gov/staff',
+        urlCanonical: 'https://agency.example.gov/staff',
+        urlHash: 'hash-staff',
+        domain: 'agency.example.gov',
+        sourceTypeCode: 'html_directory',
+        httpStatus: 200,
+        contentHash,
+        contentType: 'text/html',
+        storageKey: null,
+        robotsAllowed: true,
+        robotsPolicyNote: null,
+        crawlRunId: null,
+        retrievedAt,
+      });
+
+    const first = await recordFetch('content-a', AT);
+    const changed = await recordFetch('content-b', '2026-07-01T00:00:00.000Z');
+
+    expect(changed.documentId).toBe(first.documentId);
+    expect(changed.versionId).not.toBe(first.versionId);
+    expect(first.version).toBe(1);
+    expect(changed.version).toBe(2);
+    expect(changed.isNewVersion).toBe(true);
+
+    const versions = await h.database.query<{ content_hash: string; version: number }>(
+      `select content_hash, version from source_document_versions
+       where source_document_id = $1 order by version`,
+      [first.documentId],
+    );
+    expect(versions.rows.map((row) => row.content_hash)).toEqual(['content-a', 'content-b']);
+  });
+
+  it('re-fetching identical content adds no version', async () => {
+    const h = await harness();
+    const recordFetch = (retrievedAt: string) =>
+      h.ingestion.recordSourceDocument({
+        url: 'https://agency.example.gov/staff',
+        urlCanonical: 'https://agency.example.gov/staff',
+        urlHash: 'hash-staff',
+        domain: 'agency.example.gov',
+        sourceTypeCode: 'html_directory',
+        httpStatus: 200,
+        contentHash: 'unchanged',
+        contentType: 'text/html',
+        storageKey: null,
+        robotsAllowed: true,
+        robotsPolicyNote: null,
+        crawlRunId: null,
+        retrievedAt,
+      });
+
+    const first = await recordFetch(AT);
+    const second = await recordFetch('2026-07-01T00:00:00.000Z');
+    expect(second.versionId).toBe(first.versionId);
+    expect(second.isNewVersion).toBe(false);
+    expect(await h.database.count('source_document_versions')).toBe(2); // harness + this one
+
+    // The last-seen window moved, which is the only thing a re-fetch changes.
+    const row = await h.database.query<{ last_seen_at: string; retrieved_at: string }>(
+      'select last_seen_at, retrieved_at from source_document_versions where id = $1',
+      [first.versionId],
+    );
+    expect(new Date(row.rows[0]?.last_seen_at ?? 0).toISOString()).toBe('2026-07-01T00:00:00.000Z');
+    expect(new Date(row.rows[0]?.retrieved_at ?? 0).toISOString()).toBe(AT);
+  });
+
+  it('keeps a superseded observation readable after the page changes', async () => {
+    const h = await harness();
+    const record = (versionId: Uuid, value: string) =>
+      h.ingestion.recordObservation({
+        sourceDocumentVersionId: versionId,
+        crawlRunId: null,
+        evidenceClass: 'employment',
+        entityType: 'person',
+        entityId: null,
+        recordKey: 'record:1',
+        field: 'title_published',
+        valueRaw: value,
+        valueNormalized: value.toLowerCase(),
+        extractionMethod: 'html_table',
+        confidence: 0.9,
+        selector: 'table > tr',
+        observedAt: AT,
+      });
+
+    const recordFetch = (contentHash: string) =>
+      h.ingestion.recordSourceDocument({
+        url: 'https://agency.example.gov/staff',
+        urlCanonical: 'https://agency.example.gov/staff',
+        urlHash: 'hash-staff',
+        domain: 'agency.example.gov',
+        sourceTypeCode: 'html_directory',
+        httpStatus: 200,
+        contentHash,
+        contentType: 'text/html',
+        storageKey: null,
+        robotsAllowed: true,
+        robotsPolicyNote: null,
+        crawlRunId: null,
+        retrievedAt: AT,
+      });
+
+    const v1 = await recordFetch('content-a');
+    await record(v1.versionId, 'Analyst');
+    const v2 = await recordFetch('content-b');
+    await record(v2.versionId, 'Senior Analyst');
+
+    const observations = await h.database.query<{ value_raw: string }>(
+      `select o.value_raw from source_observations o
+       join source_document_versions v on v.id = o.source_document_version_id
+       where o.record_key = 'record:1' order by v.version`,
+    );
+    expect(observations.rows.map((row) => row.value_raw)).toEqual(['Analyst', 'Senior Analyst']);
+  });
+
+  it('refuses to delete an observation or rewrite a version', async () => {
+    const h = await harness();
+    // Row-level triggers need a row to fire on, so record one first.
+    await h.ingestion.recordObservation({
+      sourceDocumentVersionId: h.documentVersionId,
+      crawlRunId: null,
+      evidenceClass: 'employment',
+      entityType: 'person',
+      entityId: null,
+      recordKey: 'record:immutable',
+      field: 'title_published',
+      valueRaw: 'Analyst',
+      valueNormalized: 'analyst',
+      extractionMethod: 'html_table',
+      confidence: 0.9,
+      selector: null,
+      observedAt: AT,
+    });
+    await expect(h.database.query('delete from source_observations where true')).rejects.toThrow(
+      /append-only/,
+    );
+    await expect(
+      h.database.query(`update source_document_versions set content_hash = 'tampered'`),
+    ).rejects.toThrow(/immutable/);
+  });
+
+  it('replaces a stored classification exactly as canReplaceClassification says', async () => {
+    // One policy, two places it has to hold. The function is the readable
+    // statement; the `on conflict` clause is what actually runs. This asserts
+    // they agree on every pair rather than trusting a comment that says so.
+    const observed = ['published', 'decoded_published', 'general_inbox', 'invalid'] as const;
+    for (const stored of observed) {
+      for (const incoming of observed) {
+        const h = await harness();
+        const organizationId = await h.makeOrganization({
+          name: 'Sample Agency',
+          typeCode: 'federal_agency',
+          levelCode: 'federal',
+        });
+        const address = 'pat.doe@agency.example.gov';
+        const write = (classification: (typeof observed)[number]) =>
+          h.ingestion.ingestPerson({
+            ...personInput(organizationId, h.documentId, 'Pat Doe', 'Analyst', address),
+            emails: [
+              {
+                address,
+                addressNormalized: address,
+                domain: 'agency.example.gov',
+                localPart: 'pat.doe',
+                classification,
+                obfuscation: 'none',
+                sourceValue: address,
+              },
+            ],
+          });
+
+        await write(stored);
+        await write(incoming);
+
+        const row = await h.database.query<{ classification: string }>(
+          'select classification from email_addresses where address_normalized = $1',
+          [address],
+        );
+        const expected = canReplaceClassification(stored, incoming) ? incoming : stored;
+        expect(row.rows[0]?.classification, `${stored} then ${incoming}`).toBe(expected);
+        await h.database.close();
+        open = null;
+      }
+    }
+  });
+
+  it('keeps a rejected or suppressed candidate out of an export', async () => {
+    const h = await harness();
+    const organizationId = await h.makeOrganization({
+      name: 'Sample Agency',
+      typeCode: 'federal_agency',
+      levelCode: 'federal',
+    });
+    const personId = await h.addPerson(
+      organizationId,
+      'Dana Lee',
+      'Analyst',
+      'dana.lee@agency.example.gov',
+    );
+
+    const addCandidate = async (address: string, state: string) => {
+      await h.database.query(
+        `insert into email_candidates (person_id, organization_id, domain, address, pattern, state)
+         values ($1,$2,'agency.example.gov',$3,'first.last',$4)`,
+        [personId, organizationId, address, state],
+      );
+    };
+
+    await addCandidate('d.lee@agency.example.gov', 'suppressed');
+    const rowsWithSuppressed = await h.queries.queryExportableRows(AT, 'internal-review');
+    expect(rowsWithSuppressed[0]?.inferredEmailCandidate).toBeNull();
+
+    await h.database.query(`delete from email_candidates`);
+    await addCandidate('dana.l@agency.example.gov', 'rejected');
+    const rowsWithRejected = await h.queries.queryExportableRows(AT, 'internal-review');
+    expect(rowsWithRejected[0]?.inferredEmailCandidate).toBeNull();
+
+    await h.database.query(`delete from email_candidates`);
+    await addCandidate('dl@agency.example.gov', 'pending');
+    const rowsWithPending = await h.queries.queryExportableRows(AT, 'internal-review');
+    expect(rowsWithPending[0]?.inferredEmailCandidate).toBe('dl@agency.example.gov');
+  });
+
   it('records observations idempotently, tagged with what they prove', async () => {
     const h = await harness();
     for (const evidenceClass of ['employment', 'employment']) {
       await h.ingestion.recordObservation({
-        sourceDocumentId: h.documentId,
+        sourceDocumentVersionId: h.documentVersionId,
         crawlRunId: null,
         evidenceClass,
         entityType: 'person',
@@ -619,7 +1073,7 @@ describe('IngestionRepository', () => {
       ['contact', 'email_published'],
     ]) {
       await h.ingestion.recordObservation({
-        sourceDocumentId: h.documentId,
+        sourceDocumentVersionId: h.documentVersionId,
         crawlRunId: null,
         evidenceClass: evidenceClass as string,
         entityType: 'person',
@@ -640,7 +1094,7 @@ describe('IngestionRepository', () => {
 });
 
 describe('ComplianceRepository', () => {
-  it('records a complaint and the suppression it creates', async () => {
+  it('records an email complaint and the suppression it creates', async () => {
     const h = await harness();
     const result = await h.compliance.recordComplaint({
       channel: 'email',
@@ -650,8 +1104,280 @@ describe('ComplianceRepository', () => {
       createdBy: 'ops',
     });
     expect(result.suppressionEntryId).not.toBeNull();
+    expect(result.resolution).toBe('suppressed');
     const entries = await h.compliance.loadActiveSuppressions();
-    expect(entries[0]?.value).toBe('jane.smith@agency.example.gov');
+    expect(entries.map((entry) => entry.value)).toContain('jane.smith@agency.example.gov');
+  });
+
+  it('resolves an email complaint to the person who holds the address', async () => {
+    const h = await harness();
+    const organizationId = await h.makeOrganization({
+      name: 'Sample Agency',
+      typeCode: 'federal_agency',
+      levelCode: 'federal',
+    });
+    const personId = await h.addPerson(
+      organizationId,
+      'Jane Smith',
+      'Director',
+      'jane.smith@agency.example.gov',
+    );
+
+    const result = await h.compliance.recordComplaint({
+      channel: 'email',
+      contactType: 'email',
+      contactValue: 'jane.smith@agency.example.gov',
+      reason: 'asked to be removed',
+      createdBy: 'ops',
+    });
+
+    expect(result.resolution).toBe('suppressed');
+    const entries = await h.compliance.loadActiveSuppressions();
+    const person = entries.find((entry) => entry.scope === 'person');
+    expect(person?.personId).toBe(personId);
+  });
+
+  it('records a phone complaint for review rather than crashing', async () => {
+    // The old path built a person-scope entry with a null person id, which the
+    // schema rejects, and it did so before writing the complaint, so the
+    // complaint was lost along with the error.
+    const h = await harness();
+    const result = await h.compliance.recordComplaint({
+      channel: 'phone',
+      contactType: 'phone',
+      contactValue: '(555) 010-9999',
+      reason: 'called and asked to be removed',
+      createdBy: 'ops',
+    });
+
+    expect(result.complaintId).toBeTruthy();
+    expect(result.resolution).toBe('needs_review');
+    expect(result.suppressionEntryId).toBeNull();
+    expect(result.reviewReason).toContain('cannot be matched');
+    expect(await h.database.count('complaints')).toBe(1);
+    expect(await h.database.count('suppression_entries')).toBe(0);
+  });
+
+  it('records a postal complaint for review rather than discarding it', async () => {
+    const h = await harness();
+    const result = await h.compliance.recordComplaint({
+      channel: 'mail',
+      contactType: 'postal',
+      contactValue: '1 Example Plaza, Springfield',
+      reason: 'wrote in asking to be removed',
+      createdBy: 'ops',
+    });
+
+    expect(result.resolution).toBe('needs_review');
+    expect(result.suppressionEntryId).toBeNull();
+    const queue = await h.compliance.complaintReviewQueue();
+    expect(queue).toHaveLength(1);
+    expect(queue[0]?.channel).toBe('mail');
+  });
+
+  it('suppresses a phone complaint once the published number identifies someone', async () => {
+    const h = await harness();
+    const organizationId = await h.makeOrganization({
+      name: 'Sample Agency',
+      typeCode: 'federal_agency',
+      levelCode: 'federal',
+    });
+    const personId = await h.addPerson(
+      organizationId,
+      'Ray Patel',
+      'Analyst',
+      'ray.patel@agency.example.gov',
+    );
+    await h.ingestion.ingestPerson({
+      ...personInput(
+        organizationId,
+        h.documentId,
+        'Ray Patel',
+        'Analyst',
+        'ray.patel@agency.example.gov',
+      ),
+      contactPoints: [
+        {
+          contactPointTypeCode: 'work_phone',
+          value: '(555) 010-4242',
+          valueNormalized: '5550104242',
+          sourceValue: '(555) 010-4242',
+        },
+      ],
+    });
+
+    const result = await h.compliance.recordComplaint({
+      channel: 'phone',
+      contactType: 'phone',
+      contactValue: '555-010-4242',
+      reason: 'called and asked to be removed',
+      createdBy: 'ops',
+    });
+
+    expect(result.resolution).toBe('suppressed');
+    const entries = await h.compliance.loadActiveSuppressions();
+    expect(entries.find((entry) => entry.scope === 'person')?.personId).toBe(personId);
+  });
+
+  it('never writes a person suppression without a person', async () => {
+    const h = await harness();
+    for (const contactType of ['phone', 'postal', 'fax', '']) {
+      await h.compliance.recordComplaint({
+        channel: 'other',
+        contactType,
+        contactValue: 'something unmatched',
+        reason: 'asked to be removed',
+        createdBy: 'ops',
+      });
+    }
+    const orphaned = await h.database.count(
+      'suppression_entries',
+      "scope = 'person' and person_id is null",
+    );
+    expect(orphaned).toBe(0);
+  });
+
+  it('keeps the complaint and its suppression in one transaction', async () => {
+    const h = await harness();
+    const before = await h.database.count('complaints');
+    await expect(
+      h.compliance.recordComplaint({
+        channel: 'email',
+        contactType: 'email',
+        // A scope the suppression table will reject, forcing a rollback.
+        contactValue: '',
+        reason: '',
+        createdBy: 'ops',
+        personId: '00000000-0000-0000-0000-000000000000',
+      }),
+    ).rejects.toThrow();
+    expect(await h.database.count('complaints')).toBe(before);
+  });
+
+  it('lets a suppression be revoked exactly once, with a reason', async () => {
+    const h = await harness();
+    const id = await h.compliance.addSuppression({
+      scope: 'email',
+      value: 'jane@x.example.gov',
+      reason: 'opt out',
+      source: 'opt_out_request',
+      createdBy: 'ops',
+    });
+    await h.compliance.revokeSuppression(id, 'withdrawn by the person', 'ops');
+
+    const row = await h.database.query<{ revoked_at: string; revoked_reason: string }>(
+      'select revoked_at, revoked_reason from suppression_entries where id = $1',
+      [id],
+    );
+    expect(row.rows[0]?.revoked_at).not.toBeNull();
+    expect(row.rows[0]?.revoked_reason).toBe('withdrawn by the person');
+  });
+
+  it('refuses to un-revoke a suppression, even in raw SQL', async () => {
+    const h = await harness();
+    const id = await h.compliance.addSuppression({
+      scope: 'email',
+      value: 'jane@x.example.gov',
+      reason: 'opt out',
+      source: 'opt_out_request',
+      createdBy: 'ops',
+    });
+    await h.compliance.revokeSuppression(id, 'withdrawn', 'ops');
+
+    await expect(
+      h.database.query('update suppression_entries set revoked_at = null where id = $1', [id]),
+    ).rejects.toThrow(/cannot be un-revoked/);
+  });
+
+  it('refuses to move a revocation to a different time, even in raw SQL', async () => {
+    const h = await harness();
+    const id = await h.compliance.addSuppression({
+      scope: 'email',
+      value: 'jane@x.example.gov',
+      reason: 'opt out',
+      source: 'opt_out_request',
+      createdBy: 'ops',
+    });
+    await h.compliance.revokeSuppression(id, 'withdrawn', 'ops');
+
+    await expect(
+      h.database.query(
+        `update suppression_entries set revoked_at = now() + interval '1 day' where id = $1`,
+        [id],
+      ),
+    ).rejects.toThrow(/revoked_at cannot be changed/);
+    await expect(
+      h.database.query(
+        `update suppression_entries set revoked_reason = 'something else' where id = $1`,
+        [id],
+      ),
+    ).rejects.toThrow(/revoked_reason cannot be changed/);
+  });
+
+  it('refuses a revocation with no reason', async () => {
+    const h = await harness();
+    const id = await h.compliance.addSuppression({
+      scope: 'email',
+      value: 'jane@x.example.gov',
+      reason: 'opt out',
+      source: 'opt_out_request',
+      createdBy: 'ops',
+    });
+    await expect(
+      h.database.query('update suppression_entries set revoked_at = now() where id = $1', [id]),
+    ).rejects.toThrow(/must record why/);
+  });
+
+  it('writes an audit event for a revocation, whichever path made it', async () => {
+    const h = await harness();
+    const id = await h.compliance.addSuppression({
+      scope: 'email',
+      value: 'jane@x.example.gov',
+      reason: 'opt out',
+      source: 'opt_out_request',
+      createdBy: 'ops',
+    });
+    // Raw SQL, deliberately: the audit event comes from the database, so it
+    // cannot be skipped by writing around the repository.
+    await h.database.query(
+      `update suppression_entries set revoked_at = now(), revoked_reason = 'raw sql' where id = $1`,
+      [id],
+    );
+    const events = await h.database.query<{ action: string }>(
+      `select action from audit_events where entity_id = $1 order by occurred_at`,
+      [id],
+    );
+    expect(events.rows.map((row) => row.action)).toContain('suppression.revoked');
+  });
+
+  it('refuses to delete a person an opt-out still names', async () => {
+    const h = await harness();
+    const organizationId = await h.makeOrganization({
+      name: 'Sample Agency',
+      typeCode: 'federal_agency',
+      levelCode: 'federal',
+    });
+    const personId = await h.addPerson(
+      organizationId,
+      'Jane Smith',
+      'Director',
+      'jane.smith@agency.example.gov',
+    );
+    await h.compliance.addSuppression({
+      scope: 'person',
+      value: personId,
+      personId,
+      reason: 'opt out',
+      source: 'opt_out_request',
+      createdBy: 'ops',
+    });
+
+    // A cascade here would delete the opt-out along with the person, which is
+    // the one outcome suppression exists to prevent.
+    await expect(
+      h.database.query('delete from people where id = $1', [personId]),
+    ).rejects.toThrow();
+    expect(await h.database.count('suppression_entries')).toBe(1);
   });
 
   it('will not let a suppression entry be edited or deleted', async () => {

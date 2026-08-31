@@ -4,9 +4,9 @@ import {
   PermissiveRobotsProvider,
   fixedClock,
   normalizeOrganizationName,
-} from '@pan/core';
-import { createSilentLogger } from '@pan/observability';
-import { genericHtmlAdapter } from '@pan/adapter-generic-html';
+} from '@public-workforce/core';
+import { createSilentLogger } from '@public-workforce/observability';
+import { genericHtmlAdapter } from '@public-workforce/adapter-generic-html';
 import {
   ComplianceRepository,
   CrawlRepository,
@@ -16,7 +16,7 @@ import {
   QueryRepository,
   TestDatabase,
   seedReferenceData,
-} from '@pan/database';
+} from '@public-workforce/database';
 import {
   FixtureFetcher,
   IngestionPipeline,
@@ -24,11 +24,11 @@ import {
   buildTaxonomy,
   buildTitleRuleSet,
   type IngestContext,
-} from '@pan/crawler-worker';
-import { educationSectorPack } from '@pan/sector-education';
-import { federalGovernmentSectorPack } from '@pan/sector-federal';
-import { stateLocalGovernmentSectorPack } from '@pan/sector-state-local';
-import type { Uuid } from '@pan/shared-types';
+} from '@public-workforce/crawler-worker';
+import { educationSectorPack } from '@public-workforce/sector-education';
+import { federalGovernmentSectorPack } from '@public-workforce/sector-federal';
+import { stateLocalGovernmentSectorPack } from '@public-workforce/sector-state-local';
+import type { Uuid } from '@public-workforce/shared-types';
 import { fixturePath } from './support/fixtures.js';
 
 const CLOCK = fixedClock('2026-06-01T00:00:00.000Z');
@@ -39,7 +39,11 @@ const SEED_URL = 'https://sample-isd.example.org/staff-directory?page=1';
 const SECTORS = [educationSectorPack, stateLocalGovernmentSectorPack, federalGovernmentSectorPack];
 
 const TAXONOMY = buildTaxonomy();
-const TITLE_RULES = buildTitleRuleSet(TAXONOMY);
+// The worked example is an independent school district: education-sector work
+// at the special-district level. Both halves decide which packs may read it.
+const SCOPE = { sectorCode: 'education', governmentLevelCode: 'special_district' } as const;
+const TITLE_RULES = buildTitleRuleSet(TAXONOMY, SCOPE);
+const VOCABULARY = TAXONOMY.forScope(SCOPE).vocabulary;
 
 const ROUTES = [1, 2, 3].map((page) => ({
   url: `https://sample-isd.example.org/staff-directory?page=${page}`,
@@ -89,7 +93,7 @@ async function harness(): Promise<Harness> {
   const crawl = new CrawlRepository(database);
   const logger = createSilentLogger();
 
-  const bootstrapDocumentId = await ingestion.upsertSourceDocument({
+  const bootstrap = await ingestion.recordSourceDocument({
     url: 'https://sample-isd.example.org/',
     urlCanonical: 'https://sample-isd.example.org/',
     urlHash: 'bootstrap',
@@ -121,12 +125,12 @@ async function harness(): Promise<Harness> {
   const jurisdictionId = await organizations.upsertJurisdiction({
     code: 'us-tx-education',
     name: 'Texas public education',
-    governmentLevelCode: 'education',
+    governmentLevelCode: 'special_district',
     geographicAreaId: stateArea,
   });
 
   const common = {
-    sourceDocumentId: bootstrapDocumentId,
+    sourceDocumentId: bootstrap.documentId,
     extractionMethod: 'file_import' as const,
     confidence: 1,
     observedAt: AT,
@@ -135,7 +139,7 @@ async function harness(): Promise<Harness> {
 
   const district = await organizations.upsertOrganization({
     organizationTypeCode: 'school_district',
-    governmentLevelCode: 'education',
+    governmentLevelCode: 'special_district',
     sectorCode: 'education',
     jurisdictionId,
     name: 'Sample Independent School District',
@@ -145,7 +149,7 @@ async function harness(): Promise<Harness> {
   });
   const school = await organizations.upsertOrganization({
     organizationTypeCode: 'school',
-    governmentLevelCode: 'education',
+    governmentLevelCode: 'special_district',
     sectorCode: 'education',
     jurisdictionId,
     name: 'Sample High School',
@@ -188,11 +192,11 @@ async function harness(): Promise<Harness> {
     context: {
       organizationId: school.id,
       organizationName: 'Sample High School',
-      governmentLevelCode: 'education',
+      governmentLevelCode: 'special_district',
       sectorCode: 'education',
       jurisdictionId,
       sourceTypeCode: 'html_directory',
-      vocabulary: TAXONOMY.vocabulary,
+      vocabulary: VOCABULARY,
       titleRules: TITLE_RULES,
     },
     startRun: () =>
@@ -234,12 +238,10 @@ describe('fixture collection, end to end', () => {
     expect(summary.publishedEmails).toBe(8);
     expect(summary.generalInboxes).toBe(1);
 
-    expect(
-      await h.database.count(
-        'people',
-        'source_document_id is null and inference_evidence_id is null',
-      ),
-    ).toBe(0);
+    // Provenance is a NOT NULL foreign key now, so this cannot be non-zero.
+    // Asserted anyway: it is the guarantee, and a schema change that relaxed it
+    // should fail here rather than only in the migration test.
+    expect(await h.database.count('people', 'source_document_id is null')).toBe(0);
     expect(await h.database.count('source_observations')).toBeGreaterThanOrEqual(
       summary.peopleSeen,
     );
@@ -459,5 +461,103 @@ describe('fixture collection, end to end', () => {
     expect(checkpoint?.crawlRunId).toBe(runId);
     expect(checkpoint?.pagesFetched).toBe(3);
     expect(checkpoint?.visitedUrlHashes).toHaveLength(3);
+  });
+
+  it('never persists a value the data boundary rejected', async () => {
+    // The boundary used to be a scan whose result was counted and then ignored:
+    // the raw record went on to the person row, the unit, the contact point and
+    // the observations. This drives one poisoned record through the real
+    // pipeline and then looks for its values everywhere they could have landed.
+    const h = await harness();
+    const runId = await h.startRun();
+    const poisoned = {
+      ...(await h.runCrawl(runId)),
+      records: [
+        {
+          record: {
+            recordKey: 'poisoned:1',
+            fullNamePublished: 'Jamie Fields, Class of 2027',
+            titlePublished: 'Student',
+            departmentPublished: 'home address: 12 Privet Drive',
+            organizationPublished: null,
+            phonePublished: null,
+            emails: [],
+            profileUrl: null,
+            extractionMethod: 'html_table' as const,
+            confidence: 0.9,
+            selector: 'table > tr',
+            snippet: null,
+          },
+          sourceUrl: SEED_URL,
+          sourceContentHash: 'poisoned',
+          fetchedAt: AT,
+          depth: 0,
+          pageContext: {},
+        },
+      ],
+    };
+
+    const summary = await h.pipeline.ingestRun(poisoned, h.context);
+
+    // The name itself was out of scope, so there is no person at all.
+    expect(summary.boundaryDrops).toBeGreaterThan(0);
+    expect(summary.peopleCreated).toBe(0);
+
+    for (const [table, column] of [
+      ['people', 'full_name_published'],
+      ['employment_assignments', 'title_published'],
+      ['employment_assignments', 'department_published'],
+      ['organizational_units', 'name_source_value'],
+      ['source_observations', 'value_raw'],
+      ['source_observations', 'value_normalized'],
+      ['contact_points', 'source_value'],
+    ] as const) {
+      const hits = await h.database.count(
+        table,
+        `${column} ilike '%Privet%' or ${column} ilike '%Class of 2027%'`,
+      );
+      expect(hits, `${table}.${column}`).toBe(0);
+    }
+  });
+
+  it('keeps a legitimate title that merely contains a sensitive word', async () => {
+    const h = await harness();
+    const runId = await h.startRun();
+    const record = {
+      ...(await h.runCrawl(runId)),
+      records: [
+        {
+          record: {
+            recordKey: 'legitimate:1',
+            fullNamePublished: 'Dana Lee',
+            titlePublished: 'Director of Student Services',
+            departmentPublished: 'Student Services',
+            organizationPublished: null,
+            phonePublished: null,
+            emails: [],
+            profileUrl: null,
+            extractionMethod: 'html_table' as const,
+            confidence: 0.9,
+            selector: 'table > tr',
+            snippet: null,
+          },
+          sourceUrl: SEED_URL,
+          sourceContentHash: 'legitimate',
+          fetchedAt: AT,
+          depth: 0,
+          pageContext: {},
+        },
+      ],
+    };
+
+    const summary = await h.pipeline.ingestRun(record, h.context);
+    expect(summary.boundaryDrops).toBe(0);
+    expect(summary.peopleCreated).toBe(1);
+    expect(
+      await h.database.count(
+        'employment_assignments',
+        `title_published = 'Director of Student Services'`,
+      ),
+    ).toBe(1);
   });
 });

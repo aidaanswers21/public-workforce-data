@@ -1,4 +1,8 @@
-import type { DetectionContext, DetectionResult, DirectoryAdapter } from '@pan/shared-types';
+import type {
+  DetectionContext,
+  DetectionResult,
+  DirectoryAdapter,
+} from '@public-workforce/shared-types';
 
 export interface AdapterSelection {
   adapter: DirectoryAdapter;

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { createLogger } from '@pan/observability';
-import { PostgresClient } from '@pan/database';
+import { createLogger } from '@public-workforce/observability';
+import { PostgresClient } from '@public-workforce/database';
 import { AdminReports } from './reports.js';
 
 const USAGE = `

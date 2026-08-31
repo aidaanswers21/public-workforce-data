@@ -1,6 +1,6 @@
 import { PGlite } from '@electric-sql/pglite';
-import { Taxonomy, type SectorPack } from '@pan/taxonomy';
-import type { SqlClient } from './client.js';
+import { Taxonomy, type SectorPack } from '@public-workforce/taxonomy';
+import { withTransaction, type SqlClient } from './client.js';
 import { loadMigrations, migrate } from './migrations.js';
 import { seedReferenceData } from './reference-seed.js';
 
@@ -37,6 +37,17 @@ export class TestDatabase implements SqlClient {
 
   async exec(sql: string): Promise<unknown> {
     return this.db.exec(sql);
+  }
+
+  /**
+   * The same transactional guarantee the production client gives.
+   *
+   * The migration runner commits each migration with its bookkeeping row in one
+   * transaction, so the harness has to offer real transactions or it would be
+   * testing a different code path from the one that ships.
+   */
+  async transaction<T>(run: (client: SqlClient) => Promise<T>): Promise<T> {
+    return withTransaction(this, run);
   }
 
   async close(): Promise<void> {

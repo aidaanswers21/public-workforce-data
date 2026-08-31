@@ -30,6 +30,12 @@ with no policy row blocks unless the deployment has explicitly opted into
 collecting from unreviewed sources. A refusal raises `SourcePolicyViolation` and
 records the target as `policy_hold`.
 
+**Not yet wired for production.** The gate is enforced inside `CrawlEngine`, and
+nothing loads real `source_policies` rows into the registry at run time, and no
+operator command records a review or an approval. See production blocker C12 in
+`BACKLOG.md`; it blocks a live crawl. The **discovery worker** does not go
+through the gate at all, which is blocker C13.
+
 A vendor's assurance that data is compliant is not a review, is not an approval,
 and never overrides the suppression list. See `SOURCE_POLICY_REVIEW.md`.
 
@@ -69,10 +75,14 @@ document first.
 ## Identification
 
 Every request carries a `User-Agent` that names the crawler and links to a page
-explaining what it does and how to ask to be removed. Set it per deployment via
-`CRAWLER_USER_AGENT` and `CRAWLER_CONTACT_URL`; the default in
-`DEFAULT_CRAWL_POLICY` points at `example.invalid` precisely so an unconfigured
-deployment is obvious rather than anonymous.
+explaining what it does and how to ask to be removed. It comes from
+`DEFAULT_CRAWL_POLICY`, whose default points at `example.invalid` precisely so
+an unconfigured deployment is obvious rather than anonymous.
+
+`CRAWLER_USER_AGENT` and `CRAWLER_CONTACT_URL` are named in `.env.example` and
+**nothing reads them today**. Wiring them is part of production blocker C12, and
+a live crawl must not run until a configured identity actually reaches the
+request.
 
 ## robots.txt
 
@@ -167,9 +177,14 @@ behaves like an ordinary two-label resolver.
 
 ## Storage of raw responses
 
-`source_documents.storage_key` is where an archived raw response belongs, in
-S3-compatible object storage such as Cloudflare R2. The column and the plumbing
-exist; the uploader is in `BACKLOG.md`. Nothing is archived today.
+`source_document_versions.storage_key` is where an archived raw response
+belongs, in S3-compatible object storage such as Cloudflare R2. The column and
+the plumbing exist; the uploader is in `BACKLOG.md`. Nothing is archived today.
+
+The pipeline also records `http_status`, `content_type` and `robots_allowed` as
+literals rather than reading them from the response, so those three fields on a
+stored version look observed and are not. That is production blocker C20, and it
+blocks a live crawl.
 
 ## Running a real crawl
 

@@ -3,7 +3,7 @@ import type {
   ExtractedEmail,
   ExtractedPersonRecord,
   ExtractionMethod,
-} from '@pan/shared-types';
+} from '@public-workforce/shared-types';
 import {
   collapseWhitespace,
   decodeCloudflareEmail,
@@ -15,7 +15,7 @@ import {
   parsePersonName,
   classifyEmail,
   isOrganizationLabel,
-} from '@pan/core';
+} from '@public-workforce/core';
 
 export interface RecordDraft {
   adapterKey: string;

@@ -28,6 +28,9 @@ neutral package may assume it.
 2. Model an organization's place in a hierarchy as effective-dated
    relationships, not a single parent column, so a reorganization is history
    rather than an overwrite.
+   2b. Record government level and sector as orthogonal, source-supported
+   attributes. An organization type may suggest defaults for both and
+   constrains neither, and there is no `education` government level.
 3. Never require a state above a federal organization or a federal employee.
 4. Find each organization's official website and staff directory.
 5. Extract publicly displayed employees and their published work contact
@@ -35,7 +38,14 @@ neutral package may assume it.
 6. Support every staff role, not only decision-makers.
 7. Handle pagination, load-more controls, search interfaces and API-backed
    directories.
-8. Normalize, deduplicate and store the data with complete source provenance.
+8. Normalize, deduplicate and store the data with complete source provenance,
+   where provenance is a real reference to a source document that exists.
+   8b. Resolve an organization's identity from the strongest evidence available, so
+   an identifier-less recrawl converges on the same row, two same-named bodies
+   under different parents stay separate, and an ambiguous record enters review
+   rather than being merged or duplicated.
+   8c. Keep evidence append-only. A changed page appends a document version and the
+   earlier observation stays readable.
 9. Hold title and department on the employment assignment, never on the person.
 10. Preserve the published title untouched, and record the method, version and
     confidence of any normalization applied to it.
@@ -45,7 +55,10 @@ neutral package may assume it.
 14. Refuse production collection from a source marked prohibited, or marked
     review required or unknown without a recorded human approval.
 15. Enforce complaints, opt-outs and suppression before any export, including
-    suppression of a whole organization subtree.
+    suppression of a whole organization subtree. A complaint that cannot be
+    resolved to a person is recorded and queued for review, never turned into a
+    suppression row that matches nobody.
+    15b. Make revocation monotonic and audited: once, with a reason, never undone.
 16. Add further jurisdictions, sectors and directory platforms through
     configuration and reusable packages.
 
@@ -57,10 +70,14 @@ Collect only what a public source published about a person's public role.
 organization, professional office address, public work phone, public work email.
 
 **Never collected or inferred**, whatever a source displays: student
-information; Social Security or other government identification numbers; dates
-of birth; personal financial information; medical information; personal email
-addresses, unless a specific future lawful use is explicitly approved; home
-addresses; family information; anything behind authentication.
+information; parent and guardian information; Social Security or other
+government identification numbers; dates of birth; personal financial
+information; medical information; personal email addresses, unless a specific
+future lawful use is explicitly approved; home addresses; family information;
+anything behind authentication.
+
+The boundary is enforced on what is stored, not merely scanned and reported:
+every downstream write reads the sanitized values.
 
 ## Data classes for email
 
@@ -108,6 +125,10 @@ the source policy or the suppression list.
 - [x] A new directory adapter can be added through the documented interface.
 - [x] The neutral core contains no education-specific, state-specific or
       platform-specific code, proven by a test that reads the source.
+- [x] Every table exposed through PostgREST denies anonymous and authenticated
+      access by default, with no permissive policies.
+- [x] A sector pack cannot silently overwrite another pack's reference data.
+- [x] A sector's title rules cannot classify another sector's employees.
 - [x] No production crawl, deployment, commit or push has occurred without
       authorization.
 

@@ -1,5 +1,5 @@
-import type { SqlClient } from '@pan/database';
-import { QueryRepository, type CoverageSummary } from '@pan/database';
+import type { SqlClient } from '@public-workforce/database';
+import { QueryRepository, type CoverageSummary } from '@public-workforce/database';
 
 export interface RunSummaryRow {
   id: string;

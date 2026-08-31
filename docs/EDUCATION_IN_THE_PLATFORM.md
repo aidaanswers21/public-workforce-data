@@ -12,10 +12,19 @@ geographic areas, people, employment assignments, contact points, evidence and
 suppression. It does not know what a school is, what a district is, what a grade
 level is, or that any of those exist.
 
-A school district is an organization with `government_level_code = 'education'`,
-`sector_code = 'education'` and `organization_type_code = 'school_district'`. A
-school beneath it is another organization joined by a `part_of` relationship.
-Neither is a special case anywhere in the core.
+A school district is an organization with `sector_code = 'education'` and
+`organization_type_code = 'school_district'`. Its government level is whatever
+it factually is: `special_district` for an independent district, `municipal` or
+`county` for one run by a general-purpose government, `state` for a state
+education agency. A school beneath it is another organization joined by a
+`part_of` relationship. Neither is a special case anywhere in the core.
+
+**There is no `education` government level.** Government level and sector are
+orthogonal: what kind of government a body is part of, and what kind of work it
+does. An `education` level would force every education organization to share a
+level it does not have, and would put a sector into a list that is not about
+sectors. `packages/database/src/repositories/repositories.test.ts` stores the
+same `school_district` type at three different levels to prove the point.
 
 ## Where education knowledge lives
 
@@ -31,6 +40,19 @@ Nothing else. `tests/neutral-core-guard.test.ts` reads every neutral source file
 and fails on `school`, `teacher`, `faculty`, `campus`, `student`, `classroom`,
 `pupil`, `curriculum`, `isd`, `nces`, `k12`, `kindergarten`, `principal` and
 `superintendent` in executable code.
+
+Two files are exempt by path, each with its own argument:
+
+- `packages/taxonomy/src/reference/domains.ts`, where `k12` sits beside `co`,
+  `ci` and `lib` as a table of `.us` DNS labels. A guard test asserts that file
+  contains no imports, no functions and no branching.
+- `packages/core/src/policy/data-boundary.ts`, which names `student` and `pupil`
+  in order to **refuse** them. That is the opposite of vertical logic: moving
+  the patterns into the education pack would mean student protection applied
+  only where an education pack happened to be registered, and a county library
+  publishing a minor's details is exactly the case nobody would have registered
+  it for. A guard test strips the prohibition patterns and asserts no education
+  term remains anywhere else in the file.
 
 The word `district` is deliberately absent from that list. Special districts and
 congressional districts are general-government concepts, so only the education
@@ -68,16 +90,20 @@ next time:
 - Education field aliases in `generic-json` and education pagination filters in
   `generic-html`, both now vocabulary.
 - `superintendent` and `principal` in the base title rules, now in the education
-  pack.
+  pack, and scoped so they only reach education-sector records.
+- The `education` government level itself, which is now a sector alone.
 
 Each was small, reasonable in context, and would have made the platform
 education-shaped forever.
 
 ## Texas is a jurisdiction, not a state config
 
-`@pan/jurisdiction-texas-education` has the key `texas-education`, the
-government level `education`, and the sector `education`. It is a configuration
-for education in one state, not a configuration for Texas.
+`@public-workforce/jurisdiction-texas-education` has the key `texas-education`,
+the sector `education`, and the government level `special_district`. Texas
+independent school districts are political subdivisions with their own boards
+and taxing authority, which makes them special districts; the sector is what
+they do and the level is what they are. It is a configuration for education in
+one state, not a configuration for Texas.
 
 Texas state agencies, Texas counties and Texas cities would be separate
 jurisdiction configurations at their own government levels, sharing the same
@@ -94,6 +120,9 @@ Ask which of these it is:
   `roleCategories`.
 - **An attribute only schools have**: it goes in the extension table.
 - **A source for one state**: it goes in a jurisdiction configuration.
+
+- **A prohibition**: it goes in the data boundary, because refusing a thing
+  requires naming it and the refusal must not depend on a pack being registered.
 
 If it fits none of those and seems to belong in `packages/core`, that is the
 signal to stop and work out what the neutral version of the idea is.

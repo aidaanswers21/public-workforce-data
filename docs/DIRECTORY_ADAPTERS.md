@@ -2,7 +2,7 @@
 
 ## The contract
 
-`DirectoryAdapter` in `@pan/shared-types`:
+`DirectoryAdapter` in `@public-workforce/shared-types`:
 
 ```ts
 interface DirectoryAdapter {
@@ -48,7 +48,7 @@ without the adapter knowing what kind of organization it is.
    `tsconfig.json` referencing `shared-types`, `core`, `extraction` and `kit`,
    and add it to the root `tsconfig.json`, the `tsconfig.eslint.json` paths and
    the `vitest.config.ts` aliases.
-2. Implement the interface. Use `buildPersonRecord` from `@pan/adapter-kit`
+2. Implement the interface. Use `buildPersonRecord` from `@public-workforce/adapter-kit`
    rather than constructing records by hand: it handles email decoding, shared
    inbox detection, phone normalization and deterministic record keys
    identically on every platform.
@@ -91,7 +91,7 @@ as such in `ListingExtraction.warnings` rather than being guessed at.
 
 ## What the contract tests check
 
-`checkAdapterContract` in `@pan/adapter-kit` enforces what types cannot:
+`checkAdapterContract` in `@public-workforce/adapter-kit` enforces what types cannot:
 
 - `detect` returns this adapter's key and a score in 0..1, deterministically
 - `extractListing` is deterministic for the same input

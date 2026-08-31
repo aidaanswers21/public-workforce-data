@@ -1,6 +1,7 @@
-import type { CrawlRunResult, HarvestedRecord, TitleRuleSet } from '@pan/core';
+import type { CrawlRunResult, HarvestedRecord, TitleRuleSet } from '@public-workforce/core';
 import {
   applyDataBoundary,
+  scanForProhibitedData,
   classifyEmail,
   domainOf,
   isOrganizationLabel,
@@ -13,11 +14,23 @@ import {
   personIdentityKey,
   urlHash,
   type Clock,
-} from '@pan/core';
-import type { DirectoryVocabulary, EmailClassification, Uuid } from '@pan/shared-types';
-import type { Logger } from '@pan/observability';
-import type { CrawlRepository, IngestionRepository, OrganizationRepository } from '@pan/database';
-import { type IngestContactPointInput, type IngestEmailInput } from '@pan/database';
+} from '@public-workforce/core';
+import type {
+  DirectoryVocabulary,
+  EmailClassification,
+  Uuid,
+} from '@public-workforce/shared-types';
+import type { Logger } from '@public-workforce/observability';
+import type {
+  CrawlRepository,
+  IngestionRepository,
+  OrganizationRepository,
+} from '@public-workforce/database';
+import {
+  type IngestContactPointInput,
+  type IngestEmailInput,
+  type SourceDocumentVersionRef,
+} from '@public-workforce/database';
 
 /**
  * The organization a collection run belongs to.
@@ -101,18 +114,13 @@ export class IngestionPipeline {
     for (const page of result.pages) await this.deps.crawl.upsertPage(page);
     for (const error of result.errors) await this.deps.crawl.recordError(error);
 
-    const documentIds = new Map<string, Uuid>();
+    const documents = new Map<string, SourceDocumentVersionRef>();
 
     for (const harvested of result.records) {
-      const sourceDocumentId = await this.resolveDocument(
-        harvested,
-        result.crawlRunId,
-        context,
-        documentIds,
-      );
+      const document = await this.resolveDocument(harvested, result.crawlRunId, context, documents);
       const created = await this.ingestOne(
         harvested,
-        sourceDocumentId,
+        document,
         result.crawlRunId,
         context,
         summary,
@@ -133,12 +141,12 @@ export class IngestionPipeline {
     harvested: HarvestedRecord,
     crawlRunId: Uuid,
     context: IngestContext,
-    cache: Map<string, Uuid>,
-  ): Promise<Uuid> {
+    cache: Map<string, SourceDocumentVersionRef>,
+  ): Promise<SourceDocumentVersionRef> {
     const cached = cache.get(harvested.sourceUrl);
     if (cached !== undefined) return cached;
 
-    const sourceDocumentId = await this.deps.ingestion.upsertSourceDocument({
+    const reference = await this.deps.ingestion.recordSourceDocument({
       url: harvested.sourceUrl,
       urlCanonical: harvested.sourceUrl,
       urlHash: urlHash(harvested.sourceUrl),
@@ -153,20 +161,22 @@ export class IngestionPipeline {
       crawlRunId,
       retrievedAt: harvested.fetchedAt,
     });
-    cache.set(harvested.sourceUrl, sourceDocumentId);
-    return sourceDocumentId;
+    cache.set(harvested.sourceUrl, reference);
+    return reference;
   }
 
   private async ingestOne(
     harvested: HarvestedRecord,
-    sourceDocumentId: Uuid,
+    document: SourceDocumentVersionRef,
     crawlRunId: Uuid,
     context: IngestContext,
     summary: IngestSummary,
   ): Promise<boolean> {
     const record = harvested.record;
 
-    // The public professional data boundary runs before anything is stored.
+    // The public professional data boundary runs before anything is stored, and
+    // everything below reads `safe`, never `record`. Scanning and then storing
+    // the original would make the boundary a report rather than a control.
     const boundary = applyDataBoundary({
       full_name_published: record.fullNamePublished,
       title_published: record.titlePublished,
@@ -176,18 +186,30 @@ export class IngestionPipeline {
     });
     summary.boundaryDrops += boundary.findings.length;
     for (const finding of boundary.findings) {
+      // The field and the kind, never the value. A log is the one place an
+      // out-of-scope value would survive being dropped from the database.
       this.deps.logger.warn(
         { field: finding.field, kind: finding.kind, sourceUrl: harvested.sourceUrl },
         'value dropped at the public professional data boundary',
       );
     }
-    if (boundary.allowed['full_name_published'] === undefined) return false;
 
-    const parsed = parsePersonName(record.fullNamePublished);
-    const title = normalizeTitle(record.titlePublished, context.titleRules);
+    const safe = {
+      fullNamePublished: boundary.allowed['full_name_published'] ?? null,
+      titlePublished: boundary.allowed['title_published'] ?? null,
+      departmentPublished: boundary.allowed['department_published'] ?? null,
+      organizationPublished: boundary.allowed['organization_published'] ?? null,
+      phonePublished: boundary.allowed['phone_published'] ?? null,
+    };
+    // Without a name there is no person to record. A dropped name is a dropped
+    // record, not a record with a hole in it.
+    if (safe.fullNamePublished === null) return false;
+
+    const parsed = parsePersonName(safe.fullNamePublished);
+    const title = normalizeTitle(safe.titlePublished, context.titleRules);
     // An organization label must never vouch for a role inbox as personal.
     const nameForClassification = isOrganizationLabel(
-      record.fullNamePublished,
+      safe.fullNamePublished,
       context.vocabulary.organizationLabelWords,
     )
       ? null
@@ -198,6 +220,19 @@ export class IngestionPipeline {
       const [localPart, domain] = email.address.split('@');
       if (domain !== undefined && isPersonalEmailDomain(domain)) {
         summary.personalEmailsDropped += 1;
+        continue;
+      }
+      // An address is a value like any other: a student or guardian mailbox is
+      // out of scope even on a domain we are allowed to read.
+      const addressFindings = scanForProhibitedData('email_published', email.address);
+      if (addressFindings.length > 0) {
+        summary.boundaryDrops += addressFindings.length;
+        for (const finding of addressFindings) {
+          this.deps.logger.warn(
+            { field: finding.field, kind: finding.kind, sourceUrl: harvested.sourceUrl },
+            'address dropped at the public professional data boundary',
+          );
+        }
         continue;
       }
 
@@ -230,27 +265,27 @@ export class IngestionPipeline {
     }
 
     const contactPoints: IngestContactPointInput[] = [];
-    const phone = record.phonePublished === null ? null : normalizePhone(record.phonePublished);
+    const phone = safe.phonePublished === null ? null : normalizePhone(safe.phonePublished);
     if (phone !== null) {
       contactPoints.push({
         contactPointTypeCode: 'work_phone',
         value: phone,
         valueNormalized: phone.replace(/\D/g, ''),
-        sourceValue: record.phonePublished,
+        sourceValue: safe.phonePublished,
       });
       summary.contactPoints += 1;
     }
 
     // A published department becomes a unit when the source named one.
     let organizationalUnitId: Uuid | null = null;
-    if (record.departmentPublished !== null) {
-      const unitName = normalizeUnitName(record.departmentPublished);
+    if (safe.departmentPublished !== null) {
+      const unitName = normalizeUnitName(safe.departmentPublished);
       organizationalUnitId = await this.deps.organizations.upsertUnit({
         organizationId: context.organizationId,
         name: unitName,
         nameNormalized: unitName.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
-        nameSourceValue: record.departmentPublished,
-        sourceDocumentId,
+        nameSourceValue: safe.departmentPublished,
+        sourceDocumentId: document.documentId,
         crawlRunId,
         extractionMethod: record.extractionMethod,
         confidence: record.confidence,
@@ -263,10 +298,10 @@ export class IngestionPipeline {
       organizationId: context.organizationId,
       organizationalUnitId,
       dutyLocationId: null,
-      fullNamePublished: record.fullNamePublished,
+      fullNamePublished: safe.fullNamePublished,
       nameParts: parsed,
       identityKey: personIdentityKey({ organizationId: context.organizationId, parsed }),
-      titlePublished: record.titlePublished,
+      titlePublished: safe.titlePublished,
       titleNormalized: title.titleNormalized.length > 0 ? title.titleNormalized : null,
       roleCategoryCode: title.roleCategoryCode,
       jobFamilyCode: title.jobFamilyCode,
@@ -276,10 +311,10 @@ export class IngestionPipeline {
       normalizationRuleSource: title.ruleSource,
       taxonomyVersion: title.taxonomyVersion,
       normalizationConfidence: title.confidence,
-      departmentPublished: record.departmentPublished,
+      departmentPublished: safe.departmentPublished,
       emails,
       contactPoints,
-      sourceDocumentId,
+      sourceDocumentId: document.documentId,
       crawlRunId,
       extractionMethod: record.extractionMethod,
       confidence: record.confidence,
@@ -288,7 +323,9 @@ export class IngestionPipeline {
 
     await this.recordObservations(
       harvested,
-      sourceDocumentId,
+      safe,
+      emails,
+      document,
       crawlRunId,
       result.personId,
       context,
@@ -303,10 +340,17 @@ export class IngestionPipeline {
    * Employment evidence and contact evidence are recorded separately, so a
    * contact detail can be revised without disturbing the proof that the person
    * holds the role.
+   *
+   * Every value here comes from the sanitized record and the emails that
+   * survived classification. Observations are the platform's most durable
+   * evidence, so writing a raw value into one would outlive every other place
+   * the boundary removed it.
    */
   private async recordObservations(
     harvested: HarvestedRecord,
-    sourceDocumentId: Uuid,
+    safe: SanitizedRecord,
+    emails: readonly IngestEmailInput[],
+    document: SourceDocumentVersionRef,
     crawlRunId: Uuid,
     personId: Uuid,
     context: IngestContext,
@@ -317,36 +361,38 @@ export class IngestionPipeline {
       [
         'employment',
         'full_name_published',
-        record.fullNamePublished,
-        parsePersonName(record.fullNamePublished).displayName,
+        safe.fullNamePublished,
+        safe.fullNamePublished === null
+          ? null
+          : parsePersonName(safe.fullNamePublished).displayName,
       ],
       [
         'employment',
         'title_published',
-        record.titlePublished,
-        normalizeTitle(record.titlePublished, context.titleRules).titleNormalized || null,
+        safe.titlePublished,
+        normalizeTitle(safe.titlePublished, context.titleRules).titleNormalized || null,
       ],
       [
         'employment',
         'department_published',
-        record.departmentPublished,
-        record.departmentPublished === null ? null : normalizeUnitName(record.departmentPublished),
+        safe.departmentPublished,
+        safe.departmentPublished === null ? null : normalizeUnitName(safe.departmentPublished),
       ],
       [
         'organization',
         'organization_published',
-        record.organizationPublished,
-        record.organizationPublished,
+        safe.organizationPublished,
+        safe.organizationPublished,
       ],
       [
         'contact',
         'phone_published',
-        record.phonePublished,
-        record.phonePublished === null ? null : normalizePhone(record.phonePublished),
+        safe.phonePublished,
+        safe.phonePublished === null ? null : normalizePhone(safe.phonePublished),
       ],
-      ...record.emails.map(
+      ...emails.map(
         (email) =>
-          ['contact', `email_published:${email.address}`, email.raw, email.address] as [
+          ['contact', `email_published:${email.address}`, email.sourceValue, email.address] as [
             string,
             string,
             string | null,
@@ -358,7 +404,7 @@ export class IngestionPipeline {
     for (const [evidenceClass, field, valueRaw, valueNormalized] of fields) {
       if (valueRaw === null) continue;
       await this.deps.ingestion.recordObservation({
-        sourceDocumentId,
+        sourceDocumentVersionId: document.versionId,
         crawlRunId,
         evidenceClass,
         entityType: 'person',
@@ -375,4 +421,19 @@ export class IngestionPipeline {
       summary.observations += 1;
     }
   }
+}
+
+/**
+ * What survived the boundary.
+ *
+ * A separate shape from the extracted record on purpose: it is impossible to
+ * reach for a raw field through this type, so the compiler enforces what the
+ * comment asks for.
+ */
+interface SanitizedRecord {
+  fullNamePublished: string | null;
+  titlePublished: string | null;
+  departmentPublished: string | null;
+  organizationPublished: string | null;
+  phonePublished: string | null;
 }

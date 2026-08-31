@@ -4,8 +4,8 @@ import {
   nowTimestamp,
   type Clock,
   type ExportResult,
-} from '@pan/core';
-import type { Timestamp, Uuid } from '@pan/shared-types';
+} from '@public-workforce/core';
+import type { Timestamp, Uuid } from '@public-workforce/shared-types';
 import type { SqlClient } from '../client.js';
 import { ComplianceRepository } from './compliance.js';
 import { QueryRepository, type ExportFilters } from './queries.js';

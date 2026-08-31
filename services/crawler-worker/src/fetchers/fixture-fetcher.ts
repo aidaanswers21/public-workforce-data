@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { extname } from 'node:path';
-import type { FetchOutcome, FetchRequest, Fetcher } from '@pan/shared-types';
-import { canonicalizeUrl, contentHash } from '@pan/core';
+import type { FetchOutcome, FetchRequest, Fetcher } from '@public-workforce/shared-types';
+import { canonicalizeUrl, contentHash } from '@public-workforce/core';
 
 export interface FixtureRoute {
   url: string;

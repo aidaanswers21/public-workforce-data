@@ -16,6 +16,8 @@ export const PROHIBITED_DATA_KINDS = [
   'family_information',
   'personal_email',
   'credential',
+  'student_information',
+  'guardian_information',
 ] as const;
 export type ProhibitedDataKind = (typeof PROHIBITED_DATA_KINDS)[number];
 
@@ -39,6 +41,47 @@ const FAMILY_LABEL =
   /\b(spouse|husband|wife|child(ren)?|dependent|emergency\s*contact|next\s*of\s*kin)\b/i;
 const CREDENTIAL_LABEL =
   /\b(password|passcode|api[\s_-]?key|secret|token|pin\b|security\s*question)\b/i;
+
+/**
+ * Student and guardian detection, deliberately narrow.
+ *
+ * The word "student" is everywhere in legitimate public employment: Director of
+ * Student Services, Student Affairs Coordinator, Dean of Students. Rejecting
+ * the word would throw away real employees and would train whoever reads the
+ * drop counter to ignore it.
+ *
+ * So these match two things only, and never the bare word:
+ *
+ *   - a field that names a student or guardian as the person it describes, such
+ *     as `student_name`, `student_id`, `pupil_dob`, `parent_email`;
+ *   - a value that identifies a student by school position, such as a grade or
+ *     a graduating class attached to a person.
+ *
+ * A title is never scanned for these, because a title is a description of a job
+ * rather than of a person.
+ */
+const STUDENT_SUBJECT_LABEL =
+  /\b(student|pupil|learner|scholar)[\s_-]*(name|id|number|email|address|phone|photo|record|roster|schedule|grade|gpa|dob|birth|iep|enrol?lment)\b/i;
+const STUDENT_POSSESSIVE_LABEL =
+  /\b(name|id|number|email|address|phone|photo|record|roster|schedule|grade|gpa|dob)[\s_-]*of[\s_-]*(student|pupil)\b/i;
+const STUDENT_VALUE =
+  /\b(class\s*of\s*(19|20)\d{2}|(\d{1,2})(st|nd|rd|th)\s*grade\s*student|student\s*id\s*[:#]?\s*\w+)\b/i;
+const GUARDIAN_LABEL =
+  /\b(parent|guardian|caregiver|custodian[\s_-]*of[\s_-]*record|mother|father)[\s_-]*(name|id|email|address|phone|contact|information)\b/i;
+
+/** Fields that describe a job rather than a person, so the student rules skip them. */
+const ROLE_DESCRIPTION_FIELDS = new Set([
+  'title_published',
+  'title',
+  'role',
+  'position',
+  'job_title',
+  'department_published',
+  'department',
+  'organization_published',
+  'organization',
+  'unit',
+]);
 
 /**
  * Free email providers.
@@ -154,6 +197,30 @@ export function scanForProhibitedData(field: string, value: string): ProhibitedD
   }
   if (CREDENTIAL_LABEL.test(label)) {
     findings.push({ kind: 'credential', field, reason: 'label indicates authentication material' });
+  }
+
+  // Job descriptions legitimately contain these words. "Director of Student
+  // Services" is an employee, and treating the word as the signal would drop
+  // them.
+  if (!ROLE_DESCRIPTION_FIELDS.has(field)) {
+    if (
+      STUDENT_SUBJECT_LABEL.test(label) ||
+      STUDENT_POSSESSIVE_LABEL.test(label) ||
+      STUDENT_VALUE.test(value)
+    ) {
+      findings.push({
+        kind: 'student_information',
+        field,
+        reason: 'label or value identifies a student rather than an employee',
+      });
+    }
+    if (GUARDIAN_LABEL.test(label)) {
+      findings.push({
+        kind: 'guardian_information',
+        field,
+        reason: 'label identifies a parent or guardian rather than an employee',
+      });
+    }
   }
 
   return findings;

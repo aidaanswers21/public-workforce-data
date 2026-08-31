@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createLogger } from '@pan/observability';
+import { createLogger } from '@public-workforce/observability';
 import { PostgresClient } from '../pg.js';
 import { checkMigrations, loadMigrations, migrate, rollback } from '../migrations.js';
 

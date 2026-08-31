@@ -2,9 +2,13 @@
 import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CrawlEngine, PermissiveRobotsProvider, normalizeOrganizationName } from '@pan/core';
-import { createLogger } from '@pan/observability';
-import { genericHtmlAdapter } from '@pan/adapter-generic-html';
+import {
+  CrawlEngine,
+  PermissiveRobotsProvider,
+  normalizeOrganizationName,
+} from '@public-workforce/core';
+import { createLogger } from '@public-workforce/observability';
+import { genericHtmlAdapter } from '@public-workforce/adapter-generic-html';
 import {
   ComplianceRepository,
   CrawlRepository,
@@ -14,11 +18,11 @@ import {
   QueryRepository,
   TestDatabase,
   seedReferenceData,
-} from '@pan/database';
-import type { Uuid } from '@pan/shared-types';
+} from '@public-workforce/database';
+import type { Uuid } from '@public-workforce/shared-types';
 import { FixtureFetcher } from '../fetchers/fixture-fetcher.js';
 import { IngestionPipeline, type IngestContext } from '../pipeline.js';
-import { buildCrawlPolicy, buildTaxonomy, buildTitleRuleSet } from '../registries.js';
+import { buildCrawlPolicy, buildScopedRules, buildTaxonomy } from '../registries.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..');
@@ -48,7 +52,11 @@ async function main(): Promise<void> {
   const logger = createLogger({ name: 'fixture-crawl' });
   const database = await TestDatabase.create();
   const taxonomy = buildTaxonomy();
-  const titleRules = buildTitleRuleSet(taxonomy);
+  // An independent school district: education-sector work at the
+  // special-district level. Both facts come from the jurisdiction
+  // configuration, and together they decide which packs may read these pages.
+  const scope = { sectorCode: 'education', governmentLevelCode: 'special_district' };
+  const { titleRules, vocabulary } = buildScopedRules(taxonomy, scope);
 
   try {
     await seedReferenceData(database, taxonomy);
@@ -61,7 +69,7 @@ async function main(): Promise<void> {
     const pipeline = new IngestionPipeline({ ingestion, crawl, organizations, logger });
 
     const now = new Date().toISOString();
-    const bootstrapDocumentId = await ingestion.upsertSourceDocument({
+    const bootstrap = await ingestion.recordSourceDocument({
       url: `${HOST}/`,
       urlCanonical: `${HOST}/`,
       urlHash: 'bootstrap',
@@ -94,32 +102,32 @@ async function main(): Promise<void> {
     const jurisdictionId = await organizations.upsertJurisdiction({
       code: 'us-tx-education',
       name: 'Texas public education',
-      governmentLevelCode: 'education',
+      governmentLevelCode: 'special_district',
       geographicAreaId: stateArea,
     });
 
-    const suffixes = taxonomy.vocabulary.organizationNameSuffixes;
+    const suffixes = vocabulary.organizationNameSuffixes;
     const parent = await organizations.upsertOrganization({
       organizationTypeCode: 'school_district',
-      governmentLevelCode: 'education',
+      governmentLevelCode: 'special_district',
       sectorCode: 'education',
       jurisdictionId,
       name: 'Sample Independent School District',
       nameNormalized: normalizeOrganizationName('Sample Independent School District', suffixes),
       primaryDomain: 'sample-isd.example.org',
-      sourceDocumentId: bootstrapDocumentId,
+      sourceDocumentId: bootstrap.documentId,
       extractionMethod: 'manual',
       confidence: 1,
       observedAt: now,
     });
     const child = await organizations.upsertOrganization({
       organizationTypeCode: 'school',
-      governmentLevelCode: 'education',
+      governmentLevelCode: 'special_district',
       sectorCode: 'education',
       jurisdictionId,
       name: 'Sample High School',
       nameNormalized: normalizeOrganizationName('Sample High School', suffixes),
-      sourceDocumentId: bootstrapDocumentId,
+      sourceDocumentId: bootstrap.documentId,
       extractionMethod: 'manual',
       confidence: 1,
       observedAt: now,
@@ -129,7 +137,7 @@ async function main(): Promise<void> {
       childOrganizationId: child.id,
       relationshipTypeCode: 'part_of',
       effectiveFrom: '2020-08-01',
-      sourceDocumentId: bootstrapDocumentId,
+      sourceDocumentId: bootstrap.documentId,
       extractionMethod: 'manual',
       confidence: 1,
       observedAt: now,
@@ -153,11 +161,11 @@ async function main(): Promise<void> {
     const context: IngestContext = {
       organizationId: child.id,
       organizationName: 'Sample High School',
-      governmentLevelCode: 'education',
+      governmentLevelCode: 'special_district',
       sectorCode: 'education',
       jurisdictionId,
       sourceTypeCode: 'html_directory',
-      vocabulary: taxonomy.vocabulary,
+      vocabulary,
       titleRules,
     };
 
@@ -175,7 +183,7 @@ async function main(): Promise<void> {
         adapter: genericHtmlAdapter,
         organizationName: 'Sample High School',
         parentOrganizationName: 'Sample Independent School District',
-        vocabulary: taxonomy.vocabulary,
+        vocabulary,
         collectionMode: 'fixture',
         policy: buildCrawlPolicy({ requestDelayMs: 0, respectRobots: false }),
       });

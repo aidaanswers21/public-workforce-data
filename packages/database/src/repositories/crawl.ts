@@ -6,7 +6,7 @@ import type {
   CrawlRunStatus,
   Timestamp,
   Uuid,
-} from '@pan/shared-types';
+} from '@public-workforce/shared-types';
 import type { SqlClient } from '../client.js';
 
 export interface StartRunInput {

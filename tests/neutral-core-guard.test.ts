@@ -124,15 +124,29 @@ function stripCommentsAndStrings(source: string): string {
 }
 
 /**
- * The single exemption, by exact path.
+ * Two exemptions, by exact path, each argued rather than assumed.
  *
- * `US_LOCALITY_DOMAIN_LABELS` is a table of DNS labels published under `.us`.
- * "k12" appears there beside "co", "ci" and "lib" as registry data, not as a
- * branch on a vertical, and the crawler needs all of them to tell one public
- * body's site from another's. Any further exemption should be argued for on the
- * same terms or refused.
+ * `packages/taxonomy/src/reference/domains.ts` is a table of DNS labels
+ * published under `.us`. "k12" appears there beside "co", "ci" and "lib" as
+ * registry data, not as a branch on a vertical, and the crawler needs all of
+ * them to tell one public body's site from another's.
+ *
+ * `packages/core/src/policy/data-boundary.ts` names "student" and "pupil" in
+ * order to refuse them. That is the opposite of vertical logic: the boundary
+ * exists to keep student information out of the platform, and a prohibition has
+ * to name the thing it prohibits. Moving these patterns into the education
+ * sector pack would be actively harmful, because the protection would then
+ * apply only where an education pack happened to be registered, and a county
+ * library or a parks department publishing a minor's details is exactly the
+ * case nobody would have registered it for.
+ *
+ * Both files are further constrained by the test below. Any third exemption
+ * should be argued on the same terms or refused.
  */
-const EXEMPT_FILES = new Set(['packages/taxonomy/src/reference/domains.ts']);
+const EXEMPT_FILES = new Set([
+  'packages/taxonomy/src/reference/domains.ts',
+  'packages/core/src/policy/data-boundary.ts',
+]);
 
 function collectSourceFiles(target: string): string[] {
   const absolute = join(repoRoot, target);
@@ -187,16 +201,61 @@ describe('the neutral core carries no vertical-specific knowledge', () => {
     expect(NEUTRAL_FILES.length).toBeGreaterThan(25);
   });
 
-  it('exempts exactly one file, and that file is only a table of DNS labels', () => {
-    expect([...EXEMPT_FILES]).toEqual(['packages/taxonomy/src/reference/domains.ts']);
+  it('exempts exactly two files, each for a stated reason', () => {
+    expect([...EXEMPT_FILES]).toEqual([
+      'packages/taxonomy/src/reference/domains.ts',
+      'packages/core/src/policy/data-boundary.ts',
+    ]);
+  });
+
+  it('the domain table is data only, with no logic to hide a branch in', () => {
     const source = readFileSync(
       join(repoRoot, 'packages/taxonomy/src/reference/domains.ts'),
       'utf8',
     );
-    // Data only: no imports, no functions, no branching.
     expect(source).not.toMatch(/\bimport\b/);
     expect(source).not.toMatch(/\bfunction\b/);
     expect(source).not.toMatch(/\bif\s*\(/);
+  });
+
+  it('the data boundary names a vertical only to refuse it, never to read it', () => {
+    const source = readFileSync(
+      join(repoRoot, 'packages/core/src/policy/data-boundary.ts'),
+      'utf8',
+    );
+    let code = stripCommentsAndStrings(source);
+
+    // Remove the prohibition machinery: the patterns that detect student and
+    // guardian data, the kinds they raise, and the field list that exempts job
+    // descriptions from them. Whatever education terms are left after that are
+    // the platform reading a vertical rather than refusing one.
+    const prohibitions = [
+      /const STUDENT_SUBJECT_LABEL =[\s\S]*?;\n/,
+      /const STUDENT_POSSESSIVE_LABEL =[\s\S]*?;\n/,
+      /const STUDENT_VALUE =[\s\S]*?;\n/,
+      /const GUARDIAN_LABEL =[\s\S]*?;\n/,
+      /const ROLE_DESCRIPTION_FIELDS = new Set\(\[[\s\S]*?\]\);\n/,
+      /'student_information',?\n/g,
+      /'guardian_information',?\n/g,
+      /kind: 'student_information',\n/,
+      /kind: 'guardian_information',\n/,
+      /STUDENT_SUBJECT_LABEL\.test\(label\)/,
+      /STUDENT_POSSESSIVE_LABEL\.test\(label\)/,
+      /STUDENT_VALUE\.test\(value\)/,
+      /GUARDIAN_LABEL\.test\(label\)/,
+      // The operator-facing message on a finding. A sentence, not a branch.
+      /reason: '[^']*',?\n/g,
+    ];
+    for (const pattern of prohibitions) code = code.replace(pattern, ' ');
+
+    const remaining = code
+      .split('\n')
+      .filter((line) => /\b(student|pupil|school|teacher|campus|k12|nces)\b/i.test(line))
+      .map((line) => line.trim());
+    expect(remaining, 'data boundary names a vertical outside a prohibition').toEqual([]);
+
+    // And it imports nothing from a vertical, so it cannot consult one.
+    expect(source).not.toMatch(/@pan\/(sector-|jurisdiction-)/);
   });
 
   it('contains no education-specific terms in executable code', () => {
@@ -258,7 +317,10 @@ describe('vertical knowledge lives where it belongs', () => {
       join(repoRoot, 'packages/jurisdiction-config/texas-education/src/index.ts'),
       'utf8',
     );
-    expect(source).toMatch(/governmentLevelCode: 'education'/);
     expect(source).toMatch(/key: 'texas-education'/);
+    expect(source).toMatch(/sectorCodes: \['education'\]/);
+    // Education is the sector; the level is what the body actually is.
+    expect(source).not.toMatch(/governmentLevelCode: 'education'/);
+    expect(source).toMatch(/governmentLevelCode: 'special_district'/);
   });
 });

@@ -1,7 +1,11 @@
-import type { PaginationKind, PaginationPlan, PaginationRequest } from '@pan/shared-types';
-import { canonicalizeUrl, resolveUrl } from '@pan/core';
-import type { Html } from '@pan/extraction';
-import { textOf } from '@pan/extraction';
+import type {
+  PaginationKind,
+  PaginationPlan,
+  PaginationRequest,
+} from '@public-workforce/shared-types';
+import { canonicalizeUrl, resolveUrl } from '@public-workforce/core';
+import type { Html } from '@public-workforce/extraction';
+import { textOf } from '@public-workforce/extraction';
 
 const NEXT_TEXT = /^(next|next page|next\s*[>»›]|[>»›]|older|more results)$/i;
 const PREV_TEXT = /^(prev|previous|back|[<«‹])$/i;
