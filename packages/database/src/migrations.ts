@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
-import { execScript, type SqlClient } from './client.js';
+import { execScript, runAtomically, type SqlClient } from './client.js';
 
 export interface Migration {
   version: string;
@@ -73,9 +73,18 @@ export interface MigrateResult {
 /**
  * Apply every migration not yet recorded, in version order.
  *
+ * Each migration and its bookkeeping row commit together, in one transaction.
+ * Without that, a migration that fails halfway leaves the schema partly changed
+ * and unrecorded, so the next run replays statements against objects that
+ * already exist and fails for a second, unrelated reason. PostgreSQL has
+ * transactional DDL, so the whole of a migration either happens or does not.
+ *
  * A checksum mismatch on an already-applied migration is a hard error: editing
  * a shipped migration silently diverges environments, and the fix is a new
  * migration, not a rewritten one.
+ *
+ * This runner is for local development and the test harness. Supabase owns
+ * production migration state; see `docs/OPERATIONS.md`.
  */
 export async function migrate(
   client: SqlClient,
@@ -99,11 +108,13 @@ export async function migrate(
       skipped.push(migration.version);
       continue;
     }
-    await execScript(client, migration.upSql);
-    await client.query(
-      'insert into schema_migrations (version, name, checksum) values ($1, $2, $3)',
-      [migration.version, migration.name, migration.checksum],
-    );
+    await runAtomically(client, async (tx) => {
+      await execScript(tx, migration.upSql);
+      await tx.query(
+        'insert into schema_migrations (version, name, checksum) values ($1, $2, $3)',
+        [migration.version, migration.name, migration.checksum],
+      );
+    });
     applied.push(migration.version);
   }
 
@@ -126,8 +137,10 @@ export async function rollback(
     if (migration.downSql === null) {
       throw new Error(`migration ${migration.version}_${migration.name} has no down script`);
     }
-    await execScript(client, migration.downSql);
-    await client.query('delete from schema_migrations where version = $1', [migration.version]);
+    await runAtomically(client, async (tx) => {
+      await execScript(tx, migration.downSql as string);
+      await tx.query('delete from schema_migrations where version = $1', [migration.version]);
+    });
     reverted.push(migration.version);
   }
 

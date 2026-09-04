@@ -1,4 +1,9 @@
-import type { ExtractedPersonRecord, Provenance, Timestamp, Uuid } from '@pan/shared-types';
+import type {
+  ExtractedPersonRecord,
+  Provenance,
+  Timestamp,
+  Uuid,
+} from '@public-workforce/shared-types';
 import { normalizeKey } from './normalize/text.js';
 import { parsePersonName, personIdentityKey } from './normalize/names.js';
 
@@ -29,24 +34,12 @@ export function dedupeExtractedRecords(
   return [...bySoftKey.values()];
 }
 
-/**
- * Identity of the person a record describes, independent of the page it came from.
- *
- * `recordKey` is deliberately scoped to (adapter, source url) so that recrawling
- * one page is idempotent. That makes it useless for answering "have we already
- * seen this person on a different page", which is what the crawl engine's
- * progress guard needs, so the two keys are kept separate.
- */
-export function recordIdentityFingerprint(record: ExtractedPersonRecord): string {
-  return softIdentityKey(record);
-}
-
 function softIdentityKey(record: ExtractedPersonRecord): string {
   const parsed = parsePersonName(record.fullNamePublished);
   const name = normalizeKey(`${parsed.lastName ?? ''} ${parsed.firstName ?? ''}`);
   const title = normalizeKey(record.titlePublished ?? '');
-  const school = normalizeKey(record.schoolPublished ?? '');
-  return [name, title, school].join('|');
+  const organization = normalizeKey(record.organizationPublished ?? '');
+  return [name, title, organization].join('|');
 }
 
 /** Keep the higher-confidence record's fields, union the emails. */
@@ -60,7 +53,7 @@ function mergeExtracted(a: ExtractedPersonRecord, b: ExtractedPersonRecord): Ext
     ...primary,
     titlePublished: primary.titlePublished ?? secondary.titlePublished,
     departmentPublished: primary.departmentPublished ?? secondary.departmentPublished,
-    schoolPublished: primary.schoolPublished ?? secondary.schoolPublished,
+    organizationPublished: primary.organizationPublished ?? secondary.organizationPublished,
     phonePublished: primary.phonePublished ?? secondary.phonePublished,
     profileUrl: primary.profileUrl ?? secondary.profileUrl,
     emails: [...emails.values()],
@@ -86,10 +79,10 @@ export interface PersonMatch {
  * Resolve an extracted record to an existing person.
  *
  * A published email is the strongest signal and is tried first: two "J. Smith"
- * rows sharing `jsmith@district.org` are the same person, while two identical
- * names in different districts are not. Falling back to the identity key keeps
+ * rows sharing one work address are the same person, while two identical names
+ * at different organizations are not. Falling back to the identity key keeps
  * resolution scoped to one organization, so distinct people who happen to share
- * a name across districts stay distinct.
+ * a name across two public bodies stay distinct.
  */
 export class PersonResolver {
   private readonly byEmail = new Map<string, Uuid>();
@@ -111,8 +104,7 @@ export class PersonResolver {
   }
 
   resolve(input: {
-    stateCode: string;
-    orgScopeId: string;
+    organizationId: string;
     fullNamePublished: string;
     publishedEmails: readonly string[];
   }): PersonMatch {
@@ -124,11 +116,7 @@ export class PersonResolver {
     }
 
     const parsed = parsePersonName(input.fullNamePublished);
-    const identityKey = personIdentityKey({
-      stateCode: input.stateCode,
-      orgScopeId: input.orgScopeId,
-      parsed,
-    });
+    const identityKey = personIdentityKey({ organizationId: input.organizationId, parsed });
     const personId = this.byIdentityKey.get(identityKey);
     if (personId !== undefined) {
       return { personId, strategy: 'identity_key', confidence: parsed.lowConfidence ? 0.6 : 0.85 };

@@ -10,6 +10,7 @@
     { "path": "../../packages/shared-types" },
     { "path": "../../packages/core" },
     { "path": "../../packages/database" },
-    { "path": "../../packages/observability" }
+    { "path": "../../packages/observability" },
+    { "path": "../../services/crawler-worker" }
   ]
 }

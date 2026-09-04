@@ -1,0 +1,5 @@
+drop index suppression_export_purpose_idx;
+drop index suppression_government_level_idx;
+drop index suppression_source_document_idx;
+drop index suppression_geographic_area_idx;
+drop index email_addresses_person_idx;

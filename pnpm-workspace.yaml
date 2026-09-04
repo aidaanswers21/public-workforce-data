@@ -3,4 +3,5 @@ packages:
   - 'services/*'
   - 'packages/*'
   - 'packages/directory-adapters/*'
-  - 'packages/state-config/*'
+  - 'packages/jurisdiction-config/*'
+  - 'packages/sectors/*'

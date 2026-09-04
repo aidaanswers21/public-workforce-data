@@ -1,0 +1,2 @@
+drop trigger organization_relationships_cycle_guard on organization_relationships;
+drop function organization_relationships_reject_cycle();

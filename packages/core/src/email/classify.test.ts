@@ -4,6 +4,24 @@ import { canReplaceClassification, classifyEmail, localPartMatchesName } from '.
 
 const jane = parsePersonName('Jane Smith');
 
+/** A small vocabulary. The composed one is exercised in the sector tests. */
+const SHARED_INBOX = {
+  localParts: [
+    'info',
+    'office',
+    'frontoffice',
+    'webmaster',
+    'noreply',
+    'clerk',
+    'permits',
+    'records',
+    'foia',
+    'dispatch',
+    'hr',
+  ],
+  prefixes: ['info', 'office', 'hr', 'noreply'],
+};
+
 describe('classifyEmail', () => {
   it('marks a plainly displayed address as published', () => {
     const result = classifyEmail({
@@ -36,24 +54,40 @@ describe('classifyEmail', () => {
   });
 
   it.each([
-    'info@sample-isd.example.org',
-    'office@sample-isd.example.org',
+    'info@agency.example.gov',
+    'office@county.example.org',
     'frontoffice@sample-isd.example.org',
-    'webmaster@sample-isd.example.org',
-    'attendance@sample-isd.example.org',
-    'noreply@sample-isd.example.org',
+    'webmaster@city.example.gov',
+    'foia@agency.example.gov',
+    'noreply@county.example.org',
   ])('classifies %s as a general inbox', (address) => {
-    const result = classifyEmail({ address, obfuscation: 'none', origin: 'observed' });
+    const result = classifyEmail({
+      address,
+      obfuscation: 'none',
+      origin: 'observed',
+      sharedInbox: SHARED_INBOX,
+    });
     expect(result.classification).toBe('general_inbox');
     expect(result.isGeneralInbox).toBe(true);
   });
 
+  it('has no built-in inbox vocabulary: with none supplied nothing is shared', () => {
+    const result = classifyEmail({
+      address: 'info@agency.example.gov',
+      obfuscation: 'none',
+      origin: 'observed',
+    });
+    expect(result.classification).toBe('published');
+    expect(result.isGeneralInbox).toBe(false);
+  });
+
   it('does not treat a person address as a shared inbox just because it starts with a role word', () => {
     const result = classifyEmail({
-      address: 'hrobinson@sample-isd.example.org',
+      address: 'hrobinson@county.example.org',
       obfuscation: 'none',
       origin: 'observed',
       personName: parsePersonName('Helen Robinson'),
+      sharedInbox: SHARED_INBOX,
     });
     expect(result.classification).toBe('published');
   });
@@ -90,17 +124,30 @@ describe('localPartMatchesName', () => {
 });
 
 describe('canReplaceClassification', () => {
-  it('never lets an inferred candidate overwrite a published address', () => {
-    expect(canReplaceClassification('published', 'inferred_candidate')).toBe(false);
-    expect(canReplaceClassification('decoded_published', 'inferred_candidate')).toBe(false);
+  it('never replaces a published address', () => {
+    for (const incoming of [
+      'published',
+      'decoded_published',
+      'general_inbox',
+      'invalid',
+    ] as const) {
+      expect(canReplaceClassification('published', incoming), incoming).toBe(false);
+    }
   });
 
-  it('lets a published address replace a decoded or inferred one', () => {
+  it('upgrades to published when a later page shows the address in the clear', () => {
     expect(canReplaceClassification('decoded_published', 'published')).toBe(true);
-    expect(canReplaceClassification('inferred_candidate', 'published')).toBe(true);
+    expect(canReplaceClassification('general_inbox', 'published')).toBe(true);
+    expect(canReplaceClassification('invalid', 'published')).toBe(true);
   });
 
-  it('does not replace a published address with another published one', () => {
-    expect(canReplaceClassification('published', 'published')).toBe(false);
+  it('changes nothing else', () => {
+    // Not a ranking. Anything other than plain-text publication leaves the
+    // stored classification alone, which is exactly what the SQL does.
+    for (const stored of ['decoded_published', 'general_inbox', 'invalid'] as const) {
+      for (const incoming of ['decoded_published', 'general_inbox', 'invalid'] as const) {
+        expect(canReplaceClassification(stored, incoming), `${stored} <- ${incoming}`).toBe(false);
+      }
+    }
   });
 });

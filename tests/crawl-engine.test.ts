@@ -1,11 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import { CrawlEngine, fixedClock, withPolicyDefaults } from '@pan/core';
-import { createSilentLogger } from '@pan/observability';
-import { genericHtmlAdapter } from '@pan/adapter-generic-html';
-import { genericJsonAdapter } from '@pan/adapter-generic-json';
-import type { CrawlCheckpoint, CrawlJob } from '@pan/core';
+import {
+  CrawlEngine,
+  SourcePolicyRegistry,
+  fixedClock,
+  withPolicyDefaults,
+} from '@public-workforce/core';
+import { createSilentLogger } from '@public-workforce/observability';
+import { genericHtmlAdapter } from '@public-workforce/adapter-generic-html';
+import { genericJsonAdapter } from '@public-workforce/adapter-generic-json';
+import type { CrawlJob } from '@public-workforce/core';
+import type { CrawlCheckpoint, SourcePolicyRecord } from '@public-workforce/shared-types';
 import { MapFetcher, StubRobotsProvider, recordingSleep } from './support/fetchers.js';
 import { readFixture } from './support/fixtures.js';
+import { allSectorsTaxonomy } from './support/taxonomy.js';
+
+const VOCABULARY = allSectorsTaxonomy().vocabulary;
 
 const CLOCK = fixedClock('2026-06-01T00:00:00.000Z');
 const LOGGER = createSilentLogger();
@@ -29,6 +38,9 @@ function job(overrides: Partial<CrawlJob> & { seedUrl: string }): CrawlJob {
     crawlRunId: 'run-1',
     crawlTargetId: 'target-1',
     adapter: genericHtmlAdapter,
+    vocabulary: VOCABULARY,
+    // Fixture mode: nothing is collected, so the source-policy gate does not apply.
+    collectionMode: 'fixture',
     policy: withPolicyDefaults({ requestDelayMs: 0, respectRobots: false }),
     ...overrides,
   };
@@ -227,6 +239,29 @@ describe('CrawlEngine guards', () => {
 });
 
 describe('CrawlEngine robots handling', () => {
+  it('threads observed response and robots metadata into harvested provenance', async () => {
+    const fetcher = MapFetcher.from({
+      'https://sample-isd.example.org/staff': {
+        body: html('generic-html/table-numbered/page-1.html'),
+        status: 206,
+        contentType: 'text/html; charset=windows-1252',
+      },
+    });
+    const result = await engine(fetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff',
+        policy: withPolicyDefaults({ requestDelayMs: 0, respectRobots: true }),
+      }),
+    );
+
+    expect(result.records[0]).toMatchObject({
+      httpStatus: 206,
+      contentType: 'text/html; charset=windows-1252',
+      robotsAllowed: true,
+      robotsPolicyNote: null,
+    });
+  });
+
   it('records a blocked source and stops instead of fetching it', async () => {
     const fetcher = MapFetcher.from({
       'https://sample-isd.example.org/private/staff': html(
@@ -305,6 +340,12 @@ describe('CrawlEngine checkpointing', () => {
       job({
         seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
         resumeFrom: firstRun.checkpoint,
+        policy: withPolicyDefaults({
+          requestDelayMs: 0,
+          respectRobots: false,
+          maxPagesPerRun: 10,
+          maxPagesPerDomain: 10,
+        }),
       }),
     );
     expect(resumeFetcher.requested).not.toContain(
@@ -329,6 +370,103 @@ describe('CrawlEngine checkpointing', () => {
     );
     const allKeys = [...first.records, ...second.records].map((r) => r.record.recordKey);
     expect(new Set(allKeys).size).toBe(allKeys.length);
+  });
+
+  it('carries the per-domain page budget across a resume', async () => {
+    const first = await engine(MapFetcher.from(NUMBERED)).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        policy: withPolicyDefaults({
+          requestDelayMs: 0,
+          respectRobots: false,
+          maxPagesPerRun: 1,
+          maxPagesPerDomain: 1,
+        }),
+      }),
+    );
+    const resumeFetcher = MapFetcher.from(NUMBERED);
+    const resumed = await engine(resumeFetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        resumeFrom: first.checkpoint,
+        policy: withPolicyDefaults({
+          requestDelayMs: 0,
+          respectRobots: false,
+          maxPagesPerRun: 10,
+          maxPagesPerDomain: 1,
+        }),
+      }),
+    );
+
+    expect(resumeFetcher.requested).toHaveLength(0);
+    expect(resumed.stops.map((stop) => stop.reason)).toContain('domain_budget_exhausted');
+    expect(resumed.stats.pagesFetched).toBe(1);
+  });
+
+  it('stores only opaque post-boundary keys for prohibited records', async () => {
+    const rawValues = [
+      'Jamie Fields, Class of 2027',
+      'Guardian name: Alex Fields',
+      'Patient ID: MED-90210',
+      'Robin Vale 123-45-6789',
+    ];
+    const records = [
+      ...rawValues.map((fullNamePublished, index) => ({
+        recordKey: `raw-personal-key-${index}-${fullNamePublished}`,
+        fullNamePublished,
+        titlePublished: 'Program Assistant',
+        departmentPublished: null,
+        organizationPublished: null,
+        phonePublished: null,
+        emails: [],
+        profileUrl: null,
+        extractionMethod: 'html_table' as const,
+        confidence: 0.9,
+        selector: 'table > tr',
+        snippet: fullNamePublished,
+      })),
+      {
+        recordKey: 'readable-valid-key-Dana-Lee',
+        fullNamePublished: 'Dana Lee',
+        titlePublished: 'Program Analyst',
+        departmentPublished: null,
+        organizationPublished: null,
+        phonePublished: null,
+        emails: [],
+        profileUrl: null,
+        extractionMethod: 'html_table' as const,
+        confidence: 0.9,
+        selector: 'table > tr',
+        snippet: 'Dana Lee',
+      },
+    ];
+    const privacyAdapter = new Proxy(genericHtmlAdapter, {
+      get(target, property, receiver) {
+        if (property === 'key') return 'checkpoint-privacy-probe';
+        if (property === 'extractListing') {
+          return () => ({
+            records,
+            pagination: { kind: null, requests: [], exhausted: true, note: null },
+            context: {},
+            empty: false,
+            warnings: [],
+          });
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const persisted: CrawlCheckpoint[] = [];
+    const result = await engine(MapFetcher.from({ 'https://example.gov/directory': '<html />' }), {
+      onCheckpoint: (checkpoint) => void persisted.push(checkpoint),
+    }).run(job({ seedUrl: 'https://example.gov/directory', adapter: privacyAdapter }));
+
+    const checkpointJson = JSON.stringify([...persisted, result.checkpoint]);
+    for (const raw of [...rawValues, 'MED-90210', '123-45-6789', 'readable-valid-key']) {
+      expect(checkpointJson).not.toContain(raw);
+    }
+    expect(result.checkpoint.seenRecordKeys).toHaveLength(1);
+    expect(result.checkpoint.seenRecordKeys[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.records.map((record) => record.record.fullNamePublished)).toEqual(['Dana Lee']);
   });
 });
 
@@ -357,5 +495,84 @@ describe('CrawlEngine idempotency', () => {
       expect(harvested.sourceContentHash).toMatch(/^[0-9a-f]{64}$/);
       expect(harvested.fetchedAt).toBeTruthy();
     }
+  });
+});
+
+describe('CrawlEngine source policy gate', () => {
+  function policy(overrides: Partial<SourcePolicyRecord> & { id: string }): SourcePolicyRecord {
+    return {
+      domain: null,
+      urlPattern: null,
+      organizationId: null,
+      jurisdictionId: null,
+      sourceTypeCode: null,
+      collectionStatus: 'unknown',
+      commercialUseStatus: 'unknown',
+      solicitationStatus: 'unknown',
+      automatedAccessStatus: 'unknown',
+      policyUrl: null,
+      policyTextSnapshot: null,
+      policyTextHash: null,
+      effectiveAt: '2026-01-01T00:00:00.000Z',
+      lastReviewedAt: null,
+      reviewedBy: null,
+      reviewNotes: null,
+      productionApprovedBy: null,
+      productionApprovedAt: null,
+      productionApprovalNote: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('refuses a production run against a prohibited source without fetching it', async () => {
+    const fetcher = MapFetcher.from(NUMBERED);
+    const result = await engine(fetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        collectionMode: 'production',
+        sourcePolicy: new SourcePolicyRegistry([
+          policy({ id: 'p1', domain: 'sample-isd.example.org', collectionStatus: 'prohibited' }),
+        ]),
+      }),
+    );
+    expect(fetcher.requested).toHaveLength(0);
+    expect(result.errors.map((e) => e.errorType)).toContain('source_policy_refusal');
+    expect(result.stops.map((s) => s.reason)).toContain('blocked_by_source_policy');
+  });
+
+  it('refuses a production run against a source nobody has reviewed', async () => {
+    const fetcher = MapFetcher.from(NUMBERED);
+    const result = await engine(fetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        collectionMode: 'production',
+        sourcePolicy: SourcePolicyRegistry.empty(),
+      }),
+    );
+    expect(fetcher.requested).toHaveLength(0);
+    expect(result.stops.map((s) => s.reason)).toContain('blocked_by_source_policy');
+  });
+
+  it('allows a production run against a permitted source', async () => {
+    const fetcher = MapFetcher.from(NUMBERED);
+    const result = await engine(fetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        collectionMode: 'production',
+        sourcePolicy: new SourcePolicyRegistry([
+          policy({ id: 'p1', domain: 'sample-isd.example.org', collectionStatus: 'permitted' }),
+        ]),
+      }),
+    );
+    expect(result.records).toHaveLength(9);
+  });
+
+  it('does not gate a fixture run, because nothing is collected', async () => {
+    const fetcher = MapFetcher.from(NUMBERED);
+    const result = await engine(fetcher).run(
+      job({ seedUrl: 'https://sample-isd.example.org/staff-directory?page=1' }),
+    );
+    expect(result.records).toHaveLength(9);
   });
 });

@@ -12,10 +12,35 @@ export interface SqlClient {
   ): Promise<{ rows: T[] }>;
   /** Multi-statement execution, used by the migration runner. */
   exec?(sql: string): Promise<unknown>;
+  /**
+   * Run a block atomically, when the driver can.
+   *
+   * Optional because the interface is deliberately narrow, and `runAtomically`
+   * falls back to explicit BEGIN and COMMIT for a client that does not offer
+   * one. Callers that need atomicity should use `runAtomically` rather than
+   * reaching for this directly.
+   */
+  transaction?<T>(run: (client: SqlClient) => Promise<T>): Promise<T>;
 }
 
 export interface Transactional extends SqlClient {
   transaction<T>(run: (client: SqlClient) => Promise<T>): Promise<T>;
+}
+
+/**
+ * Run a block atomically, whatever the client offers.
+ *
+ * Prefers the driver's own transaction handling, which knows about pooling and
+ * nesting, and falls back to explicit BEGIN and COMMIT. Used wherever a partial
+ * write would be worse than no write: applying a migration, and recording a
+ * complaint together with the suppression it produces.
+ */
+export async function runAtomically<T>(
+  client: SqlClient,
+  run: (client: SqlClient) => Promise<T>,
+): Promise<T> {
+  if (typeof client.transaction === 'function') return client.transaction(run);
+  return withTransaction(client, run);
 }
 
 /** Run a block inside a transaction, rolling back on any throw. */

@@ -1,19 +1,39 @@
-# pension-appointment-network
+# public-workforce-data
 
-An internal data platform for collecting publicly available U.S. K-12 school and
-employee directory information.
+An internal data platform for collecting publicly available U.S. public-sector
+organization and employee directory information.
 
-It imports the authoritative list of districts and schools for a state, finds
-each institution's official staff directory, extracts the people those pages
+It imports an authoritative list of public bodies for a jurisdiction, finds each
+organization's official staff directory, extracts the people those pages
 publish, normalizes and deduplicates them, keeps published addresses strictly
-separate from inferred candidates, and enforces suppression and opt-outs inside
-the data layer before anything can be exported.
+separate from inferred candidates, and enforces source policy and suppression
+inside the data layer before anything can be exported.
 
 **This repository collects and manages data. It does not send outreach.** There
 is no mail transport, no send API and no outreach queue anywhere in it.
 
-Starting state: **Texas**. Adding another state is a configuration package, not
-a code change.
+## What it covers
+
+Six levels of United States public employment, through one neutral core:
+
+| Level                             | Examples                                                  |
+| --------------------------------- | --------------------------------------------------------- |
+| K-12 education                    | School districts, schools, charter organizations, ESAs    |
+| State government                  | Departments, boards, commissions, state agencies          |
+| County government                 | County offices, elected offices, county departments       |
+| Municipal and local government    | Cities, towns, townships, villages                        |
+| Special districts and authorities | Water, transit, port, utility and housing authorities     |
+| Federal government                | Departments, independent agencies, regional offices, labs |
+
+Education is one sector extension among several, not the shape of the platform,
+and it is a **sector rather than a government level**: an independent school
+district is a special district doing education work, and a city-run school is a
+municipal body doing the same work. The core knows about organizations,
+relationships, jurisdictions and duty locations. It does not know what a school
+is. See [EDUCATION_IN_THE_PLATFORM](docs/EDUCATION_IN_THE_PLATFORM.md).
+
+Starting jurisdiction: **Texas K-12 education**. Adding a jurisdiction, a sector
+or a directory platform is configuration, not a change to the crawler.
 
 ## Quick start
 
@@ -28,13 +48,44 @@ full provenance, crawls them again to show the recrawl adds nothing, records an
 opt-out, and writes `out/fixture-export.csv` with that person absent. It uses an
 in-process PostgreSQL and touches no network.
 
+To keep that fixture data and inspect it in a browser, run `pnpm local:setup`
+once and then `pnpm local:start`. Open the local URL printed by the second
+command and sign in with the credentials in the gitignored `.env.local` file.
+The server listens on this computer only. This local login does not provide
+production authentication and does not make the unauthenticated API safe to
+deploy.
+
+The console also has a **Collection projects** area. It turns a configured
+jurisdiction and taxonomy-backed sector and organization-type selections into
+explicit organization membership, discovery targets, and finite approved
+batches. Its government-level overview makes clear which national scopes are
+modeled and which have a reviewed source configuration. Preparing a project
+does not contact a source. Workers can lease only work from an active project
+and a specifically approved batch, with source-policy, robots, page, error and
+per-domain controls still enforced.
+
+The scope menus are active: changing location, government level or sector
+resolves a matching registered jurisdiction and clearly blocks combinations
+that still need source configuration. A worker can either stop after an
+operator-set job count or continue until one specifically approved batch is
+empty. Continue-until-complete does not cross into another batch or remove the
+safety circuit breakers.
+
+The schema and migrations target PostgreSQL 15+ and Supabase, but the local
+browser console uses the gitignored embedded database in `storage/`. A remote
+Supabase project is not connected merely because the repository contains a
+`supabase/` migration directory. A real connection exists only when a remote
+`DATABASE_URL` is deliberately configured and its migrations are applied with
+separate human approval.
+
 ## Layout
 
 ```
-apps/        admin inspection CLI, read-only API
+apps/        local operator console, admin inspection CLI, read-only API
 services/    crawler, discovery and validation workers
-packages/    shared types, core domain logic, extraction, database,
-             directory adapters, state configuration, observability
+packages/    shared types, taxonomy, core domain logic, extraction, database,
+             directory adapters, sector packs, jurisdiction configuration,
+             observability
 supabase/    migrations, each with a down script
 tests/       fixtures and cross-package tests
 docs/        the documentation set below
@@ -42,26 +93,38 @@ docs/        the documentation set below
 
 ## Documentation
 
-| Document                                         | What it covers                                                   |
-| ------------------------------------------------ | ---------------------------------------------------------------- |
-| [ARCHITECTURE](docs/ARCHITECTURE.md)             | Shape, the two extensibility seams, why the crawl engine is ours |
-| [DATA_MODEL](docs/DATA_MODEL.md)                 | Tables, provenance, identity, the six email classes, suppression |
-| [CRAWLING_POLICY](docs/CRAWLING_POLICY.md)       | Scope, robots, limits, guards, exclusions, what we never do      |
-| [STATE_ONBOARDING](docs/STATE_ONBOARDING.md)     | The process and the definition of done for a new state           |
-| [DIRECTORY_ADAPTERS](docs/DIRECTORY_ADAPTERS.md) | The adapter contract and how to add one                          |
-| [DATA_QUALITY](docs/DATA_QUALITY.md)             | Confidence, known limitations, the checks that run               |
-| [SECURITY](docs/SECURITY.md)                     | Secrets, logging, data minimization, opt-outs                    |
-| [OPERATIONS](docs/OPERATIONS.md)                 | Setup, migrations, inspecting runs, reading results              |
-| [CURRENT_STATE](docs/CURRENT_STATE.md)           | What works, what is deliberately not done                        |
-| [BACKLOG](docs/BACKLOG.md)                       | What is next, in order                                           |
+| Document                                                               | What it covers                                                           |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| [ARCHITECTURE](docs/ARCHITECTURE.md)                                   | Shape, the four extensibility seams, why the crawl engine is ours        |
+| [DATA_MODEL](docs/DATA_MODEL.md)                                       | Tables, reference data, provenance, identity, email classes, suppression |
+| [ORGANIZATION_HIERARCHY](docs/ORGANIZATION_HIERARCHY.md)               | Effective-dated relationships, ancestry, subtree suppression             |
+| [JURISDICTION_VS_DUTY_LOCATION](docs/JURISDICTION_VS_DUTY_LOCATION.md) | Why who governs and where someone works are separate facts               |
+| [SECTOR_EXTENSIONS](docs/SECTOR_EXTENSIONS.md)                         | Adding a sector without touching the core                                |
+| [EDUCATION_IN_THE_PLATFORM](docs/EDUCATION_IN_THE_PLATFORM.md)         | Where education knowledge lives and why it is not in the core            |
+| [SOURCE_POLICY_REVIEW](docs/SOURCE_POLICY_REVIEW.md)                   | Reviewing a source, recording approval, what a vendor cannot override    |
+| [ONBOARDING_STATE_LOCAL](docs/ONBOARDING_STATE_LOCAL.md)               | Adding a state, county, municipal or special-district jurisdiction       |
+| [ONBOARDING_FEDERAL](docs/ONBOARDING_FEDERAL.md)                       | Adding a federal agency, which has no state above it                     |
+| [CRAWLING_POLICY](docs/CRAWLING_POLICY.md)                             | Scope, source policy, robots, limits, guards, what we never do           |
+| [DIRECTORY_ADAPTERS](docs/DIRECTORY_ADAPTERS.md)                       | The adapter contract and how to add one                                  |
+| [DATA_QUALITY](docs/DATA_QUALITY.md)                                   | Confidence, normalization provenance, known limitations, checks          |
+| [SECURITY](docs/SECURITY.md)                                           | Secrets, logging, the public professional data boundary, opt-outs        |
+| [OPERATIONS](docs/OPERATIONS.md)                                       | Setup, migrations, inspecting runs, reading results                      |
+| [CURRENT_STATE](docs/CURRENT_STATE.md)                                 | What works, what is deliberately not done                                |
+| [BACKLOG](docs/BACKLOG.md)                                             | What is next, in order                                                   |
 
 ## Status
 
-Foundation complete. **No production crawl has been run**, and no official
-Texas source has been verified yet: every source in the Texas config is marked
-`verified: false`, and the importer refuses to run against an unverified source
-until a person has opened the URL and confirmed the column mapping. See
-[CURRENT_STATE](docs/CURRENT_STATE.md).
+Foundation complete and generalized across six levels of government, then
+corrected against an independent architecture review. **No production crawl has
+been run**, and no official source has been verified yet: every source in the
+Texas education configuration is marked `verified: false`, the importer refuses
+to run against an unverified source, and the crawler refuses production
+collection from any source a person has not approved.
+
+**Ten production blockers are open** and are listed with their risk, required
+resolution and required tests at the top of [BACKLOG](docs/BACKLOG.md). No live
+source may be fetched and no real outreach export may be used until the
+applicable ones are resolved. See [CURRENT_STATE](docs/CURRENT_STATE.md).
 
 ## Stack
 

@@ -4,9 +4,17 @@ import {
   fixtureContext,
   fixturePage,
   type AdapterFixture,
-} from '@pan/adapter-kit';
+} from '@public-workforce/adapter-kit';
+import { allSectorsTaxonomy } from '../../../../tests/support/taxonomy.js';
 import { loadAdapterFixture } from '../../../../tests/support/fixtures.js';
 import { genericJsonAdapter } from './index.js';
+
+const TAXONOMY = allSectorsTaxonomy();
+const VOCABULARY = TAXONOMY.vocabulary;
+
+function withVocabulary(fixture: AdapterFixture): AdapterFixture {
+  return { ...fixture, context: { ...fixture.context, vocabulary: VOCABULARY } };
+}
 
 const FIXTURES: AdapterFixture[] = [
   loadAdapterFixture({
@@ -23,7 +31,7 @@ const FIXTURES: AdapterFixture[] = [
         {
           fullNamePublished: 'Sofia Marchetti',
           titlePublished: 'Special Education Diagnostician',
-          schoolPublished: 'Sample High School',
+          organizationPublished: 'Sample High School',
           phonePublished: '555-010-4001',
           emails: ['sofia.marchetti@sample-isd.example.org'],
         },
@@ -43,7 +51,7 @@ const FIXTURES: AdapterFixture[] = [
       records: [{ fullNamePublished: 'Colin Mbatha', departmentPublished: 'Technology' }],
     },
   }),
-];
+].map(withVocabulary);
 
 describe.each(FIXTURES)('generic-json adapter contract: $name', (fixture) => {
   const checks = checkAdapterContract(genericJsonAdapter, fixture);
@@ -61,7 +69,9 @@ describe('generic-json adapter behaviour', () => {
       html: '<html><body>not json</body></html>',
       kind: 'listing',
     });
-    expect(genericJsonAdapter.detect({ url: page.url, page, hints: {} }).score).toBe(0);
+    expect(
+      genericJsonAdapter.detect({ url: page.url, page, hints: {}, vocabulary: VOCABULARY }).score,
+    ).toBe(0);
   });
 
   it('reports a parse failure as a warning rather than throwing', () => {

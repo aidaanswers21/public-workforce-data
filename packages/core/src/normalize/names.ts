@@ -1,4 +1,4 @@
-import type { NameParts } from '@pan/shared-types';
+import type { NameParts } from '@public-workforce/shared-types';
 import { collapseWhitespace, decaseIfShouting, normalizeKey } from './text.js';
 
 const PREFIXES = new Set([
@@ -19,7 +19,6 @@ const PREFIXES = new Set([
   'capt',
   'prof',
   'professor',
-  'principal',
 ]);
 
 /**
@@ -283,13 +282,14 @@ function rankSuffix(token: string): number {
 /**
  * Stable identity key for a person within one organization.
  *
- * Middle names are excluded: the same person appears as "Jane Smith" on one page
- * and "Jane M. Smith" on another, and treating those as different people is the
- * single biggest source of duplicate rows in directory data.
+ * Scoped to the organization rather than to a state, because a federal employee
+ * has no state above them and two people with the same name at different public
+ * bodies are different people. Middle names are excluded: the same person
+ * appears as "Jane Smith" on one page and "Jane M. Smith" on another, and
+ * treating those as two people is the largest single source of duplicate rows.
  */
 export function personIdentityKey(input: {
-  stateCode: string;
-  orgScopeId: string;
+  organizationId: string;
   parsed: Pick<ParsedName, 'firstName' | 'lastName' | 'fullNamePublished'>;
 }): string {
   const first = input.parsed.firstName ?? '';
@@ -298,7 +298,7 @@ export function personIdentityKey(input: {
     first.length > 0 || last.length > 0
       ? normalizeKey(`${last} ${first}`)
       : normalizeKey(input.parsed.fullNamePublished);
-  return [input.stateCode.toLowerCase(), input.orgScopeId, nameKey].join('|');
+  return [input.organizationId, nameKey].join('|');
 }
 
 /** Tokens used for matching a published email local part back to a name. */
@@ -323,61 +323,21 @@ export function nameTokens(parsed: Pick<ParsedName, 'firstName' | 'middleName' |
   };
 }
 
-/** Words that, on their own, name a place or a function rather than a person. */
-const ORGANIZATION_WORDS = new Set([
-  'front',
-  'main',
-  'general',
-  'central',
-  'district',
-  'campus',
-  'school',
-  'office',
-  'offices',
-  'department',
-  'dept',
-  'division',
-  'team',
-  'board',
-  'committee',
-  'staff',
-  'faculty',
-  'reception',
-  'desk',
-  'line',
-  'info',
-  'information',
-  'athletics',
-  'library',
-  'clinic',
-  'cafeteria',
-  'nutrition',
-  'transportation',
-  'maintenance',
-  'facilities',
-  'security',
-  'technology',
-  'administration',
-  'attendance',
-  'registrar',
-  'counseling',
-  'nurse',
-  'health',
-]);
-
 /**
  * True when every word in the value names an organization rather than a person.
  *
- * Directory rows like "Front Office" parse as a name whose surname is "Office",
- * which would otherwise make `office@district.org` look like that person's own
- * address instead of the shared inbox it is. Deliberately conservative: "Jane
- * Office" is a person, "Front Office" is not.
+ * Directory rows like "Front Office" or "Records Bureau" parse as names whose
+ * surname is a common noun, which would otherwise make a role inbox look like
+ * that person's own address. The word list comes from the composed vocabulary,
+ * so a vertical can teach it new labels without touching this file. The rule is
+ * deliberately conservative: "Jane Office" is a person, "Front Office" is not.
  */
-export function isOrganizationLabel(value: string): boolean {
+export function isOrganizationLabel(value: string, labelWords: readonly string[]): boolean {
+  const words = new Set(labelWords.map((word) => word.toLowerCase()));
   const tokens = collapseWhitespace(value)
     .toLowerCase()
     .split(/[^a-z]+/)
     .filter(Boolean);
   if (tokens.length === 0) return false;
-  return tokens.every((token) => ORGANIZATION_WORDS.has(token));
+  return tokens.every((token) => words.has(token));
 }

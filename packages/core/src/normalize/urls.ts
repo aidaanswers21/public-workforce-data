@@ -63,24 +63,60 @@ export function domainOf(input: string): string | null {
   }
 }
 
-/** Registrable-ish root: drops one leading label per call until two remain. */
-export function registrableDomain(hostname: string): string {
+/**
+ * United States locality-domain function labels.
+ *
+ * These appear in two shapes, and getting them wrong collapses every public
+ * body in a state onto one apparent site:
+ *
+ *   sample.k12.tx.us   label directly before the state; the site includes the
+ *                      label to its left
+ *   ci.austin.tx.us    label before a place name; the site starts at the label
+ */
+const STATE_LABEL = /^[a-z]{2}$/;
+
+/**
+ * The registrable root of a hostname: the part two hosts must share to be the
+ * same site.
+ */
+export function registrableDomain(
+  hostname: string,
+  localityLabels: readonly string[] = [],
+): string {
   const parts = hostname
     .toLowerCase()
     .replace(/^www\./, '')
     .split('.');
   if (parts.length <= 2) return parts.join('.');
-  // Handles the common ".k12.tx.us" style suffix used by US school districts.
-  const tail = parts.slice(-3).join('.');
-  if (/^k12\.[a-z]{2}\.us$/.test(tail)) return parts.slice(-4).join('.');
+
+  const labels = new Set(localityLabels);
+  if (parts.at(-1) === 'us' && labels.size > 0) {
+    for (let index = parts.length - 2; index >= 0; index -= 1) {
+      const label = parts[index] as string;
+      if (!labels.has(label)) continue;
+      // <label>.<state>.us, so the site is one label further left.
+      if (STATE_LABEL.test(parts[index + 1] ?? '') && parts.length - index === 3) {
+        return parts.slice(Math.max(0, index - 1)).join('.');
+      }
+      // <label>.<place>.<state>.us, so the site starts at the label.
+      if (STATE_LABEL.test(parts[index + 2] ?? '') && parts.length - index === 4) {
+        return parts.slice(index).join('.');
+      }
+    }
+  }
+
   if (/^(co|ac|gov|edu|org|net|com)\.[a-z]{2}$/.test(parts.slice(-2).join('.'))) {
     return parts.slice(-3).join('.');
   }
   return parts.slice(-2).join('.');
 }
 
-export function isSameRegistrableDomain(a: string, b: string): boolean {
-  return registrableDomain(a) === registrableDomain(b);
+export function isSameRegistrableDomain(
+  a: string,
+  b: string,
+  localityLabels: readonly string[] = [],
+): boolean {
+  return registrableDomain(a, localityLabels) === registrableDomain(b, localityLabels);
 }
 
 /**
@@ -115,24 +151,29 @@ export function isExcludedUrl(
   return { excluded: false, pattern: null };
 }
 
-/** Hints that a URL is a staff directory. Used to rank discovery candidates. */
-export const DIRECTORY_URL_HINTS: readonly { pattern: RegExp; weight: number }[] = [
-  { pattern: /\/(staff|faculty)-directory(\/|$)/i, weight: 1.0 },
-  { pattern: /\/(staff|faculty|employees?|personnel)(\/|$)/i, weight: 0.8 },
-  { pattern: /\/directory(\/|$)/i, weight: 0.75 },
-  { pattern: /\/(our-)?(team|people)(\/|$)/i, weight: 0.6 },
-  { pattern: /\/(administration|admin-team|leadership)(\/|$)/i, weight: 0.55 },
-  { pattern: /\/contact-us?(\/|$)/i, weight: 0.35 },
-  { pattern: /\/departments?(\/|$)/i, weight: 0.3 },
-];
-
-export function scoreDirectoryUrl(url: string): { score: number; reasons: string[] } {
+/**
+ * Score a URL as a likely people directory.
+ *
+ * The hints come from the composed vocabulary rather than a fixed list, so a
+ * federal "field offices" page and an education "faculty" page are both
+ * recognizable without the core knowing which is which.
+ */
+export function scoreDirectoryUrl(
+  url: string,
+  urlHints: readonly { pattern: string; weight: number }[],
+): { score: number; reasons: string[] } {
   const reasons: string[] = [];
   let score = 0;
-  for (const hint of DIRECTORY_URL_HINTS) {
-    if (hint.pattern.test(url)) {
+  for (const hint of urlHints) {
+    let pattern: RegExp;
+    try {
+      pattern = new RegExp(hint.pattern, 'i');
+    } catch {
+      continue;
+    }
+    if (pattern.test(url)) {
       score = Math.max(score, hint.weight);
-      reasons.push(`url matches ${hint.pattern.source}`);
+      reasons.push(`url matches ${hint.pattern}`);
     }
   }
   const excluded = isExcludedUrl(url);

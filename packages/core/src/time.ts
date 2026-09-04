@@ -1,4 +1,4 @@
-import type { Timestamp } from '@pan/shared-types';
+import type { Timestamp } from '@public-workforce/shared-types';
 
 export type Clock = () => Date;
 

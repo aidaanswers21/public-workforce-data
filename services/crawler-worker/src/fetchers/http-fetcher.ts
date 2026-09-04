@@ -1,5 +1,5 @@
-import type { FetchOutcome, FetchRequest, Fetcher } from '@pan/shared-types';
-import { contentHash } from '@pan/core';
+import type { FetchOutcome, FetchRequest, Fetcher } from '@public-workforce/shared-types';
+import { contentHash } from '@public-workforce/core';
 
 export interface HttpFetcherOptions {
   userAgent: string;

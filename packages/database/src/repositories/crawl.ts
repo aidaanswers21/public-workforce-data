@@ -6,11 +6,11 @@ import type {
   CrawlRunStatus,
   Timestamp,
   Uuid,
-} from '@pan/shared-types';
+} from '@public-workforce/shared-types';
 import type { SqlClient } from '../client.js';
 
 export interface StartRunInput {
-  stateId: Uuid | null;
+  jurisdictionId: Uuid | null;
   runType: string;
   config: Record<string, unknown>;
   initiatedBy: string;
@@ -22,9 +22,9 @@ export class CrawlRepository {
 
   async startRun(input: StartRunInput): Promise<Uuid> {
     const result = await this.client.query<{ id: Uuid }>(
-      `insert into crawl_runs (state_id, run_type, status, config, initiated_by)
+      `insert into crawl_runs (jurisdiction_id, run_type, status, config, initiated_by)
        values ($1, $2, 'running', $3, $4) returning id`,
-      [input.stateId, input.runType, JSON.stringify(input.config), input.initiatedBy],
+      [input.jurisdictionId, input.runType, JSON.stringify(input.config), input.initiatedBy],
     );
     const id = result.rows[0]?.id;
     if (id === undefined) throw new Error('crawl_runs: insert returned no id');
@@ -92,6 +92,11 @@ export class CrawlRepository {
   }
 
   async saveCheckpoint(checkpoint: CrawlCheckpoint): Promise<void> {
+    for (const key of checkpoint.seenRecordKeys) {
+      if (!/^[0-9a-f]{64}$/.test(key)) {
+        throw new Error('crawl checkpoint record keys must be opaque SHA-256 digests');
+      }
+    }
     await this.client.query(
       `insert into crawl_checkpoints (crawl_run_id, crawl_target_id, payload, pages_fetched, updated_at)
        values ($1,$2,$3,$4,$5)

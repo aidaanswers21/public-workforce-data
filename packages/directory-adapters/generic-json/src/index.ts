@@ -1,5 +1,6 @@
 import type {
   AdapterContext,
+  DirectoryVocabulary,
   DetectionContext,
   DetectionResult,
   DirectoryAdapter,
@@ -9,9 +10,13 @@ import type {
   ListingExtraction,
   PaginationPlan,
   PaginationRequest,
-} from '@pan/shared-types';
-import { canonicalizeUrl, collapseWhitespace, dedupeExtractedRecords } from '@pan/core';
-import { buildPersonRecord, clamp01, looksLikePersonName } from '@pan/adapter-kit';
+} from '@public-workforce/shared-types';
+import {
+  canonicalizeUrl,
+  collapseWhitespace,
+  dedupeExtractedRecords,
+} from '@public-workforce/core';
+import { buildPersonRecord, clamp01, looksLikePersonName } from '@public-workforce/adapter-kit';
 
 export const GENERIC_JSON_ADAPTER_KEY = 'generic-json';
 
@@ -32,7 +37,6 @@ const FIELD_ALIASES = {
   email: ['email', 'email_address', 'emailAddress', 'mail', 'work_email'],
   phone: ['phone', 'phone_number', 'phoneNumber', 'telephone', 'work_phone'],
   department: ['department', 'dept', 'division', 'team'],
-  school: ['school', 'campus', 'building', 'site', 'location', 'school_name'],
   id: ['id', 'staff_id', 'staffId', 'employee_id', 'employeeId', 'uuid', 'guid'],
   profileUrl: ['profile_url', 'profileUrl', 'url', 'link', 'permalink'],
 } as const;
@@ -120,7 +124,7 @@ export class GenericJsonAdapter implements DirectoryAdapter {
     return [];
   }
 
-  extractListing(page: FetchedPage, _context: AdapterContext): ListingExtraction {
+  extractListing(page: FetchedPage, context: AdapterContext): ListingExtraction {
     const parsed = safeParse(page.body);
     if (parsed === null) {
       return {
@@ -136,7 +140,7 @@ export class GenericJsonAdapter implements DirectoryAdapter {
     const records: ExtractedPersonRecord[] = [];
 
     collection.forEach((item, index) => {
-      const record = this.toRecord(item, index, page.finalUrl);
+      const record = this.toRecord(item, index, page.finalUrl, context.vocabulary);
       if (record !== null) records.push(record);
     });
 
@@ -153,7 +157,12 @@ export class GenericJsonAdapter implements DirectoryAdapter {
     };
   }
 
-  private toRecord(item: unknown, index: number, sourceUrl: string): ExtractedPersonRecord | null {
+  private toRecord(
+    item: unknown,
+    index: number,
+    sourceUrl: string,
+    vocabulary: DirectoryVocabulary,
+  ): ExtractedPersonRecord | null {
     if (item === null || typeof item !== 'object' || Array.isArray(item)) return null;
     const record = item as Record<string, unknown>;
 
@@ -174,10 +183,11 @@ export class GenericJsonAdapter implements DirectoryAdapter {
       fullNamePublished: name,
       titlePublished: readField(record, 'title'),
       departmentPublished: readField(record, 'department'),
-      schoolPublished: readField(record, 'school'),
+      organizationPublished: readAlias(record, vocabulary.organizationFieldAliases),
       phonePublished: readField(record, 'phone'),
       profileUrl: readField(record, 'profileUrl'),
       emailSources: email === null ? [] : [email],
+      vocabulary,
       extractionMethod: 'json_api',
       confidence: 0.92,
       selector: `$.[${index}]`,
@@ -185,11 +195,11 @@ export class GenericJsonAdapter implements DirectoryAdapter {
     });
   }
 
-  extractProfile(page: FetchedPage, _context: AdapterContext): ExtractedPersonRecord | null {
+  extractProfile(page: FetchedPage, context: AdapterContext): ExtractedPersonRecord | null {
     const parsed = safeParse(page.body);
     if (parsed === null) return null;
     const single = findCollection(parsed)?.[0] ?? parsed;
-    return this.toRecord(single, 0, page.finalUrl);
+    return this.toRecord(single, 0, page.finalUrl, context.vocabulary);
   }
 
   discoverPagination(page: FetchedPage, _context: AdapterContext): PaginationPlan {
@@ -344,6 +354,29 @@ function readField(
       if (cleaned.length > 0) return cleaned;
     }
     if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+/**
+ * Read the first field matching any supplied alias.
+ *
+ * The alias list arrives from the composed vocabulary, so a payload keyed
+ * "campus" and one keyed "bureau" both resolve without this package knowing
+ * which vertical uses which word.
+ */
+function readAlias(record: Record<string, unknown>, aliases: readonly string[]): string | null {
+  const byNormalizedKey = new Map(
+    Object.keys(record).map((key) => [key.toLowerCase().replace(/[^a-z]+/g, ''), key]),
+  );
+  for (const alias of aliases) {
+    const key = byNormalizedKey.get(alias.toLowerCase().replace(/[^a-z]+/g, ''));
+    if (key === undefined) continue;
+    const value = record[key];
+    if (typeof value === 'string') {
+      const cleaned = collapseWhitespace(value);
+      if (cleaned.length > 0) return cleaned;
+    }
   }
   return null;
 }

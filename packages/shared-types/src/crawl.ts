@@ -5,7 +5,7 @@ import type {
   CrawlStopReason,
   CrawlTargetStatus,
   CrawlTargetType,
-  SourceType,
+  PaginationKind,
   Uuid,
   Timestamp,
 } from './index.js';
@@ -63,7 +63,7 @@ export interface RobotsProvider {
 
 export interface CrawlRunRecord {
   id: Uuid;
-  stateId: Uuid | null;
+  jurisdictionId: Uuid | null;
   runType: string;
   status: CrawlRunStatus;
   startedAt: Timestamp;
@@ -87,12 +87,14 @@ export interface CrawlRunStats {
 
 export interface CrawlTargetRecord {
   id: Uuid;
-  stateId: Uuid;
-  districtId: Uuid | null;
-  schoolId: Uuid | null;
+  /** The organization this target belongs to. No state is required or implied. */
+  organizationId: Uuid | null;
+  jurisdictionId: Uuid | null;
   url: string;
+  urlHash: string;
   targetType: CrawlTargetType;
-  sourceType: SourceType;
+  /** Reference code from the taxonomy. */
+  sourceTypeCode: string;
   directoryPlatformId: Uuid | null;
   adapterKey: string | null;
   status: CrawlTargetStatus;
@@ -141,6 +143,11 @@ export interface CrawlCheckpoint {
   seenContentHashes: readonly string[];
   seenRecordKeys: readonly string[];
   pagesFetched: number;
+  /** Optional for backward compatibility with checkpoints written before 0012. */
+  seenPaginationTokens?: readonly string[];
+  pagesPerDomain?: Readonly<Record<string, number>>;
+  consecutiveFailuresPerDomain?: Readonly<Record<string, number>>;
+  pagesWithoutNewRecords?: number;
   updatedAt: Timestamp;
 }
 
@@ -151,6 +158,12 @@ export interface CrawlTaskSnapshot {
   adapterKey: string | null;
   paginationToken: string | null;
   context: Record<string, unknown>;
+  paginationRequest?: {
+    kind: PaginationKind;
+    method?: 'GET' | 'POST';
+    body?: string;
+    headers?: Record<string, string>;
+  } | null;
 }
 
 export interface CrawlStopSignal {

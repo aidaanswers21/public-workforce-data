@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { AdapterFixture } from '@pan/adapter-kit';
+import type { AdapterFixture } from '@public-workforce/adapter-kit';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const FIXTURE_ROOT = resolve(here, '..', 'fixtures');

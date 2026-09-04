@@ -1,0 +1,3 @@
+drop trigger if exists education_attributes_sector_guard_trigger on education_organization_attributes;
+drop function if exists education_attributes_sector_guard();
+drop table if exists education_organization_attributes;

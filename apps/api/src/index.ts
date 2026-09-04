@@ -1,11 +1,20 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { createLogger, type Logger } from '@pan/observability';
-import { QueryRepository, type SqlClient } from '@pan/database';
+import { createLogger, type Logger } from '@public-workforce/observability';
+import {
+  ExportPurposeRepository,
+  QueryRepository,
+  type SqlClient,
+} from '@public-workforce/database';
+
+export interface ApiCaller {
+  subject: string;
+}
 
 export interface ApiOptions {
   client: SqlClient;
   logger?: Logger;
   port?: number;
+  authenticate: (request: IncomingMessage) => Promise<ApiCaller | null> | ApiCaller | null;
 }
 
 /**
@@ -19,9 +28,10 @@ export interface ApiOptions {
 export function createApi(options: ApiOptions): ReturnType<typeof createServer> {
   const logger = options.logger ?? createLogger({ name: 'pan-api' });
   const queries = new QueryRepository(options.client);
+  const purposes = new ExportPurposeRepository(options.client);
 
   return createServer((request: IncomingMessage, response: ServerResponse) => {
-    void handle(request, response, queries, logger);
+    void handle(request, response, queries, purposes, options.authenticate, logger);
   });
 }
 
@@ -29,6 +39,8 @@ async function handle(
   request: IncomingMessage,
   response: ServerResponse,
   queries: QueryRepository,
+  purposes: ExportPurposeRepository,
+  authenticate: ApiOptions['authenticate'],
   logger: Logger,
 ): Promise<void> {
   const url = new URL(request.url ?? '/', 'http://localhost');
@@ -44,25 +56,44 @@ async function handle(
       return;
     }
 
+    const caller = await authenticate(request);
+    if (caller === null || caller.subject.trim() === '') {
+      response.setHeader('www-authenticate', 'Bearer');
+      send(response, 401, { error: 'authentication required' });
+      return;
+    }
+
     if (url.pathname === '/coverage') {
-      const state = url.searchParams.get('state');
-      if (state === null) {
-        send(response, 400, { error: 'state query parameter is required' });
-        return;
-      }
-      send(response, 200, await queries.coverageSummary(state));
+      const level = url.searchParams.get('level');
+      const sector = url.searchParams.get('sector');
+      send(
+        response,
+        200,
+        await queries.coverageSummary({
+          ...(level === null ? {} : { governmentLevelCode: level }),
+          ...(sector === null ? {} : { sectorCode: sector }),
+        }),
+      );
       return;
     }
 
     if (url.pathname === '/records') {
       const at = new Date().toISOString();
-      const rows = await queries.queryExportableRows(at, {
-        ...(url.searchParams.get('state') === null
-          ? {}
-          : { stateCode: url.searchParams.get('state') as string }),
+      const level = url.searchParams.get('level');
+      const sector = url.searchParams.get('sector');
+      // A read still declares a purpose, so export_purpose suppression applies
+      // to browsing exactly as it applies to a written file.
+      const purpose = url.searchParams.get('purpose') ?? 'internal-review';
+      if ((await purposes.findActive(purpose)) === null) {
+        send(response, 403, { error: 'purpose is not active and approved' });
+        return;
+      }
+      const rows = await queries.queryExportableRows(at, purpose, {
+        ...(level === null ? {} : { governmentLevelCode: level }),
+        ...(sector === null ? {} : { sectorCode: sector }),
         limit: Math.min(200, Number(url.searchParams.get('limit') ?? 50) || 50),
       });
-      send(response, 200, { at, count: rows.length, rows });
+      send(response, 200, { at, purpose, count: rows.length, rows });
       return;
     }
 

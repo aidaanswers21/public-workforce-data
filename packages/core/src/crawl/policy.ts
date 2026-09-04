@@ -1,4 +1,4 @@
-import type { RobotsDecision, RobotsProvider } from '@pan/shared-types';
+import type { RobotsDecision, RobotsProvider } from '@public-workforce/shared-types';
 import { DEFAULT_URL_EXCLUSION_PATTERNS, registrableDomain } from '../normalize/urls.js';
 
 /**
@@ -31,6 +31,13 @@ export interface CrawlPolicy {
    */
   allowedDomains: readonly string[];
   excludedUrlPatterns: readonly RegExp[];
+  /**
+   * DNS labels used by United States locality domains, from the taxonomy.
+   *
+   * Without them `co.harris.tx.us` and `ci.austin.tx.us` both collapse to
+   * `tx.us`, and every public body in a state looks like one site.
+   */
+  localityDomainLabels: readonly string[];
   maxRetries: number;
   retryBaseDelayMs: number;
   requestTimeoutMs: number;
@@ -38,7 +45,7 @@ export interface CrawlPolicy {
 
 export const DEFAULT_CRAWL_POLICY: CrawlPolicy = {
   userAgent:
-    'PensionAppointmentNetworkBot/0.1 (+https://example.invalid/crawler-policy; contact configured per deployment)',
+    'PublicWorkforceDataBot/0.1 (+https://example.invalid/crawler-policy; contact configured per deployment)',
   contactUrl: 'https://example.invalid/crawler-policy',
   maxPagesPerRun: 250,
   maxPagesPerDomain: 250,
@@ -50,6 +57,7 @@ export const DEFAULT_CRAWL_POLICY: CrawlPolicy = {
   respectRobots: true,
   allowedDomains: [],
   excludedUrlPatterns: DEFAULT_URL_EXCLUSION_PATTERNS,
+  localityDomainLabels: [],
   maxRetries: 2,
   retryBaseDelayMs: 500,
   requestTimeoutMs: 20_000,
@@ -64,13 +72,15 @@ export function isAllowedDomain(url: string, seedUrl: string, policy: CrawlPolic
   let host: string;
   let seedHost: string;
   try {
-    host = registrableDomain(new URL(url).hostname);
-    seedHost = registrableDomain(new URL(seedUrl).hostname);
+    host = registrableDomain(new URL(url).hostname, policy.localityDomainLabels);
+    seedHost = registrableDomain(new URL(seedUrl).hostname, policy.localityDomainLabels);
   } catch {
     return false;
   }
   if (policy.allowedDomains.length === 0) return host === seedHost;
-  return policy.allowedDomains.some((allowed) => registrableDomain(allowed) === host);
+  return policy.allowedDomains.some(
+    (allowed) => registrableDomain(allowed, policy.localityDomainLabels) === host,
+  );
 }
 
 /**
@@ -194,9 +204,9 @@ function matchesRule(rule: string, path: string): boolean {
 /**
  * Fetches and caches robots.txt per origin.
  *
- * A robots.txt that cannot be fetched is treated as permissive, matching the
- * usual convention, but the outcome is recorded either way so the policy log
- * shows what we actually saw rather than what we assumed.
+ * The default follows the usual permissive convention for compatibility.
+ * Production callers select fail-closed behaviour, and the outcome is recorded
+ * either way so the policy log shows what we observed and how it was handled.
  */
 export class HttpRobotsProvider implements RobotsProvider {
   private readonly cache = new Map<string, RobotsTxt | null>();
@@ -205,6 +215,7 @@ export class HttpRobotsProvider implements RobotsProvider {
     private readonly fetchText: (
       url: string,
     ) => Promise<{ ok: boolean; status: number; body: string }>,
+    private readonly options: { unavailablePolicy?: 'allow' | 'deny' } = {},
   ) {}
 
   async check(url: string, userAgent: string): Promise<RobotsDecision> {
@@ -227,11 +238,14 @@ export class HttpRobotsProvider implements RobotsProvider {
       this.cache.set(origin, robots);
     }
     if (robots === null) {
+      const allowed = this.options.unavailablePolicy !== 'deny';
       return {
-        allowed: true,
+        allowed,
         matchedRule: null,
         crawlDelaySeconds: null,
-        note: 'robots.txt unavailable, treated as permissive',
+        note: allowed
+          ? 'robots.txt unavailable, treated as permissive'
+          : 'robots.txt unavailable, production policy refuses collection',
       };
     }
     return robots.check(parsed.pathname + parsed.search, userAgent);

@@ -32,9 +32,54 @@ describe('canonicalizeUrl', () => {
   });
 });
 
+/**
+ * The locality labels are supplied, never assumed.
+ *
+ * `registrableDomain` carries no built-in table: a caller that knows nothing
+ * about the `.us` locality tree gets ordinary two-label behaviour, and a caller
+ * that passes the taxonomy's labels gets the locality-aware answer. These are
+ * the labels the taxonomy ships, written out here so the test states its own
+ * inputs.
+ */
+const LOCALITY_LABELS = [
+  'k12',
+  'co',
+  'ci',
+  'cc',
+  'lib',
+  'mus',
+  'gen',
+  'state',
+  'town',
+  'vil',
+  'tec',
+  'dst',
+];
+
 describe('registrableDomain', () => {
-  it('handles the k12 state suffix school districts use', () => {
-    expect(registrableDomain('staff.sample.k12.tx.us')).toBe('sample.k12.tx.us');
+  it.each([
+    // A label sitting directly before the state: the site is one label further left.
+    ['staff.sample.k12.tx.us', 'sample.k12.tx.us'],
+    // A label before a place name: the site starts at the label, so a county
+    // government and a city inside it stay separate sites.
+    ['www.co.harris.tx.us', 'co.harris.tx.us'],
+    ['parks.ci.austin.tx.us', 'ci.austin.tx.us'],
+    ['agency.example.gov', 'example.gov'],
+  ])('resolves the locality domain %s to %s', (host, expected) => {
+    expect(registrableDomain(host, LOCALITY_LABELS)).toBe(expected);
+  });
+
+  it('does not merge two public bodies that merely share a state', () => {
+    expect(registrableDomain('co.harris.tx.us', LOCALITY_LABELS)).not.toBe(
+      registrableDomain('ci.austin.tx.us', LOCALITY_LABELS),
+    );
+    expect(registrableDomain('sample.k12.tx.us', LOCALITY_LABELS)).not.toBe(
+      registrableDomain('other.k12.tx.us', LOCALITY_LABELS),
+    );
+  });
+
+  it('carries no built-in locality table: with no labels it stops at two', () => {
+    expect(registrableDomain('co.harris.tx.us')).toBe('tx.us');
   });
 
   it('treats subdomains as the same registrable domain', () => {
@@ -42,6 +87,15 @@ describe('registrableDomain', () => {
       isSameRegistrableDomain('www.sample-isd.example.org', 'staff.sample-isd.example.org'),
     ).toBe(true);
     expect(isSameRegistrableDomain('sample-isd.example.org', 'vendor.example.net')).toBe(false);
+  });
+
+  it('keeps a county and a city inside it apart when given the labels', () => {
+    expect(isSameRegistrableDomain('co.harris.tx.us', 'ci.austin.tx.us', LOCALITY_LABELS)).toBe(
+      false,
+    );
+    expect(
+      isSameRegistrableDomain('www.co.harris.tx.us', 'jobs.co.harris.tx.us', LOCALITY_LABELS),
+    ).toBe(true);
   });
 });
 
@@ -63,14 +117,38 @@ describe('isExcludedUrl', () => {
 });
 
 describe('scoreDirectoryUrl', () => {
-  it('ranks an explicit staff directory above a contact page', () => {
-    expect(scoreDirectoryUrl('https://x.example.org/staff-directory').score).toBeGreaterThan(
-      scoreDirectoryUrl('https://x.example.org/contact-us').score,
+  const hints = [
+    { pattern: '/(staff|employee)s?-directory(/|$)', weight: 1.0 },
+    { pattern: '/(elected-officials|officials)(/|$)', weight: 0.85 },
+    { pattern: '/(field-offices?|regional-offices?)(/|$)', weight: 0.6 },
+    { pattern: '/contact-us?(/|$)', weight: 0.35 },
+  ];
+
+  it('ranks an explicit directory above a contact page', () => {
+    expect(scoreDirectoryUrl('https://x.example.org/staff-directory', hints).score).toBeGreaterThan(
+      scoreDirectoryUrl('https://x.example.org/contact-us', hints).score,
     );
   });
 
+  it('recognizes hints from any vertical, having none of its own', () => {
+    expect(scoreDirectoryUrl('https://agency.example.gov/field-offices', hints).score).toBe(0.6);
+    expect(scoreDirectoryUrl('https://county.example.org/elected-officials', hints).score).toBe(
+      0.85,
+    );
+  });
+
+  it('scores at zero with no hints supplied', () => {
+    expect(scoreDirectoryUrl('https://x.example.org/staff-directory', []).score).toBe(0);
+  });
+
   it('scores an excluded url at zero even when the path looks directory-like', () => {
-    expect(scoreDirectoryUrl('https://x.example.org/staff/calendar/').score).toBe(0);
+    expect(scoreDirectoryUrl('https://x.example.org/staff/calendar/', hints).score).toBe(0);
+  });
+
+  it('ignores a malformed stored pattern instead of throwing', () => {
+    expect(() =>
+      scoreDirectoryUrl('https://x.example.org/staff', [{ pattern: '([', weight: 1 }]),
+    ).not.toThrow();
   });
 });
 

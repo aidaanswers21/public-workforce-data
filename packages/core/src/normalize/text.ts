@@ -42,11 +42,23 @@ export function decaseIfShouting(value: string): string {
 }
 
 /**
- * Normalize a county name to its bare form.
+ * Collapse dotted acronyms so "I.S.D." and "ISD", or "U.S.D.A." and "USDA",
+ * are the same token. Public bodies publish both spellings, often on one page.
+ */
+export function collapseDottedAcronyms(value: string): string {
+  return value.replace(/\b(?:[a-z]\.){2,}/gi, (match) => match.replace(/\./g, ''));
+}
+
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Normalize a county-equivalent name to its bare form.
  *
  * Source files disagree on "Harris", "Harris County", "HARRIS CO." and
- * "County of Harris". The bare form is what we key on; the original is kept in
- * `sourceValue` so nothing is lost.
+ * "County of Harris", and the same is true of parishes and boroughs. The bare
+ * form is what we key on; the original is kept in `sourceValue`.
  */
 export function normalizeCountyName(raw: string): string {
   let value = collapseWhitespace(raw);
@@ -56,61 +68,65 @@ export function normalizeCountyName(raw: string): string {
   return decaseIfShouting(value);
 }
 
-const DISTRICT_SUFFIX =
-  /\b(independent school district|unified school district|consolidated school district|school district|public schools|isd|usd|cisd|schools|district)\b/gi;
-
 /**
- * Collapse dotted acronyms so "I.S.D." and "ISD" are the same token.
- * Districts publish both spellings, sometimes on the same page.
+ * Comparable organization name.
+ *
+ * The suffixes to drop are supplied by the caller from the composed vocabulary,
+ * because what counts as a droppable suffix is a fact about a vertical.
+ * "Independent School District", "Board of Supervisors" and "Bureau of" are all
+ * suffixes, and none of them belongs hard-coded in the neutral core.
  */
-export function collapseDottedAcronyms(value: string): string {
-  return value.replace(/\b(?:[a-z]\.){2,}/gi, (match) => match.replace(/\./g, ''));
+export function normalizeOrganizationName(raw: string, suffixes: readonly string[] = []): string {
+  let value = collapseDottedAcronyms(collapseWhitespace(raw));
+  // Longest first, so a specific suffix wins over a substring of it.
+  for (const suffix of [...suffixes].sort((a, b) => b.length - a.length)) {
+    value = value.replace(new RegExp(`\\b${escapeRegExp(suffix)}\\b`, 'gi'), ' ');
+  }
+  return normalizeKey(value);
 }
 
-/** Comparable district name: suffixes and punctuation removed, case folded. */
-export function normalizeDistrictName(raw: string): string {
-  const collapsed = collapseDottedAcronyms(collapseWhitespace(raw));
-  return normalizeKey(collapsed.replace(DISTRICT_SUFFIX, ' '));
-}
-
-/** Comparable school name. "Elementary School" and "Elementary" collapse together. */
-export function normalizeSchoolName(raw: string): string {
-  const stripped = collapseWhitespace(raw).replace(
-    /\b(elementary|middle|junior high|high|primary|intermediate)\s+school\b/gi,
-    '$1',
-  );
-  return normalizeKey(stripped);
-}
-
-const DEPARTMENT_ALIASES: ReadonlyMap<string, string> = new Map([
+const UNIT_ALIASES: ReadonlyMap<string, string> = new Map([
   ['hr', 'Human Resources'],
   ['human-resource', 'Human Resources'],
   ['human-resources', 'Human Resources'],
-  ['it', 'Technology'],
-  ['information-technology', 'Technology'],
-  ['technology-services', 'Technology'],
-  ['business-office', 'Business and Finance'],
-  ['finance', 'Business and Finance'],
-  ['business-services', 'Business and Finance'],
-  ['sped', 'Special Education'],
-  ['special-ed', 'Special Education'],
-  ['special-education', 'Special Education'],
+  ['it', 'Information Technology'],
+  ['information-technology', 'Information Technology'],
+  ['technology-services', 'Information Technology'],
+  ['is', 'Information Technology'],
+  ['business-office', 'Finance'],
+  ['finance', 'Finance'],
+  ['business-services', 'Finance'],
+  ['fiscal-services', 'Finance'],
   ['front-office', 'Front Office'],
   ['main-office', 'Front Office'],
-  ['athletics', 'Athletics'],
-  ['child-nutrition', 'Child Nutrition'],
-  ['food-services', 'Child Nutrition'],
-  ['food-service', 'Child Nutrition'],
-  ['transportation', 'Transportation'],
-  ['maintenance', 'Operations and Facilities'],
-  ['facilities', 'Operations and Facilities'],
-  ['operations', 'Operations and Facilities'],
+  ['pw', 'Public Works'],
+  ['public-works', 'Public Works'],
+  ['dpw', 'Public Works'],
+  ['parks-and-rec', 'Parks and Recreation'],
+  ['parks-rec', 'Parks and Recreation'],
+  ['pd', 'Police'],
+  ['fd', 'Fire'],
+  ['ems', 'Emergency Medical Services'],
+  ['oig', 'Office of Inspector General'],
 ]);
 
-export function normalizeDepartmentName(raw: string): string {
-  const alias = DEPARTMENT_ALIASES.get(normalizeKey(raw));
+/**
+ * Normalize an organizational unit name.
+ *
+ * Aliases cover the abbreviations that appear across every level of government.
+ * A vertical with its own vocabulary supplies additions through the taxonomy.
+ */
+export function normalizeUnitName(
+  raw: string,
+  extraAliases: ReadonlyMap<string, string> = new Map(),
+): string {
+  const key = normalizeKey(raw);
+  const alias = extraAliases.get(key) ?? UNIT_ALIASES.get(key);
   if (alias !== undefined) return alias;
-  const cleaned = collapseWhitespace(raw).replace(/\s*(department|dept\.?|office)\s*$/i, '');
+  const cleaned = collapseWhitespace(raw).replace(
+    /\s*(department|dept\.?|office|division|bureau)\s*$/i,
+    '',
+  );
   return decaseIfShouting(cleaned);
 }
 

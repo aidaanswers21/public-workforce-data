@@ -1,6 +1,6 @@
 import * as cheerio from 'cheerio';
 import type { AnyNode } from 'domhandler';
-import { collapseWhitespace } from '@pan/core';
+import { collapseWhitespace } from '@public-workforce/core';
 
 export type Html = cheerio.CheerioAPI;
 export type { AnyNode };
@@ -55,7 +55,7 @@ export type DirectoryField =
   | 'phone'
   | 'extension'
   | 'department'
-  | 'school'
+  | 'organization'
   | 'grade'
   | 'subject'
   | 'location'
@@ -74,18 +74,31 @@ const HEADER_PATTERNS: readonly { pattern: RegExp; field: DirectoryField }[] = [
   { pattern: /^(ext\.?|extension)$/i, field: 'extension' },
   { pattern: /(phone|telephone|tel\.?|contact\s*number)/i, field: 'phone' },
   { pattern: /(job\s*title|position|role|assignment|title)/i, field: 'title' },
-  { pattern: /(department|dept\.?|team|division)/i, field: 'department' },
-  { pattern: /(school|campus|building|site|location)/i, field: 'school' },
-  { pattern: /(grade\s*level|grade)/i, field: 'grade' },
+  { pattern: /(department|dept\.?|team|unit)/i, field: 'department' },
+  { pattern: /(grade\s*level|grade|band|level)/i, field: 'grade' },
   { pattern: /(subject|course|content\s*area)/i, field: 'subject' },
   { pattern: /(staff\s*member|employee|full\s*name|^name$|directory)/i, field: 'name' },
 ];
 
-export function classifyHeader(header: string): DirectoryField {
+/**
+ * Map a directory column header to a field.
+ *
+ * Organization column names are supplied by the caller from the composed
+ * vocabulary, so a table headed "Campus" and one headed "Bureau" are both
+ * understood without this package knowing which vertical either belongs to.
+ */
+export function classifyHeader(
+  header: string,
+  organizationTerms: readonly string[] = [],
+): DirectoryField {
   const cleaned = collapseWhitespace(header).replace(/[*:]+$/, '');
   if (cleaned.length === 0) return 'unknown';
   for (const { pattern, field } of HEADER_PATTERNS) {
     if (pattern.test(cleaned)) return field;
+  }
+  const normalized = cleaned.toLowerCase().replace(/[^a-z]+/g, '');
+  for (const term of organizationTerms) {
+    if (normalized === term.toLowerCase().replace(/[^a-z]+/g, '')) return 'organization';
   }
   return 'unknown';
 }
@@ -107,13 +120,17 @@ export interface ParsedTable {
  * person column and one contact or role column. That threshold keeps calendars,
  * fee schedules and bell schedules out of the record set.
  */
-export function parseTable($: Html, table: AnyNode): ParsedTable {
+export function parseTable(
+  $: Html,
+  table: AnyNode,
+  organizationTerms: readonly string[] = [],
+): ParsedTable {
   const $table = $(table);
   const headerCells = $table.find('thead tr').first().find('th, td');
   const fallbackHeader =
     headerCells.length > 0 ? headerCells : $table.find('tr').first().find('th');
   const headers = fallbackHeader.toArray().map((cell) => textOf($, cell));
-  const columns = headers.map(classifyHeader);
+  const columns = headers.map((header) => classifyHeader(header, organizationTerms));
 
   const bodyRows = (
     $table.find('tbody tr').length > 0 ? $table.find('tbody tr') : $table.find('tr')

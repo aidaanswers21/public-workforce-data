@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nameTokens, parsePersonName, personIdentityKey } from './names.js';
+import { isOrganizationLabel, nameTokens, parsePersonName, personIdentityKey } from './names.js';
 
 describe('parsePersonName', () => {
   it('splits a plain first and last name', () => {
@@ -85,44 +85,51 @@ describe('parsePersonName', () => {
 
 describe('personIdentityKey', () => {
   it('ignores middle names so one person is not split into two', () => {
-    const a = personIdentityKey({
-      stateCode: 'TX',
-      orgScopeId: 'district-1',
-      parsed: parsePersonName('Jane Smith'),
-    });
+    const a = personIdentityKey({ organizationId: 'org-1', parsed: parsePersonName('Jane Smith') });
     const b = personIdentityKey({
-      stateCode: 'TX',
-      orgScopeId: 'district-1',
+      organizationId: 'org-1',
       parsed: parsePersonName('Jane M. Smith'),
     });
     expect(a).toBe(b);
   });
 
-  it('keeps same-named people in different organizations distinct', () => {
-    const a = personIdentityKey({
-      stateCode: 'TX',
-      orgScopeId: 'district-1',
-      parsed: parsePersonName('Jane Smith'),
-    });
-    const b = personIdentityKey({
-      stateCode: 'TX',
-      orgScopeId: 'district-2',
-      parsed: parsePersonName('Jane Smith'),
-    });
+  it('keeps same-named people at different organizations distinct', () => {
+    const a = personIdentityKey({ organizationId: 'org-1', parsed: parsePersonName('Jane Smith') });
+    const b = personIdentityKey({ organizationId: 'org-2', parsed: parsePersonName('Jane Smith') });
     expect(a).not.toBe(b);
   });
 
   it('matches across the inverted and plain published forms', () => {
     const a = personIdentityKey({
-      stateCode: 'TX',
-      orgScopeId: 'd',
+      organizationId: 'org-1',
       parsed: parsePersonName('Rivera, Ana M.'),
     });
-    const b = personIdentityKey({
-      stateCode: 'TX',
-      orgScopeId: 'd',
-      parsed: parsePersonName('Ana Rivera'),
-    });
+    const b = personIdentityKey({ organizationId: 'org-1', parsed: parsePersonName('Ana Rivera') });
     expect(a).toBe(b);
+  });
+
+  it('needs no state, so a federal employee has an identity without one', () => {
+    const key = personIdentityKey({
+      organizationId: 'federal-bureau-1',
+      parsed: parsePersonName('Grace Hopper'),
+    });
+    expect(key).toBe('federal-bureau-1|hopper-grace');
+  });
+});
+
+describe('isOrganizationLabel', () => {
+  const words = ['front', 'office', 'bureau', 'records', 'department'];
+
+  it('recognizes a row that names a place rather than a person', () => {
+    expect(isOrganizationLabel('Front Office', words)).toBe(true);
+    expect(isOrganizationLabel('Records Bureau', words)).toBe(true);
+  });
+
+  it('does not treat a person who shares a word with an office as a label', () => {
+    expect(isOrganizationLabel('Jane Office', words)).toBe(false);
+  });
+
+  it('has no built-in word list: an empty vocabulary labels nothing', () => {
+    expect(isOrganizationLabel('Front Office', [])).toBe(false);
   });
 });

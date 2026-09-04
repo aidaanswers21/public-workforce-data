@@ -1,17 +1,19 @@
 import type {
   AdapterContext,
   DirectoryAdapter,
+  DirectoryVocabulary,
   FetchedPage,
   PaginationKind,
-} from '@pan/shared-types';
-import { EXTRACTION_METHODS, type ExtractedPersonRecord } from '@pan/shared-types';
-import { canonicalizeUrl, contentHash, isSyntacticallyValidEmail } from '@pan/core';
+} from '@public-workforce/shared-types';
+import type { ExtractedPersonRecord } from '@public-workforce/shared-types';
+import { canonicalizeUrl, contentHash, isSyntacticallyValidEmail } from '@public-workforce/core';
+import { EXTRACTION_METHODS_BY_CODE, baseTaxonomy } from '@public-workforce/taxonomy';
 
 export interface ExpectedRecord {
   fullNamePublished: string;
   titlePublished?: string | null;
   departmentPublished?: string | null;
-  schoolPublished?: string | null;
+  organizationPublished?: string | null;
   phonePublished?: string | null;
   emails?: string[];
   profileUrl?: string | null;
@@ -57,13 +59,25 @@ export function fixturePage(fixture: AdapterFixture): FetchedPage {
   };
 }
 
+/**
+ * The vocabulary a fixture runs against.
+ *
+ * Defaults to the neutral base, so a contract test proves an adapter works
+ * without any sector loaded. A fixture that needs a vertical's words supplies a
+ * composed taxonomy through `fixture.context`.
+ */
+export function fixtureVocabulary(fixture: AdapterFixture): DirectoryVocabulary {
+  return fixture.context?.vocabulary ?? baseTaxonomy().vocabulary;
+}
+
 export function fixtureContext(fixture: AdapterFixture): AdapterContext {
   const page = fixturePage(fixture);
   return {
     baseUrl: page.finalUrl,
-    districtName: null,
-    schoolName: null,
+    organizationName: null,
+    parentOrganizationName: null,
     allowedDomains: [new URL(page.finalUrl).hostname],
+    vocabulary: fixtureVocabulary(fixture),
     now: () => new Date('2026-01-01T00:00:00.000Z'),
     ...fixture.context,
   };
@@ -98,7 +112,12 @@ export function checkAdapterContract(
   const context = fixtureContext(fixture);
   const frozenBody = page.body;
 
-  const detection = adapter.detect({ url: page.url, page, hints: {} });
+  const detection = adapter.detect({
+    url: page.url,
+    page,
+    hints: {},
+    vocabulary: fixtureVocabulary(fixture),
+  });
   add(
     'detect returns this adapter key',
     detection.adapterKey === adapter.key,
@@ -109,7 +128,12 @@ export function checkAdapterContract(
     detection.score >= 0 && detection.score <= 1,
     String(detection.score),
   );
-  const detectionAgain = adapter.detect({ url: page.url, page, hints: {} });
+  const detectionAgain = adapter.detect({
+    url: page.url,
+    page,
+    hints: {},
+    vocabulary: fixtureVocabulary(fixture),
+  });
   add(
     'detect is deterministic',
     detectionAgain.score === detection.score,
@@ -247,9 +271,7 @@ function checkRecords(
       .join(','),
   });
 
-  const badMethod = bad(
-    (record) => !(EXTRACTION_METHODS as readonly string[]).includes(record.extractionMethod),
-  );
+  const badMethod = bad((record) => !EXTRACTION_METHODS_BY_CODE.has(record.extractionMethod));
   checks.push({
     name: `${label}: extraction method is a known value`,
     passed: badMethod.length === 0,
@@ -302,7 +324,7 @@ function checkExpectedRecords(
     };
     compare('titlePublished', match.titlePublished);
     compare('departmentPublished', match.departmentPublished);
-    compare('schoolPublished', match.schoolPublished);
+    compare('organizationPublished', match.organizationPublished);
     compare('phonePublished', match.phonePublished);
     compare('profileUrl', match.profileUrl);
     if (want.emails !== undefined) {

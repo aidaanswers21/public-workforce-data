@@ -5,26 +5,79 @@ this is what "correct" means.
 
 ## Purpose
 
-Collect publicly available U.S. K-12 school and employee directory data for one
-state at a time, starting with Texas, and manage it so that it can be exported
-without ever including someone who has asked not to be contacted.
+Collect publicly available U.S. public-sector organization and employee
+directory data, one jurisdiction at a time, and manage it so that it can be
+exported without ever including someone who has asked not to be contacted, and
+without ever collecting from a source nobody has approved.
 
 The system collects and manages data. It sends nothing.
 
+## Scope
+
+Six levels of government, through one neutral core: K-12 education, state
+government, county government, municipal and local government, special districts
+and public authorities, and federal government.
+
+Education is a sector extension. It is not the shape of the platform, and no
+neutral package may assume it.
+
 ## Functional requirements
 
-1. Import the authoritative list of public school districts and schools for a
-   state, from official sources, using official identifiers where they exist.
-2. Find each district and school's official website and staff directory.
-3. Extract publicly displayed employees and their published contact details.
-4. Support every staff role, not only decision-makers.
-5. Handle pagination, load-more controls, search interfaces and API-backed
+1. Import an authoritative list of public bodies for a jurisdiction, from
+   official sources, using official identifiers where they exist.
+2. Model an organization's place in a hierarchy as effective-dated
+   relationships, not a single parent column, so a reorganization is history
+   rather than an overwrite.
+   2b. Record government level and sector as orthogonal, source-supported
+   attributes. An organization type may suggest defaults for both and
+   constrains neither, and there is no `education` government level.
+3. Never require a state above a federal organization or a federal employee.
+4. Find each organization's official website and staff directory.
+5. Extract publicly displayed employees and their published work contact
+   details.
+6. Support every staff role, not only decision-makers.
+7. Handle pagination, load-more controls, search interfaces and API-backed
    directories.
-6. Normalize, deduplicate and store the data with complete source provenance.
-7. Keep published addresses separate from inferred candidates.
-8. Support email validation results from a replaceable provider.
-9. Enforce complaints, opt-outs and suppression before any export.
-10. Add further states through configuration and reusable adapters.
+8. Normalize, deduplicate and store the data with complete source provenance,
+   where provenance is a real reference to a source document that exists.
+   8b. Resolve an organization's identity from the strongest evidence available, so
+   an identifier-less recrawl converges on the same row, two same-named bodies
+   under different parents stay separate, and an ambiguous record enters review
+   rather than being merged or duplicated.
+   8c. Keep evidence append-only. A changed page appends a document version and the
+   earlier observation stays readable.
+9. Hold title and department on the employment assignment, never on the person.
+10. Preserve the published title untouched, and record the method, version and
+    confidence of any normalization applied to it.
+11. Keep employment evidence separate from contact evidence.
+12. Keep published addresses separate from inferred candidates.
+13. Support email validation results from a replaceable provider.
+14. Refuse production collection from a source marked prohibited, or marked
+    review required or unknown without a recorded human approval.
+15. Enforce complaints, opt-outs and suppression before any export, including
+    suppression of a whole organization subtree. A complaint that cannot be
+    resolved to a person is recorded and queued for review, never turned into a
+    suppression row that matches nobody.
+    15b. Make revocation monotonic and audited: once, with a reason, never undone.
+16. Add further jurisdictions, sectors and directory platforms through
+    configuration and reusable packages.
+
+## The public professional data boundary
+
+Collect only what a public source published about a person's public role.
+
+**Allowed** when the source policy permits: name, published title, department,
+organization, professional office address, public work phone, public work email.
+
+**Never collected or inferred**, whatever a source displays: student
+information; parent and guardian information; Social Security or other
+government identification numbers; dates of birth; personal financial
+information; medical information; personal email addresses, unless a specific
+future lawful use is explicitly approved; home addresses; family information;
+anything behind authentication.
+
+The boundary is enforced on what is stored, not merely scanned and reported:
+every downstream write reads the sanitized values.
 
 ## Data classes for email
 
@@ -36,23 +89,26 @@ result that says so.
 ## Required output fields
 
 First name, middle name, last name, full published name, title, normalized
-title, role category, department, school, district, county, state, published
-email, inferred email candidate, email classification, email validation status,
+title, role category, job family, seniority, department, organization,
+organization type, parent organization, government level, sector, jurisdiction,
+duty location city, duty location county, duty location state, published email,
+inferred email candidate, email classification, email validation status,
 inference confidence, source URL, source type, first seen, last seen, crawl run,
-extraction method, confidence, active/inactive status.
+extraction method, confidence, assignment status, record status.
 
 ## Operational boundaries
 
 Public sources only, no authentication. Identify the crawler. Respect robots.txt
 and access restrictions. Rate limit per domain. Stop and record a blocked source
 rather than evading it. Support domain and URL exclusion lists. Store only what
-this business purpose needs. Never collect student information.
+this business purpose needs. A vendor saying data is compliant never overrides
+the source policy or the suppression list.
 
 ## Definition of done for the foundation
 
 - [x] The repository installs cleanly.
 - [x] Linting passes.
-- [x] Type checking passes.
+- [x] Type checking passes, for sources and for the test suite.
 - [x] Tests pass.
 - [x] The project builds.
 - [x] Local setup is documented.
@@ -61,9 +117,18 @@ this business purpose needs. Never collect student information.
 - [x] Repeating the same crawl creates no duplicate records.
 - [x] Every output record retains source provenance.
 - [x] Published and inferred emails remain distinguishable.
-- [x] Suppressed records cannot be exported.
-- [x] A new state can be added without modifying the crawler core.
+- [x] Suppressed records cannot be exported, including a whole organization
+      subtree.
+- [x] A new jurisdiction at any level of government can be added without
+      modifying the crawler core.
+- [x] A new sector can be added without a migration.
 - [x] A new directory adapter can be added through the documented interface.
+- [x] The neutral core contains no education-specific, state-specific or
+      platform-specific code, proven by a test that reads the source.
+- [x] Every table exposed through PostgREST denies anonymous and authenticated
+      access by default, with no permissive policies.
+- [x] A sector pack cannot silently overwrite another pack's reference data.
+- [x] A sector's title rules cannot classify another sector's employees.
 - [x] No production crawl, deployment, commit or push has occurred without
       authorization.
 

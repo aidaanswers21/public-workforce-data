@@ -1,5 +1,5 @@
-import type { SqlClient } from '@pan/database';
-import { QueryRepository, type CoverageSummary } from '@pan/database';
+import type { SqlClient } from '@public-workforce/database';
+import { QueryRepository, type CoverageSummary } from '@public-workforce/database';
 
 export interface RunSummaryRow {
   id: string;
@@ -19,11 +19,20 @@ export interface FailureRow {
   exampleMessage: string;
 }
 
+export interface SourcePolicyQueueRow {
+  domain: string | null;
+  urlPattern: string | null;
+  status: string;
+  lastReviewedAt: string | null;
+}
+
 export interface DataQualitySample {
   fullNamePublished: string;
   titlePublished: string | null;
   titleNormalized: string | null;
   roleCategory: string;
+  organizationName: string | null;
+  governmentLevelCode: string;
   emailClassification: string | null;
   sourceUrl: string | null;
   confidence: number;
@@ -86,49 +95,83 @@ export class AdminReports {
     }));
   }
 
-  async coverage(stateCode: string): Promise<CoverageSummary> {
-    return this.queries.coverageSummary(stateCode);
+  async coverage(
+    scope: { governmentLevelCode?: string; sectorCode?: string } = {},
+  ): Promise<CoverageSummary> {
+    return this.queries.coverageSummary(scope);
   }
 
-  /** A random sample for eyeballing against the source page. */
-  async dataQualitySample(stateCode: string, limit = 10): Promise<DataQualitySample[]> {
+  /** How many organizations sit at each level of government. */
+  async organizationBreakdown(): Promise<
+    { governmentLevelCode: string; organizationTypeCode: string; count: number }[]
+  > {
     const result = await this.client.query<Record<string, unknown>>(
-      `select p.full_name_published, emp.title_published, emp.title_normalized, emp.role_category,
-              ea.classification as email_classification, sp.url as source_url, emp.confidence
+      `select government_level_code, organization_type_code, count(*)::int as count
+       from organizations
+       group by government_level_code, organization_type_code
+       order by count desc`,
+    );
+    return result.rows.map((row) => ({
+      governmentLevelCode: String(row['government_level_code']),
+      organizationTypeCode: String(row['organization_type_code']),
+      count: Number(row['count']),
+    }));
+  }
+
+  /** Sources a person still has to review before production collection. */
+  async sourcePolicyQueue(limit = 25): Promise<SourcePolicyQueueRow[]> {
+    const result = await this.client.query<Record<string, unknown>>(
+      `select domain, url_pattern, collection_status, last_reviewed_at
+       from source_policies
+       where collection_status in ('review_required','unknown') and production_approved_by is null
+       order by created_at limit $1`,
+      [limit],
+    );
+    return result.rows.map((row) => ({
+      domain: (row['domain'] as string | null) ?? null,
+      urlPattern: (row['url_pattern'] as string | null) ?? null,
+      status: String(row['collection_status']),
+      lastReviewedAt: row['last_reviewed_at'] == null ? null : iso(row['last_reviewed_at']),
+    }));
+  }
+
+  /** A sample for eyeballing against the source document. */
+  async dataQualitySample(limit = 10): Promise<DataQualitySample[]> {
+    const result = await this.client.query<Record<string, unknown>>(
+      `select p.full_name_published, emp.title_published, emp.title_normalized,
+              emp.role_category_code as role_category, o.name as organization_name,
+              o.government_level_code, ea.classification as email_classification,
+              sd.url as source_url, emp.confidence
        from people p
-       join states s on s.id = p.state_id
        join employment_assignments emp on emp.person_id = p.id
+       join organizations o on o.id = emp.organization_id
        left join email_addresses ea on ea.person_id = p.id
-       left join source_pages sp on sp.id = emp.source_page_id
-       where s.code = $1
+       left join source_documents sd on sd.id = emp.source_document_id
        order by emp.confidence asc, p.id
-       limit $2`,
-      [stateCode.toUpperCase(), limit],
+       limit $1`,
+      [limit],
     );
     return result.rows.map((row) => ({
       fullNamePublished: String(row['full_name_published']),
       titlePublished: (row['title_published'] as string | null) ?? null,
       titleNormalized: (row['title_normalized'] as string | null) ?? null,
       roleCategory: String(row['role_category']),
+      organizationName: (row['organization_name'] as string | null) ?? null,
+      governmentLevelCode: (row['government_level_code'] as string | null) ?? 'unknown',
       emailClassification: (row['email_classification'] as string | null) ?? null,
       sourceUrl: (row['source_url'] as string | null) ?? null,
       confidence: Number(row['confidence'] ?? 0),
     }));
   }
 
-  /** Titles the rule table did not recognize, so the vocabulary can be grown. */
-  async unmatchedTitles(
-    stateCode: string,
-    limit = 25,
-  ): Promise<{ title: string; count: number }[]> {
+  /** Titles the taxonomy did not recognize, so the vocabulary can be grown. */
+  async unmatchedTitles(limit = 25): Promise<{ title: string; count: number }[]> {
     const result = await this.client.query<{ title_published: string; count: number }>(
       `select emp.title_published, count(*)::int as count
        from employment_assignments emp
-       join people p on p.id = emp.person_id
-       join states s on s.id = p.state_id
-       where s.code = $1 and emp.role_category in ('other','unknown') and emp.title_published is not null
-       group by emp.title_published order by count desc limit $2`,
-      [stateCode.toUpperCase(), limit],
+       where emp.role_category_code in ('other', 'unknown') and emp.title_published is not null
+       group by emp.title_published order by count desc limit $1`,
+      [limit],
     );
     return result.rows.map((row) => ({ title: row.title_published, count: Number(row.count) }));
   }

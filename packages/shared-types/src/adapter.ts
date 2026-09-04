@@ -1,10 +1,38 @@
-import type {
-  CrawlTargetType,
-  ExtractionMethod,
-  FetchedPage,
-  ObfuscationKind,
-  SourceType,
-} from './index.js';
+import type { CrawlTargetType, ExtractionMethod, FetchedPage, ObfuscationKind } from './index.js';
+
+/**
+ * The words an adapter uses to recognize a directory, a shared inbox and an
+ * organizational label.
+ *
+ * Declared here because it is part of the adapter contract, and composed in
+ * `@public-workforce/taxonomy` from a neutral base plus whatever the registered sectors
+ * contribute. An adapter reads it without knowing which vertical supplied a
+ * given term, which is what lets one adapter serve a school district, a county
+ * and a federal bureau.
+ */
+export interface DirectoryVocabulary {
+  headingTerms: readonly string[];
+  urlHints: readonly { pattern: string; weight: number }[];
+  sharedInboxLocalParts: readonly string[];
+  sharedInboxPrefixes: readonly string[];
+  organizationLabelWords: readonly string[];
+  /**
+   * Words that mark a string as a job title rather than a name.
+   *
+   * Adapters use these to reject a header row or a mis-aligned column without
+   * needing the full title rule set, which belongs to the ingestion pipeline.
+   */
+  titleIndicatorTerms: readonly string[];
+  /**
+   * Field and column names that identify the organization a row belongs to.
+   *
+   * Used for JSON keys, table headers and filter controls. A vertical that calls
+   * the column "campus" contributes that word here rather than the adapters
+   * knowing it.
+   */
+  organizationFieldAliases: readonly string[];
+  organizationNameSuffixes: readonly string[];
+}
 
 /** An email exactly as found on a page, plus how it was recovered. */
 export interface ExtractedEmail {
@@ -13,7 +41,7 @@ export interface ExtractedEmail {
   /** Decoded, lowercased address. */
   address: string;
   obfuscation: ObfuscationKind;
-  /** Adapter's hint. `classifyEmail` in @pan/core makes the final call. */
+  /** Adapter's hint. `classifyEmail` in @public-workforce/core makes the final call. */
   looksLikeGeneralInbox: boolean;
 }
 
@@ -21,20 +49,24 @@ export interface ExtractedEmail {
  * One person as published on one page.
  *
  * Adapters return only what the page said. Name splitting, title normalization,
- * classification and identity resolution all happen downstream in @pan/core, so
+ * classification and identity resolution all happen downstream in @public-workforce/core, so
  * an adapter can never quietly invent structure the source did not contain.
  */
 export interface ExtractedPersonRecord {
   /**
-   * Deterministic within (adapter, sourceUrl). Recomputing it on a later crawl
-   * of the same page must produce the same value. This is what makes recrawls
-   * idempotent.
+   * Opaque deterministic key for this extracted identity.
+   *
+   * An adapter initially scopes it to its source page. Before guards or
+   * checkpoint persistence, the crawl engine replaces it with a digest of the
+   * boundary-safe identity fields so the same person republished on another
+   * page in the run is recorded once without persisting raw identity data.
    */
   recordKey: string;
   fullNamePublished: string;
   titlePublished: string | null;
   departmentPublished: string | null;
-  schoolPublished: string | null;
+  /** The organization the row named, as published. Any public body, not one kind. */
+  organizationPublished: string | null;
   phonePublished: string | null;
   emails: readonly ExtractedEmail[];
   profileUrl: string | null;
@@ -57,7 +89,7 @@ export type PaginationKind =
   | 'infinite_scroll'
   | 'alpha_filter'
   | 'department_filter'
-  | 'school_filter'
+  | 'organization_filter'
   | 'search_interface';
 
 /** One concrete follow-up request the engine may enqueue. */
@@ -89,6 +121,12 @@ export interface DetectionContext {
   page: FetchedPage | null;
   /** Hints from discovery: link text, heading text, platform fingerprints. */
   hints: Readonly<Record<string, string>>;
+  /**
+   * Composed from the registered sectors. Required rather than optional, so an
+   * adapter can never fall back to a hard-coded word list and quietly become
+   * specific to one vertical.
+   */
+  vocabulary: DirectoryVocabulary;
 }
 
 export interface DetectionResult {
@@ -102,7 +140,8 @@ export interface DetectionResult {
 export interface DiscoveredDirectory {
   url: string;
   targetType: CrawlTargetType;
-  sourceType: SourceType;
+  /** Reference code from the taxonomy, e.g. `html_directory`. */
+  sourceTypeCode: string;
   /** 0..1 belief that this URL is a staff directory rather than other content. */
   score: number;
   reasons: readonly string[];
@@ -111,7 +150,7 @@ export interface DiscoveredDirectory {
 export interface ListingExtraction {
   records: readonly ExtractedPersonRecord[];
   pagination: PaginationPlan;
-  /** Directory-wide context the page established (school name, department). */
+  /** Directory-wide context the page established, such as organization or unit. */
   context: Readonly<Record<string, string>>;
   /**
    * True when the page parsed fine and genuinely holds no people. Distinct from
@@ -124,10 +163,14 @@ export interface ListingExtraction {
 export interface AdapterContext {
   /** Absolute URL the page was fetched from, used to resolve relative links. */
   baseUrl: string;
-  districtName: string | null;
-  schoolName: string | null;
+  /** The organization whose directory this is, when known. */
+  organizationName: string | null;
+  /** The organization it belongs to, when known. Never assumed to exist. */
+  parentOrganizationName: string | null;
   /** Domains the engine will allow follow-up requests to. */
   allowedDomains: readonly string[];
+  /** Composed from the registered sectors. Adapters must not hard-code terms. */
+  vocabulary: DirectoryVocabulary;
   now: () => Date;
 }
 
@@ -136,7 +179,7 @@ export interface AdapterContext {
  *
  * A new platform is added by implementing this interface and registering it.
  * Nothing in the crawl engine, normalization pipeline or state configuration
- * needs to change. `runAdapterContractTests` in @pan/adapter-kit enforces the
+ * needs to change. `runAdapterContractTests` in @public-workforce/adapter-kit enforces the
  * behavioural half of the contract that types cannot express.
  */
 export interface DirectoryAdapter {

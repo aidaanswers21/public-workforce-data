@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { HttpRobotsProvider, RobotsTxt, isAllowedDomain, withPolicyDefaults } from './policy.js';
 
-const UA = 'PensionAppointmentNetworkBot/0.1';
+const UA = 'PublicWorkforceDataBot/0.1';
 
 describe('RobotsTxt', () => {
   const robots = RobotsTxt.parse(`
@@ -11,7 +11,7 @@ Disallow: /search
 Allow: /private/public-directory
 Crawl-delay: 5
 
-User-agent: PensionAppointmentNetworkBot
+User-agent: PublicWorkforceDataBot
 Disallow: /no-bots
 `);
 
@@ -59,6 +59,16 @@ describe('HttpRobotsProvider', () => {
     const decision = await provider.check('https://x.example.org/staff', UA);
     expect(decision.allowed).toBe(true);
     expect(decision.note).toContain('unavailable');
+  });
+
+  it('can fail closed when robots.txt is unavailable in production', async () => {
+    const provider = new HttpRobotsProvider(
+      () => Promise.resolve({ ok: false, status: 503, body: '' }),
+      { unavailablePolicy: 'deny' },
+    );
+    const decision = await provider.check('https://x.example.org/staff', UA);
+    expect(decision.allowed).toBe(false);
+    expect(decision.note).toContain('production policy refuses');
   });
 
   it('fetches robots.txt once per origin', async () => {
