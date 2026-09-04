@@ -6,10 +6,12 @@ services:
     plan: starter
     branch: main
     autoDeployTrigger: off
-    buildCommand: corepack enable && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm build
+    buildCommand: corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm build
     startCommand: pnpm collection:daemon
     maxShutdownDelaySeconds: 300
     envVars:
+      - key: NODE_VERSION
+        value: '22.23.2'
       - key: DATABASE_URL
         sync: false
       - key: CRAWLER_USER_AGENT
