@@ -2,7 +2,8 @@
 
 ## Local setup
 
-Requirements: Node 22, pnpm 10, Docker (only for a local Postgres).
+Requirements: Node 22 and pnpm 10. Docker is optional and needed only for a
+separate local Postgres server.
 
 ```bash
 pnpm install
@@ -14,6 +15,94 @@ pnpm verify               # format, lint, typecheck, test, build
 in-process PostgreSQL 16, and every crawl test reads saved fixtures. The
 typecheck step covers both the packages and the test suite, because the package
 builds exclude `*.test.ts`.
+
+### Local operator console
+
+The browser console uses an embedded PostgreSQL database inside this workspace,
+so Docker is not required. Its fixture setup never contacts a live source.
+
+```bash
+pnpm local:setup  # migrate and seed storage/local-admin-db from saved fixtures
+pnpm local:start  # print the private local URL and keep the console running
+```
+
+Open the printed URL and use `LOCAL_ADMIN_EMAIL` and `LOCAL_ADMIN_PASSWORD` from
+the gitignored `.env.local` file. The server binds to `127.0.0.1`, signs an
+HTTP-only same-site session cookie, and displays coverage, evidence samples,
+organization counts, and recent fixture runs. Search and sign-out are available
+in the browser.
+
+When `.env.local` also contains `DATABASE_URL`, the same private console reads
+the managed PostgreSQL database instead of the embedded fixture database. It
+does not run the local migration harness against that remote database and still
+binds only to `127.0.0.1`, so opening the production database does not publish
+the console to the internet.
+
+**Collection projects** lets an operator choose a registered jurisdiction and
+sector from dropdowns backed by the controlled taxonomy, choose organization
+types with an accessible click-or-drag shelf, materialize organization
+membership, generate discovery targets from published website URLs, and release
+one finite batch. Exact organization identifiers remain optional advanced text
+filters because a national identifier set is not a useful menu. Project creation
+and target generation do not access the network. Batch approval records the
+signed-in operator, the exact target limit, and a required note. A target is an
+organization website, not one person, so a finite batch may produce thousands of
+observed public professional records. Approval does not carry to a later batch.
+The local console does not start a production worker, and no live batch has run.
+
+Only registered jurisdiction configurations are executable. The menus therefore
+grow from the jurisdiction registry and taxonomy instead of presenting an
+unbacked national list as ready. Adding the national organization index and each
+verified jurisdiction/source configuration will populate the same controls
+without adding branches to the console or crawler.
+
+The production entry point refuses to start without one approved batch ID, a
+database URL and the crawler identity. A supervised run may use a local job
+ceiling:
+
+```bash
+pnpm collection:work -- --batch-id <approved-batch-uuid> --max-jobs 10
+```
+
+To keep working until that one approved batch has no claimable jobs left, use:
+
+```bash
+pnpm collection:work -- --batch-id <approved-batch-uuid> --until-batch-complete
+```
+
+This is not an unbounded crawl. The batch has a finite, recorded target set and
+keeps its page and error circuit breakers, retry limits, per-domain concurrency,
+source-policy gate and robots checks. The flag removes only the arbitrary local
+worker job count. It cannot continue into a later batch, because approval for
+one release is not approval for another.
+
+For a supervised production host, `pnpm collection:daemon` runs the same
+approved-job consumer continuously. It sleeps while no eligible job exists and
+resumes when an operator approves a finite batch. It may move between approved
+batches, but it cannot create or approve a batch and it still evaluates source
+policy before claiming each target. `WORKER_POLL_INTERVAL_MS` controls the idle
+poll interval from 1 to 60,000 milliseconds.
+
+The Render Blueprint runs one daemon in Oregon, disables automatic deploys, and
+uses a 300-second graceful shutdown window. `DATABASE_URL`,
+`CRAWLER_USER_AGENT`, and `CRAWLER_CONTACT_URL` remain dashboard-managed
+secrets. A `SIGINT` or `SIGTERM` stops new claims; the active job completes and
+the database pool closes before the process exits.
+
+The worker database pool defaults to 10 connections. The dedicated Supabase
+project's session pool admitted 12 simultaneous worker connections and refused
+an attempted twentieth connection at its 15-session plan ceiling. Keep one
+worker at the default pool size so administrative and health connections retain
+headroom.
+
+Running that command performs live requests. It therefore requires explicit
+human approval for that exact batch every time, in addition to cleared source
+policies and all remaining production blockers. Do not use it for local fixture
+testing.
+
+The browser console remains a local review surface, not production
+authentication. It is separate from the read API authentication callback and
+does not make the local console a public service.
 
 ## See it work
 
@@ -27,6 +116,10 @@ again to prove the recrawl adds nothing, records an opt-out, and writes
 organization-subtree suppression: suppressing the parent organization drops the
 export to zero rows. No network, no external database, nothing left behind but
 the file.
+
+`pnpm local:setup` runs the same scenario with `--persistent`, retaining the
+database under the ignored `storage/` directory for the local operator console.
+It is separate from the `DATABASE_URL` used by the CLI and migration command.
 
 ## Database
 
@@ -82,7 +175,9 @@ Two review queues exist in the repositories and have no CLI command yet:
 `OrganizationRepository.identityReviewQueue()` lists organizations whose
 identity was too weakly evidenced to be sure, and
 `ComplianceRepository.complaintReviewQueue()` lists complaints that could not be
-matched to a person. Both are worked by a person.
+matched uniquely to a person or whose suppression transaction failed. Complaint
+delivery retries must reuse the original idempotency key; the durable complaint
+is resumed rather than duplicated. Both queues are worked by a person.
 
 `coverage` takes an optional government level and sector, so
 `pnpm admin coverage education` and `pnpm admin coverage federal` are separate
@@ -90,9 +185,9 @@ questions with separate denominators.
 
 `apps/api` serves `/health`, `/coverage` and `/records`. It is read-only: it
 rejects every method other than GET, and has no route that sends, exports around
-suppression, or mutates anything. It is **unauthenticated**, and any caller may
-name any export purpose, so it must not be exposed. See production blocker C14
-in `BACKLOG.md`; it blocks deployment.
+suppression, or mutates anything. Every data route requires the authenticator
+provided by its production entry point. Record reads also accept only an active,
+human-approved purpose from `export_purposes`; none is created implicitly.
 
 ## Reading a crawl result
 

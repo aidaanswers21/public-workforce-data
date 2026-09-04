@@ -247,6 +247,41 @@ describe('fixture collection, end to end', () => {
     );
   });
 
+  it('stores response metadata from the fetch instead of substituting defaults', async () => {
+    const h = await harness();
+    const result = await h.runCrawl(await h.startRun());
+    const first = result.records[0];
+    if (first === undefined) throw new Error('fixture produced no records');
+    result.records = [
+      {
+        ...first,
+        httpStatus: 206,
+        contentType: 'text/html; charset=windows-1252',
+        robotsAllowed: null,
+        robotsPolicyNote: null,
+      },
+    ];
+    await h.pipeline.ingestRun(result, h.context);
+
+    const stored = await h.database.query<{
+      http_status: number | null;
+      content_type: string | null;
+      robots_allowed: boolean | null;
+    }>(
+      `select http_status, content_type, robots_allowed
+       from source_document_versions
+       where source_document_id in (
+         select id from source_documents where url_canonical = $1
+       )`,
+      [first.sourceUrl],
+    );
+    expect(stored.rows[0]).toMatchObject({
+      http_status: 206,
+      content_type: 'text/html; charset=windows-1252',
+      robots_allowed: null,
+    });
+  });
+
   it('tags employment evidence separately from contact evidence', async () => {
     const h = await harness();
     await h.pipeline.ingestRun(await h.runCrawl(await h.startRun()), h.context);
@@ -378,6 +413,7 @@ describe('fixture collection, end to end', () => {
     expect(before.csv).toContain('wei.chen@sample-isd.example.org');
 
     await h.compliance.recordComplaint({
+      idempotencyKey: 'end-to-end-opt-out',
       channel: 'email',
       contactType: 'email',
       contactValue: 'wei.chen@sample-isd.example.org',
@@ -461,6 +497,32 @@ describe('fixture collection, end to end', () => {
     expect(checkpoint?.crawlRunId).toBe(runId);
     expect(checkpoint?.pagesFetched).toBe(3);
     expect(checkpoint?.visitedUrlHashes).toHaveLength(3);
+    for (const key of checkpoint?.seenRecordKeys ?? []) expect(key).toMatch(/^[0-9a-f]{64}$/);
+    const persisted = await h.database.query<{ payload: string }>(
+      `select payload::text as payload from crawl_checkpoints where crawl_run_id = $1`,
+      [runId],
+    );
+    for (const raw of ['Wei Chen', 'wei.chen@sample-isd.example.org', 'readable-valid-key']) {
+      expect(persisted.rows[0]?.payload).not.toContain(raw);
+    }
+  });
+
+  it('refuses to persist a readable record fingerprint in a checkpoint', async () => {
+    const h = await harness();
+    const runId = await h.startRun();
+    await expect(
+      h.crawl.saveCheckpoint({
+        crawlRunId: runId,
+        crawlTargetId: null,
+        pendingTasks: [],
+        visitedUrlHashes: [],
+        seenContentHashes: [],
+        seenRecordKeys: ['Jamie Fields|Student|Example'],
+        pagesFetched: 0,
+        updatedAt: AT,
+      }),
+    ).rejects.toThrow(/opaque SHA-256/);
+    expect(await h.database.count('crawl_checkpoints')).toBe(0);
   });
 
   it('never persists a value the data boundary rejected', async () => {
@@ -491,6 +553,10 @@ describe('fixture collection, end to end', () => {
           sourceUrl: SEED_URL,
           sourceContentHash: 'poisoned',
           fetchedAt: AT,
+          httpStatus: 200,
+          contentType: 'text/html',
+          robotsAllowed: null,
+          robotsPolicyNote: null,
           depth: 0,
           pageContext: {},
         },
@@ -544,6 +610,10 @@ describe('fixture collection, end to end', () => {
           sourceUrl: SEED_URL,
           sourceContentHash: 'legitimate',
           fetchedAt: AT,
+          httpStatus: 200,
+          contentType: 'text/html',
+          robotsAllowed: null,
+          robotsPolicyNote: null,
           depth: 0,
           pageContext: {},
         },

@@ -92,6 +92,11 @@ export class CrawlRepository {
   }
 
   async saveCheckpoint(checkpoint: CrawlCheckpoint): Promise<void> {
+    for (const key of checkpoint.seenRecordKeys) {
+      if (!/^[0-9a-f]{64}$/.test(key)) {
+        throw new Error('crawl checkpoint record keys must be opaque SHA-256 digests');
+      }
+    }
     await this.client.query(
       `insert into crawl_checkpoints (crawl_run_id, crawl_target_id, payload, pages_fetched, updated_at)
        values ($1,$2,$3,$4,$5)

@@ -5,6 +5,8 @@ import {
   scoreDirectoryUrl,
   urlHash,
   withPolicyDefaults,
+  SourcePolicyRegistry,
+  type CollectionMode,
   type CrawlPolicy,
 } from '@public-workforce/core';
 import type {
@@ -40,6 +42,7 @@ export interface DiscoverySummary {
   targetsRecorded: number;
   unsupportedPlatform: boolean;
   note: string | null;
+  blocked: boolean;
 }
 
 /**
@@ -61,6 +64,8 @@ export class DiscoveryWorker {
       /** Composed from the registered sectors. Never hard-coded here. */
       vocabulary: DirectoryVocabulary;
       policy?: Partial<CrawlPolicy>;
+      collectionMode?: CollectionMode;
+      sourcePolicy?: SourcePolicyRegistry;
     },
   ) {}
 
@@ -73,6 +78,7 @@ export class DiscoveryWorker {
         targetsRecorded: 0,
         unsupportedPlatform: false,
         note: 'unusable site url',
+        blocked: true,
       };
     }
 
@@ -81,6 +87,38 @@ export class DiscoveryWorker {
       maxDepth: 1,
       ...this.deps.policy,
     });
+
+    const sourceDecision = (this.deps.sourcePolicy ?? SourcePolicyRegistry.empty()).evaluate(
+      seed,
+      this.deps.collectionMode ?? 'production',
+    );
+    if (!sourceDecision.allowed) {
+      await this.recordBlocked(target, seed, 'policy_hold', sourceDecision.reason);
+      return {
+        siteUrl: seed,
+        candidates: [],
+        targetsRecorded: 0,
+        unsupportedPlatform: false,
+        note: sourceDecision.reason,
+        blocked: true,
+      };
+    }
+
+    if (policy.respectRobots) {
+      const robots = await this.deps.robots.check(seed, policy.userAgent);
+      if (!robots.allowed) {
+        const note = `robots.txt disallows discovery${robots.matchedRule === null ? '' : ` by ${robots.matchedRule}`}`;
+        await this.recordBlocked(target, seed, 'blocked', note);
+        return {
+          siteUrl: seed,
+          candidates: [],
+          targetsRecorded: 0,
+          unsupportedPlatform: false,
+          note,
+          blocked: true,
+        };
+      }
+    }
 
     const outcome = await this.deps.fetcher.fetch({
       url: seed,
@@ -97,6 +135,7 @@ export class DiscoveryWorker {
         targetsRecorded: 0,
         unsupportedPlatform: false,
         note: outcome.failure.message,
+        blocked: false,
       };
     }
 
@@ -118,6 +157,7 @@ export class DiscoveryWorker {
           targetsRecorded: 0,
           unsupportedPlatform: true,
           note: 'no adapter claimed the site; recorded for platform review',
+          blocked: false,
         };
       }
       throw error;
@@ -157,6 +197,7 @@ export class DiscoveryWorker {
       targetsRecorded,
       unsupportedPlatform: false,
       note: candidates.length === 0 ? 'no directory-looking links found on the site root' : null,
+      blocked: false,
     };
   }
 
@@ -201,6 +242,23 @@ export class DiscoveryWorker {
        on conflict (url_hash) do update set
          status = 'unsupported_platform', updated_at = now()`,
       [target.organizationId, target.jurisdictionId, url, urlHash(url)],
+    );
+  }
+
+  private async recordBlocked(
+    target: DiscoveryTarget,
+    url: string,
+    status: 'blocked' | 'policy_hold',
+    reason: string,
+  ): Promise<void> {
+    await this.deps.client.query(
+      `insert into crawl_targets (
+         organization_id, jurisdiction_id, url, url_hash, target_type, source_type_code,
+         status, exclusion_reason
+       ) values ($1,$2,$3,$4,'organization_site','html_directory',$5,$6)
+       on conflict (url_hash) do update set
+         status = excluded.status, exclusion_reason = excluded.exclusion_reason, updated_at = now()`,
+      [target.organizationId, target.jurisdictionId, url, urlHash(url), status, reason],
     );
   }
 }

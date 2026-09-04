@@ -34,18 +34,6 @@ export function dedupeExtractedRecords(
   return [...bySoftKey.values()];
 }
 
-/**
- * Identity of the person a record describes, independent of the page it came from.
- *
- * `recordKey` is deliberately scoped to (adapter, source url) so that recrawling
- * one page is idempotent. That makes it useless for answering "have we already
- * seen this person on a different page", which is what the crawl engine's
- * progress guard needs, so the two keys are kept separate.
- */
-export function recordIdentityFingerprint(record: ExtractedPersonRecord): string {
-  return softIdentityKey(record);
-}
-
 function softIdentityKey(record: ExtractedPersonRecord): string {
   const parsed = parsePersonName(record.fullNamePublished);
   const name = normalizeKey(`${parsed.lastName ?? ''} ${parsed.firstName ?? ''}`);

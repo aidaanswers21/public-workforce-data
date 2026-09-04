@@ -61,6 +61,16 @@ describe('HttpRobotsProvider', () => {
     expect(decision.note).toContain('unavailable');
   });
 
+  it('can fail closed when robots.txt is unavailable in production', async () => {
+    const provider = new HttpRobotsProvider(
+      () => Promise.resolve({ ok: false, status: 503, body: '' }),
+      { unavailablePolicy: 'deny' },
+    );
+    const decision = await provider.check('https://x.example.org/staff', UA);
+    expect(decision.allowed).toBe(false);
+    expect(decision.note).toContain('production policy refuses');
+  });
+
   it('fetches robots.txt once per origin', async () => {
     let calls = 0;
     const provider = new HttpRobotsProvider(() => {

@@ -29,17 +29,22 @@ information; personal email addresses, unless a specific future lawful use is
 explicitly approved; home addresses; family information; anything behind
 authentication.
 
-Student and guardian detection is deliberately narrow. "Director of Student
+Student, guardian and medical detection is deliberately field-aware. "Director of Student
 Services" is a public employee, and a rule that rejected the word would throw
 away real people and train whoever reads the drop counter to ignore it. The
 patterns match a field that names a student or guardian as its subject
 (`student_name`, `pupil_dob`, `parent_email`) or a value that identifies someone
-by school position, and they never run against a title or a department, because
-those describe a job rather than a person.
+by school position. Medical labels remain prohibited, while value matching
+requires an explicit personal-health signal such as a labeled diagnosis,
+medical record, patient identifier or health condition, so public roles such as
+"Medical Director" and public programs such as "Prescription Assistance
+Program" remain in scope. These checks never treat an ordinary title or
+department name as a person's protected fact.
 
-`applyDataBoundary` in `@public-workforce/core` runs on every extracted record
-before anything is stored, and **the pipeline reads its output, not the original
-record**. The sanitized values are what reach the person row, the employment
+`applyDataBoundary` in `@public-workforce/core` runs in the crawl engine before
+checkpointing and again at ingestion as a defense in depth check. **The
+pipeline reads its output, not the original record.** The sanitized values are
+what reach checkpoint deduplication, the person row, the employment
 assignment, the organizational unit, the contact points and the source
 observations. That last one matters most: observations are the platform's most
 durable evidence, so a raw value written into one would outlive every other
@@ -80,6 +85,12 @@ Production collection additionally requires a reviewed source policy with a
 recorded human approval. `prohibited` is absolute, and a CHECK constraint makes
 a prohibited-but-approved row impossible to store. See `SOURCE_POLICY_REVIEW.md`.
 
+Collection authorization is finite. A project defines scope but grants no
+standing permission. Each batch records the approving operator, time, note and
+target ceiling. Workers claim only from active projects and approved batches,
+and the scheduler re-evaluates source policy before issuing a lease. The crawl
+engine and discovery worker check policy and robots again before requests.
+
 ## What a vendor cannot override
 
 A data vendor, an API provider or a partner asserting that their data is
@@ -92,9 +103,9 @@ says `permitted`, and it can never make a suppressed person contactable.
 
 Enforced in the data layer, not left to whoever writes an export. Eleven scopes,
 from one email address up to an entire organization subtree, a jurisdiction, a
-level of government, a geographic area or everyone. The geographic scope matches
-an exact area and does not yet inherit down the area tree; see production
-blocker C15 in `BACKLOG.md`.
+level of government, a geographic area or everyone. Geographic suppression is
+inherited down the area tree, so a state-level entry also withholds duty
+locations in its counties and descendant areas.
 
 Revocation is monotonic and audited. See `DATA_MODEL.md`.
 
@@ -104,8 +115,17 @@ nothing. The subtree rule is implemented twice, as a recursive CTE in SQL and as
 `OrganizationHierarchy` in memory, and the two are tested against each other.
 
 Suppression rows are immutable by database trigger: they can be revoked, never
-edited or deleted. `audit_events` is append-only and hash-chained, so tampering
-with the record of who suppressed what, and when, is detectable.
+edited or deleted. The database owns revocation audit creation, so one
+revocation produces exactly one event. Audit appends are serialized and each
+hash includes the database sequence and every material event field, so chain
+forks and tampering are detectable.
+
+Complaint intake preserves the raw request with an idempotency key before it
+attempts resolution. Resolution locks that complaint and re-checks its state,
+so concurrent delivery of the same key cannot duplicate suppression or audit
+effects. Only one exact public work-contact match is automatically linked to a
+person; ambiguous and unmatched values enter human review, and a suppression
+failure cannot erase the complaint.
 
 Anything involving money owed, a refund, a complaint, a legal request, or
 health and safety goes to a person. It is not automated here.
@@ -140,12 +160,24 @@ connection and is unaffected, and PostgREST returns nothing to anyone else.
 There are deliberately no permissive placeholder policies. A policy that allows
 a read "for now" is worse than none, because it reads as a considered decision.
 
+Each table-creating migration explicitly enables and forces RLS. Revoking table
+access through default privileges protects future grants, but does not switch on
+RLS, so the schema test enumerates every table and rejects an omission.
+
 `packages/database/src/schema.test.ts` asserts the schema-side half: every table
 protected, no policies. It cannot assert the PostgREST half, because the
 in-process PostgreSQL the tests run against has no `anon` role and no PostgREST
 in front of it. Proving that an anonymous request with a publishable key is
 refused needs an integration test against a real Supabase project, tracked as
 blocker RLS-1 in `BACKLOG.md`.
+
+## Read API
+
+`apps/api` leaves only `/health` public. Every data route requires an injected
+authenticator, and `/records` also requires an active `export_purposes` row with
+a named owner, approver and approval time. A caller cannot weaken
+purpose-scoped suppression by supplying an arbitrary query string. No purpose
+is seeded automatically because doing so would invent a human approval.
 
 ## Reporting a problem
 

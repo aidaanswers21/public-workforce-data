@@ -204,9 +204,9 @@ function matchesRule(rule: string, path: string): boolean {
 /**
  * Fetches and caches robots.txt per origin.
  *
- * A robots.txt that cannot be fetched is treated as permissive, matching the
- * usual convention, but the outcome is recorded either way so the policy log
- * shows what we actually saw rather than what we assumed.
+ * The default follows the usual permissive convention for compatibility.
+ * Production callers select fail-closed behaviour, and the outcome is recorded
+ * either way so the policy log shows what we observed and how it was handled.
  */
 export class HttpRobotsProvider implements RobotsProvider {
   private readonly cache = new Map<string, RobotsTxt | null>();
@@ -215,6 +215,7 @@ export class HttpRobotsProvider implements RobotsProvider {
     private readonly fetchText: (
       url: string,
     ) => Promise<{ ok: boolean; status: number; body: string }>,
+    private readonly options: { unavailablePolicy?: 'allow' | 'deny' } = {},
   ) {}
 
   async check(url: string, userAgent: string): Promise<RobotsDecision> {
@@ -237,11 +238,14 @@ export class HttpRobotsProvider implements RobotsProvider {
       this.cache.set(origin, robots);
     }
     if (robots === null) {
+      const allowed = this.options.unavailablePolicy !== 'deny';
       return {
-        allowed: true,
+        allowed,
         matchedRule: null,
         crawlDelaySeconds: null,
-        note: 'robots.txt unavailable, treated as permissive',
+        note: allowed
+          ? 'robots.txt unavailable, treated as permissive'
+          : 'robots.txt unavailable, production policy refuses collection',
       };
     }
     return robots.check(parsed.pathname + parsed.search, userAgent);

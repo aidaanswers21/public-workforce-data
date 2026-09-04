@@ -79,10 +79,9 @@ explaining what it does and how to ask to be removed. It comes from
 `DEFAULT_CRAWL_POLICY`, whose default points at `example.invalid` precisely so
 an unconfigured deployment is obvious rather than anonymous.
 
-`CRAWLER_USER_AGENT` and `CRAWLER_CONTACT_URL` are named in `.env.example` and
-**nothing reads them today**. Wiring them is part of production blocker C12, and
-a live crawl must not run until a configured identity actually reaches the
-request.
+`CRAWLER_USER_AGENT` and `CRAWLER_CONTACT_URL` are required by the approved-batch
+worker. It refuses to start without both, and the values reach ordinary requests
+and robots.txt requests.
 
 ## robots.txt
 
@@ -90,8 +89,9 @@ request.
 User-agent grouping, Allow, Disallow (with `*` and `$`) and Crawl-delay, with
 longest-match precedence. A disallowed path is not fetched: the engine records a
 `robots_disallowed` error, notes `blocked_by_robots` and stops that target. An
-unreachable robots.txt is treated as permissive, and the outcome is recorded
-either way so the policy log shows what we saw rather than what we assumed.
+unreachable robots.txt is permissive only for compatibility with non-production
+callers. The production batch worker selects fail-closed behavior, records the
+block and does not fetch the target.
 
 A `Crawl-delay` longer than our configured delay wins.
 

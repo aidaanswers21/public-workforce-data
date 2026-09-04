@@ -1,7 +1,6 @@
 import type { CrawlRunResult, HarvestedRecord, TitleRuleSet } from '@public-workforce/core';
 import {
   applyDataBoundary,
-  scanForProhibitedData,
   classifyEmail,
   domainOf,
   isOrganizationLabel,
@@ -152,12 +151,12 @@ export class IngestionPipeline {
       urlHash: urlHash(harvested.sourceUrl),
       domain: domainOf(harvested.sourceUrl) ?? 'unknown',
       sourceTypeCode: context.sourceTypeCode,
-      httpStatus: 200,
+      httpStatus: harvested.httpStatus,
       contentHash: harvested.sourceContentHash,
-      contentType: 'text/html',
+      contentType: harvested.contentType,
       storageKey: null,
-      robotsAllowed: true,
-      robotsPolicyNote: null,
+      robotsAllowed: harvested.robotsAllowed,
+      robotsPolicyNote: harvested.robotsPolicyNote,
       crawlRunId,
       retrievedAt: harvested.fetchedAt,
     });
@@ -222,20 +221,6 @@ export class IngestionPipeline {
         summary.personalEmailsDropped += 1;
         continue;
       }
-      // An address is a value like any other: a student or guardian mailbox is
-      // out of scope even on a domain we are allowed to read.
-      const addressFindings = scanForProhibitedData('email_published', email.address);
-      if (addressFindings.length > 0) {
-        summary.boundaryDrops += addressFindings.length;
-        for (const finding of addressFindings) {
-          this.deps.logger.warn(
-            { field: finding.field, kind: finding.kind, sourceUrl: harvested.sourceUrl },
-            'address dropped at the public professional data boundary',
-          );
-        }
-        continue;
-      }
-
       const classification = classifyEmail({
         address: email.address,
         obfuscation: email.obfuscation,

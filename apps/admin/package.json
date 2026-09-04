@@ -19,7 +19,8 @@
     "@public-workforce/shared-types": "workspace:*",
     "@public-workforce/core": "workspace:*",
     "@public-workforce/database": "workspace:*",
-    "@public-workforce/observability": "workspace:*"
+    "@public-workforce/observability": "workspace:*",
+    "@public-workforce/crawler-worker": "workspace:*"
   },
   "devDependencies": {}
 }

@@ -2,6 +2,7 @@ dist/
 node_modules/
 .turbo/
 coverage/
+.context/
 pnpm-lock.yaml
 tests/fixtures/**/*.html
 tests/fixtures/**/*.json

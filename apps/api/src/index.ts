@@ -1,11 +1,20 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { createLogger, type Logger } from '@public-workforce/observability';
-import { QueryRepository, type SqlClient } from '@public-workforce/database';
+import {
+  ExportPurposeRepository,
+  QueryRepository,
+  type SqlClient,
+} from '@public-workforce/database';
+
+export interface ApiCaller {
+  subject: string;
+}
 
 export interface ApiOptions {
   client: SqlClient;
   logger?: Logger;
   port?: number;
+  authenticate: (request: IncomingMessage) => Promise<ApiCaller | null> | ApiCaller | null;
 }
 
 /**
@@ -19,9 +28,10 @@ export interface ApiOptions {
 export function createApi(options: ApiOptions): ReturnType<typeof createServer> {
   const logger = options.logger ?? createLogger({ name: 'pan-api' });
   const queries = new QueryRepository(options.client);
+  const purposes = new ExportPurposeRepository(options.client);
 
   return createServer((request: IncomingMessage, response: ServerResponse) => {
-    void handle(request, response, queries, logger);
+    void handle(request, response, queries, purposes, options.authenticate, logger);
   });
 }
 
@@ -29,6 +39,8 @@ async function handle(
   request: IncomingMessage,
   response: ServerResponse,
   queries: QueryRepository,
+  purposes: ExportPurposeRepository,
+  authenticate: ApiOptions['authenticate'],
   logger: Logger,
 ): Promise<void> {
   const url = new URL(request.url ?? '/', 'http://localhost');
@@ -41,6 +53,13 @@ async function handle(
   try {
     if (url.pathname === '/health') {
       send(response, 200, { status: 'ok' });
+      return;
+    }
+
+    const caller = await authenticate(request);
+    if (caller === null || caller.subject.trim() === '') {
+      response.setHeader('www-authenticate', 'Bearer');
+      send(response, 401, { error: 'authentication required' });
       return;
     }
 
@@ -65,6 +84,10 @@ async function handle(
       // A read still declares a purpose, so export_purpose suppression applies
       // to browsing exactly as it applies to a written file.
       const purpose = url.searchParams.get('purpose') ?? 'internal-review';
+      if ((await purposes.findActive(purpose)) === null) {
+        send(response, 403, { error: 'purpose is not active and approved' });
+        return;
+      }
       const rows = await queries.queryExportableRows(at, purpose, {
         ...(level === null ? {} : { governmentLevelCode: level }),
         ...(sector === null ? {} : { sectorCode: sector }),

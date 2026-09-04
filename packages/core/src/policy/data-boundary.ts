@@ -35,7 +35,9 @@ const ROUTING_LABEL = /\b(routing|account)\s*(number|no\.?|#)\b/i;
 const DOB_LABEL = /\b(date\s*of\s*birth|birth\s*date|dob|born\s*on)\b/i;
 const DATE_VALUE = /\b(0?[1-9]|1[0-2])[/-](0?[1-9]|[12]\d|3[01])[/-](19|20)\d{2}\b/;
 const MEDICAL_LABEL =
-  /\b(diagnosis|medical\s*record|health\s*condition|prescription|patient\s*id|disability\s*status)\b/i;
+  /\b(diagnosis|medical\s*(record|history|information|notes?)|health\s*condition|prescription|patient\s*id|disability\s*status)\b/i;
+const PERSONAL_MEDICAL_VALUE =
+  /\b(diagnos(is\s*:|ed\s+with)|patient\s*id(?:\s*[:#])?\s+[a-z0-9]|medical\s*record(?:\s*(?:number|no\.?|#|:))?\s+[a-z0-9]|health\s*condition\s*[:=-]|prescription\s*(number|no\.?|#|for|:)|disability\s*status\s*:)/i;
 const HOME_ADDRESS_LABEL = /\b(home|residential|personal)\s*(address|street|residence)\b/i;
 const FAMILY_LABEL =
   /\b(spouse|husband|wife|child(ren)?|dependent|emergency\s*contact|next\s*of\s*kin)\b/i;
@@ -68,6 +70,8 @@ const STUDENT_VALUE =
   /\b(class\s*of\s*(19|20)\d{2}|(\d{1,2})(st|nd|rd|th)\s*grade\s*student|student\s*id\s*[:#]?\s*\w+)\b/i;
 const GUARDIAN_LABEL =
   /\b(parent|guardian|caregiver|custodian[\s_-]*of[\s_-]*record|mother|father)[\s_-]*(name|id|email|address|phone|contact|information)\b/i;
+const GUARDIAN_VALUE =
+  /\b(parent|guardian|caregiver|mother|father)\s*(name|id|email|address|phone|contact)?\s*[:#]/i;
 
 /** Fields that describe a job rather than a person, so the student rules skip them. */
 const ROLE_DESCRIPTION_FIELDS = new Set([
@@ -174,7 +178,10 @@ export function scanForProhibitedData(field: string, value: string): ProhibitedD
       reason: 'label or value indicates a financial account',
     });
   }
-  if (MEDICAL_LABEL.test(label) || MEDICAL_LABEL.test(value)) {
+  if (
+    MEDICAL_LABEL.test(label) ||
+    (!ROLE_DESCRIPTION_FIELDS.has(field) && PERSONAL_MEDICAL_VALUE.test(value))
+  ) {
     findings.push({
       kind: 'medical',
       field,
@@ -214,7 +221,7 @@ export function scanForProhibitedData(field: string, value: string): ProhibitedD
         reason: 'label or value identifies a student rather than an employee',
       });
     }
-    if (GUARDIAN_LABEL.test(label)) {
+    if (GUARDIAN_LABEL.test(label) || GUARDIAN_VALUE.test(value)) {
       findings.push({
         kind: 'guardian_information',
         field,

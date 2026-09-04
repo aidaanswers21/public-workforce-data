@@ -47,6 +47,7 @@ function row(overrides: Partial<ExportablePersonRow> & { personId: string }): Ex
     geographicAreaIds: ['area-co'],
     publishedEmail: `${overrides.personId}@agency.example.gov`,
     inferredEmailCandidate: null,
+    inferredCandidateWithheld: false,
     emailClassification: 'published',
     emailValidationStatus: 'unvalidated',
     inferenceConfidence: null,
@@ -234,7 +235,7 @@ describe('exportPeopleCsv', () => {
     expect(result.csv).not.toContain('j.smith@agency.example.gov');
   });
 
-  it('still withholds the row when the published address is the suppressed one', () => {
+  it('withholds only a suppressed published address when a candidate remains permitted', () => {
     const result = exportPeopleCsv({
       rows: [
         row({
@@ -249,9 +250,9 @@ describe('exportPeopleCsv', () => {
       at: NOW,
       purpose: PURPOSE,
     });
-    // Exporting the guess instead would be an obvious way around the request.
-    expect(result.rowCount).toBe(0);
-    expect(result.csv).not.toContain('j.smith@agency.example.gov');
+    expect(result.rowCount).toBe(1);
+    expect(result.csv).not.toContain('jane.smith@agency.example.gov');
+    expect(result.csv).toContain('j.smith@agency.example.gov');
   });
 
   it('keeps published and inferred addresses in separate columns', () => {
@@ -272,6 +273,24 @@ describe('exportPeopleCsv', () => {
     const columns = (header ?? '').split(',');
     expect(cells[columns.indexOf('published_email')]).toBe('published@agency.example.gov');
     expect(cells[columns.indexOf('inferred_email_candidate')]).toBe('guess@agency.example.gov');
+  });
+
+  it('does not count an address-less input row as suppression', () => {
+    const result = exportPeopleCsv({
+      rows: [
+        row({
+          personId: 'p1',
+          publishedEmail: null,
+          inferredEmailCandidate: null,
+        }),
+      ],
+      suppression: SuppressionIndex.empty(),
+      at: NOW,
+      purpose: PURPOSE,
+    });
+    expect(result.rowCount).toBe(0);
+    expect(result.suppressedCount).toBe(0);
+    expect(result.suppressedPersonIds).toEqual([]);
   });
 
   it('an opt-out recorded after a previous export still takes effect', () => {

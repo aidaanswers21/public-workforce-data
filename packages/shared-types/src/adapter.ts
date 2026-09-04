@@ -54,9 +54,12 @@ export interface ExtractedEmail {
  */
 export interface ExtractedPersonRecord {
   /**
-   * Deterministic within (adapter, sourceUrl). Recomputing it on a later crawl
-   * of the same page must produce the same value. This is what makes recrawls
-   * idempotent.
+   * Opaque deterministic key for this extracted identity.
+   *
+   * An adapter initially scopes it to its source page. Before guards or
+   * checkpoint persistence, the crawl engine replaces it with a digest of the
+   * boundary-safe identity fields so the same person republished on another
+   * page in the run is recorded once without persisting raw identity data.
    */
   recordKey: string;
   fullNamePublished: string;

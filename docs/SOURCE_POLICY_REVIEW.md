@@ -14,12 +14,11 @@ So the check is a gate in `CrawlEngine`, evaluated before robots.txt and before
 the first fetch. `SourcePolicyRegistry.evaluate` returns a decision, and a
 refusal raises `SourcePolicyViolation` and records the target as `policy_hold`.
 
-**The gate exists and is not yet wired for production.** Nothing loads real
-`source_policies` rows into the registry at run time, and no operator command
-records a review or an approval, so the process below is currently carried out
-by writing rows directly. The discovery worker does not go through the gate at
-all. Those are production blockers C12 and C13 in `BACKLOG.md`, and both block a
-live crawl.
+The approved-batch worker and discovery worker both load `source_policies` from
+the database and evaluate the gate before robots or the first source request.
+The authenticated operator console exposes **Source policies**, where a person
+records a review and, when required, records production approval as a separate
+act. A prohibited review never offers or accepts an approval.
 
 ## The four collection statuses
 
@@ -105,9 +104,9 @@ pnpm admin policies
 ```
 
 lists sources with `collection_status` in (`review_required`, `unknown`) that
-have no production approval: everything the crawler will currently refuse. There
-is no command to record a review or an approval yet; both are direct writes to
-`source_policies`. See blocker C12.
+have no production approval: everything the crawler will currently refuse. Use
+the console's **Source policies** screen to record the review evidence and the
+separate approval.
 
 ## Before a production run
 

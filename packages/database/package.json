@@ -16,6 +16,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.2.0",
     "@public-workforce/shared-types": "workspace:*",
     "@public-workforce/core": "workspace:*",
     "@public-workforce/observability": "workspace:*",
@@ -23,7 +24,6 @@
     "@public-workforce/taxonomy": "workspace:*"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.2.0",
     "@types/pg": "^8.11.0"
   }
 }

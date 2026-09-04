@@ -201,18 +201,28 @@ export class IngestionRepository {
 
   async recordObservation(input: ObservationInput): Promise<Uuid> {
     const result = await this.client.query<{ id: Uuid }>(
-      `insert into source_observations (
-         source_document_version_id, crawl_run_id, evidence_class, entity_type, entity_id,
-         record_key, field, value_raw, value_normalized, extraction_method_code, confidence,
-         selector, observed_at
-       ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-       on conflict (source_document_version_id, record_key, field) do update set
-         entity_id = coalesce(excluded.entity_id, source_observations.entity_id),
-         value_raw = excluded.value_raw,
-         value_normalized = excluded.value_normalized,
-         confidence = greatest(source_observations.confidence, excluded.confidence),
-         observed_at = excluded.observed_at
-       returning id`,
+      `with inserted as (
+         insert into source_observations (
+           source_document_version_id, crawl_run_id, evidence_class, entity_type, entity_id,
+           record_key, field, value_raw, value_normalized, extraction_method_code, confidence,
+           selector, observed_at
+         ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         on conflict (source_document_version_id, record_key, field) do nothing
+         returning id
+       )
+       select id from inserted
+       union all
+       select id from source_observations
+       where source_document_version_id = $1 and record_key = $6 and field = $7
+         and evidence_class = $3
+         and entity_type = $4
+         and entity_id is not distinct from $5
+         and value_raw is not distinct from $8
+         and value_normalized is not distinct from $9
+         and extraction_method_code = $10
+         and confidence = $11
+         and selector is not distinct from $12
+       limit 1`,
       [
         input.sourceDocumentVersionId,
         input.crawlRunId,
@@ -229,7 +239,11 @@ export class IngestionRepository {
         input.observedAt,
       ],
     );
-    return requireId(result.rows[0], 'source_observations');
+    const row = result.rows[0];
+    if (row === undefined) {
+      throw new Error('source_observations: immutable conflict within one source document version');
+    }
+    return row.id;
   }
 
   /**

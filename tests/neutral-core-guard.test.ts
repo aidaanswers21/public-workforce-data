@@ -1,4 +1,13 @@
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -113,11 +122,12 @@ const STATE_NAMES = [
 ];
 
 /**
- * Strip comments and string-literal-free prose before scanning.
+ * Strip comments before scanning executable source.
  *
  * Documentation examples are explicitly allowed: a comment may say "a school
  * belongs to a district" to explain why the model is shaped as it is. What must
- * not appear is executable code that branches on one vertical.
+ * not appear is executable code that branches on one vertical. String literals
+ * remain because a vertical name in executable configuration is still a leak.
  */
 function stripCommentsAndStrings(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/.*$/gm, '$1 ');
@@ -148,8 +158,8 @@ const EXEMPT_FILES = new Set([
   'packages/core/src/policy/data-boundary.ts',
 ]);
 
-function collectSourceFiles(target: string): string[] {
-  const absolute = join(repoRoot, target);
+function collectSourceFiles(target: string, root = repoRoot): string[] {
+  const absolute = join(root, target);
   if (statSync(absolute).isFile()) return [absolute];
   const files: string[] = [];
   const walk = (directory: string): void => {
@@ -163,7 +173,7 @@ function collectSourceFiles(target: string): string[] {
       if (!entry.endsWith('.ts')) continue;
       // Tests and fixtures may name any vertical they like.
       if (entry.endsWith('.test.ts')) continue;
-      if (EXEMPT_FILES.has(relative(repoRoot, full))) continue;
+      if (EXEMPT_FILES.has(relative(root, full))) continue;
       files.push(full);
     }
   };
@@ -171,7 +181,9 @@ function collectSourceFiles(target: string): string[] {
   return files;
 }
 
-const NEUTRAL_FILES = NEUTRAL_PACKAGES.flatMap(collectSourceFiles);
+function collectNeutralFiles(root = repoRoot): string[] {
+  return NEUTRAL_PACKAGES.flatMap((target) => collectSourceFiles(target, root));
+}
 
 interface Leak {
   file: string;
@@ -180,15 +192,19 @@ interface Leak {
   text: string;
 }
 
-function findLeaks(terms: readonly string[]): Leak[] {
+function findLeaks(
+  terms: readonly string[],
+  files: readonly string[] = collectNeutralFiles(),
+  root = repoRoot,
+): Leak[] {
   const leaks: Leak[] = [];
-  for (const file of NEUTRAL_FILES) {
+  for (const file of files) {
     const code = stripCommentsAndStrings(readFileSync(file, 'utf8'));
     const lines = code.split('\n');
     for (const [index, line] of lines.entries()) {
       for (const term of terms) {
         if (new RegExp(`\\b${term}\\b`, 'i').test(line)) {
-          leaks.push({ file: relative(repoRoot, file), line: index + 1, term, text: line.trim() });
+          leaks.push({ file: relative(root, file), line: index + 1, term, text: line.trim() });
         }
       }
     }
@@ -198,7 +214,29 @@ function findLeaks(terms: readonly string[]): Leak[] {
 
 describe('the neutral core carries no vertical-specific knowledge', () => {
   it('scans a meaningful number of files', () => {
-    expect(NEUTRAL_FILES.length).toBeGreaterThan(25);
+    expect(collectNeutralFiles().length).toBeGreaterThan(25);
+  });
+
+  it('discovers a new neutral source file and reports its prohibited knowledge', () => {
+    const isolatedRoot = mkdtempSync(join(tmpdir(), 'neutral-guard-'));
+    const sourceDirectory = join(isolatedRoot, 'packages/core/src');
+    const probe = join(sourceDirectory, 'new-source.ts');
+    try {
+      mkdirSync(sourceDirectory, { recursive: true });
+      writeFileSync(probe, "export const directoryVendor = 'blackboard';\n", 'utf8');
+      const discovered = collectSourceFiles('packages/core/src', isolatedRoot);
+      expect(discovered).toEqual([probe]);
+      expect(findLeaks(PLATFORM_NAMES, discovered, isolatedRoot)).toEqual([
+        {
+          file: 'packages/core/src/new-source.ts',
+          line: 1,
+          term: 'blackboard',
+          text: "export const directoryVendor = 'blackboard';",
+        },
+      ]);
+    } finally {
+      rmSync(isolatedRoot, { recursive: true, force: true });
+    }
   });
 
   it('exempts exactly two files, each for a stated reason', () => {
@@ -255,7 +293,7 @@ describe('the neutral core carries no vertical-specific knowledge', () => {
     expect(remaining, 'data boundary names a vertical outside a prohibition').toEqual([]);
 
     // And it imports nothing from a vertical, so it cannot consult one.
-    expect(source).not.toMatch(/@pan\/(sector-|jurisdiction-)/);
+    expect(source).not.toMatch(/@public-workforce\/(sector-|jurisdiction-)/);
   });
 
   it('contains no education-specific terms in executable code', () => {
@@ -280,9 +318,11 @@ describe('the neutral core carries no vertical-specific knowledge', () => {
 
   it('imports no sector or jurisdiction package', () => {
     const offenders: string[] = [];
-    for (const file of NEUTRAL_FILES) {
+    for (const file of collectNeutralFiles()) {
       const source = readFileSync(file, 'utf8');
-      for (const match of source.matchAll(/from '(@pan\/(?:sector-|jurisdiction-)[a-z-]+)'/g)) {
+      for (const match of source.matchAll(
+        /from '(@public-workforce\/(?:sector-|jurisdiction-)[a-z-]+)'/g,
+      )) {
         offenders.push(`${relative(repoRoot, file)} imports ${match[1] ?? ''}`);
       }
     }
@@ -291,9 +331,9 @@ describe('the neutral core carries no vertical-specific knowledge', () => {
 
   it('the crawl engine depends on no adapter and no jurisdiction', () => {
     const source = readFileSync(join(repoRoot, 'packages/core/src/crawl/engine.ts'), 'utf8');
-    expect(source).not.toMatch(/@pan\/adapter-/);
-    expect(source).not.toMatch(/@pan\/jurisdiction-/);
-    expect(source).not.toMatch(/@pan\/sector-/);
+    expect(source).not.toMatch(/@public-workforce\/adapter-/);
+    expect(source).not.toMatch(/@public-workforce\/jurisdiction-/);
+    expect(source).not.toMatch(/@public-workforce\/sector-/);
   });
 });
 
@@ -307,7 +347,7 @@ describe('vertical knowledge lives where it belongs', () => {
   it('the education extension is a separate module, not part of the core', () => {
     const files = collectSourceFiles('packages/sectors/education/src');
     expect(files.length).toBeGreaterThan(0);
-    for (const file of NEUTRAL_FILES) {
+    for (const file of collectNeutralFiles()) {
       expect(file).not.toContain('sectors/education');
     }
   });

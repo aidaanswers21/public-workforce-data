@@ -133,6 +133,7 @@ describe('structural guarantees', () => {
     for (const table of [
       'organizations',
       'organization_relationships',
+      'organization_identity_evidence',
       'organization_locations',
       'external_identifiers',
       'people',
@@ -206,6 +207,7 @@ describe('structural guarantees', () => {
     // NULL foreign key, so the row it names has to exist.
     const tables = [
       'organizations',
+      'organization_identity_evidence',
       'organization_relationships',
       'organizational_units',
       'organization_locations',
@@ -282,6 +284,46 @@ describe('structural guarantees', () => {
        where conrelid = 'organizations'::regclass and contype = 'u'`,
     );
     expect(result.rows.map((row) => row.definition).join(' ')).toContain('identity_fingerprint');
+  });
+
+  it('gives audit events a unique monotonic sequence and canonical actor fields', async () => {
+    const columns = await database.query<{ column_name: string; is_nullable: string }>(
+      `select column_name, is_nullable from information_schema.columns
+       where table_name = 'audit_events'
+         and column_name in ('sequence_number', 'actor_type', 'actor')
+       order by column_name`,
+    );
+    expect(columns.rows).toEqual([
+      { column_name: 'actor', is_nullable: 'NO' },
+      { column_name: 'actor_type', is_nullable: 'NO' },
+      { column_name: 'sequence_number', is_nullable: 'NO' },
+    ]);
+    const unique = await database.query<{ definition: string }>(
+      `select pg_get_constraintdef(oid) as definition from pg_constraint
+       where conname = 'audit_events_sequence_unique'`,
+    );
+    expect(unique.rows[0]?.definition).toContain('sequence_number');
+  });
+
+  it('persists complaint intake provenance separately from normalized matching values', async () => {
+    const columns = await database.query<{ column_name: string; is_nullable: string }>(
+      `select column_name, is_nullable from information_schema.columns
+       where table_name = 'complaints'
+         and column_name in (
+           'idempotency_key', 'contact_value', 'contact_value_normalized', 'created_by'
+         )`,
+    );
+    expect(columns.rows).toHaveLength(4);
+    expect(columns.rows.every((row) => row.is_nullable === 'NO')).toBe(true);
+  });
+
+  it('persists the withheld candidate metric on exports', async () => {
+    const column = await database.query<{ is_nullable: string; column_default: string }>(
+      `select is_nullable, column_default from information_schema.columns
+       where table_name = 'exports' and column_name = 'withheld_candidate_count'`,
+    );
+    expect(column.rows[0]?.is_nullable).toBe('NO');
+    expect(column.rows[0]?.column_default).toBe('0');
   });
 
   it('never cascades a delete into the suppression list', async () => {

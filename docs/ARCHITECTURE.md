@@ -11,11 +11,11 @@ this repository that sends an email.
 ## Shape
 
 ```
-apps/admin           inspection CLI over runs, coverage, failures, samples, policies
-apps/api             read-only HTTP API over coverage and records
+apps/admin           local console for inspection and collection-project control
+apps/api             authenticated, read-only HTTP API over coverage and records
 
 services/
-  crawler-worker     fetchers, the ingestion pipeline, the fixture crawl CLI
+  crawler-worker     fetchers, ingestion, approved-batch worker, fixture crawl CLI
   discovery-worker   finds an organization's directory and records a target
   validation-worker  candidate generation and validation-provider driving
 
@@ -118,12 +118,15 @@ seam it would arrive behind, and it is in `BACKLOG.md`.
 
 ```
 official file        ->  importer          ->  organizations, relationships, areas
+operator scope       ->  collection project -> selected organizations
+explicit approval    ->  finite batch       -> leased collection_jobs
 organization website ->  discovery-worker  ->  crawl_targets
 source policy        ->  SourcePolicyGate  ->  allowed, or refused and recorded
-crawl target         ->  CrawlEngine       ->  harvested records + documents + errors
+crawl target         ->  CrawlEngine       ->  boundary-safe records + observed response metadata
+                                               + documents + errors
 fetched document     ->  version appender  ->  a new source_document_version only
                                                when the content hash changed
-harvested records    ->  data boundary     ->  sanitized values; drops counted
+harvested records    ->  data boundary     ->  sanitized values and opaque checkpoint keys
 sanitized records    ->  IngestionPipeline ->  source_observations (evidence-classed,
                                                keyed to the document version),
                                                people, employment_assignments,
@@ -132,6 +135,17 @@ published addresses  ->  CandidateGenerator->  email_candidates (separate pass)
 candidates           ->  ValidationRunner  ->  email_validation_results
 records              ->  ExportRepository  ->  CSV, suppression enforced twice
 ```
+
+The scheduler is intentionally split into three durable layers. A project
+records scope and safety limits. `collection_project_organizations` materializes
+the organizations that matched those filters. A batch releases at most the
+approved target count and records the approving operator and note. Workers claim
+one job through an expiring database lease. A partial unique index permits only
+one claimed or running job per registrable domain across every worker process.
+Creating a project or generating targets performs no network request.
+
+National-scale query measurements and their exact dataset shape are recorded in
+`BENCHMARKS.md`.
 
 ## Invariants the code cannot violate
 
@@ -143,10 +157,11 @@ These are enforced by the schema, not by convention. See `DATA_MODEL.md`.
   contact point, address or education attribute cannot exist without provenance.
   It is a NOT NULL foreign key to `source_documents` with `on delete restrict`
   on all ten, so the row it names has to exist and cannot be deleted while cited.
-- Two organizations cannot share an identity fingerprint, so an identifier-less
-  recrawl updates rather than duplicates.
+- Two organizations cannot share an identity fingerprint. Identity evidence is
+  retained separately so stronger evidence upgrades the same organization in
+  either arrival order and conflicts fail explicitly.
 - A source document version cannot be rewritten and an observation cannot be
-  deleted. A changed page appends.
+  updated or deleted. A changed page appends.
 - A suppression entry cannot be un-revoked, re-timestamped, or revoked without a
   reason, and revoking one writes an audit event.
 - A complaint cannot claim it suppressed something without naming the entry, and
@@ -158,9 +173,17 @@ These are enforced by the schema, not by convention. See `DATA_MODEL.md`.
   enforces it.
 - Education attributes cannot be attached to a non-education organization. A
   trigger enforces it.
-- `audit_events` is append-only, and each row hashes the previous one.
-- A completed export must record when suppression was checked and the checksum
-  of what it wrote.
+- `audit_events` is append-only, and a database-serialized sequence participates
+  in the canonical hash with the previous event and every material field.
+- A completed export must record when suppression was checked, the count of
+  withheld candidates and the checksum of what it wrote.
+- A record API request must name an active purpose whose owner and human
+  approval are stored in `export_purposes`.
+
+Every migration that creates a table explicitly enables and forces row level
+security on it. Default privileges revoke grants on future objects, but do not
+enable row level security; the schema test checks every table for both the RLS
+posture and the absence of policies.
 
 ## Testing posture
 

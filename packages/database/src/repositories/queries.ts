@@ -41,6 +41,44 @@ const ORG_ANCESTRY_CTE = `
 `;
 
 /**
+ * Resolve all currently suppressed organization subtrees once.
+ *
+ * Keeping this outside the person-correlated predicate avoids rescanning the
+ * complete ancestry result for every assignment at national scale.
+ */
+const SUPPRESSED_SUBTREES_CTE = `
+  active_suppressions as materialized (
+    select * from suppression_entries
+    where revoked_at is null
+      and effective_at <= $1::timestamptz
+      and (expires_at is null or expires_at > $1::timestamptz)
+  ),
+  suppressed_subtree_organizations as (
+    select organization_id
+    from active_suppressions
+    where scope = 'organization_subtree' and organization_id is not null
+    union
+    select r.child_organization_id
+    from suppressed_subtree_organizations suppressed
+    join organization_relationships r
+      on r.parent_organization_id = suppressed.organization_id
+    join relationship_types rt
+      on rt.code = r.relationship_type_code and rt.implies_subtree
+    where r.effective_from <= current_date
+      and (r.effective_to is null or r.effective_to >= current_date)
+  ),
+  suppressed_geographic_areas as (
+    select geographic_area_id
+    from active_suppressions
+    where scope = 'geographic_area' and geographic_area_id is not null
+    union
+    select area.id
+    from suppressed_geographic_areas suppressed
+    join geographic_areas area on area.parent_area_id = suppressed.geographic_area_id
+  )
+`;
+
+/**
  * Suppression applied in SQL, not by the caller.
  *
  * This is the data layer's half of the guarantee: a consumer that forgets to
@@ -51,30 +89,52 @@ const ORG_ANCESTRY_CTE = `
  * `$1` is the evaluation time and `$2` is the declared export purpose.
  */
 const SUPPRESSION_FILTER = `
+  emp.organization_id not in (
+    select organization_id from suppressed_subtree_organizations
+  )
+  and
+  (
+    loc.geographic_area_id is null
+    or loc.geographic_area_id not in (
+      select geographic_area_id from suppressed_geographic_areas
+    )
+  )
+  and
   not exists (
-    select 1 from suppression_entries s
-    where s.revoked_at is null
-      and s.effective_at <= $1::timestamptz
-      and (s.expires_at is null or s.expires_at > $1::timestamptz)
-      and (
+    select 1 from active_suppressions s
+    where (
         s.scope = 'global'
-        or (s.scope = 'email' and s.value in (coalesce(ea.address_normalized, ''), coalesce(ec.address, '')))
-        or (s.scope = 'domain' and (
-              coalesce(ea.domain, '') = s.value or coalesce(ea.domain, '') like '%.' || s.value
-              or coalesce(ec.domain, '') = s.value or coalesce(ec.domain, '') like '%.' || s.value))
         or (s.scope = 'person' and s.person_id = p.id)
         or (s.scope = 'organization' and s.organization_id = emp.organization_id)
-        or (s.scope = 'organization_subtree' and exists (
-              select 1 from org_ancestry oa
-              where oa.organization_id = emp.organization_id and oa.ancestor_id = s.organization_id))
         or (s.scope = 'jurisdiction' and s.jurisdiction_id = org.jurisdiction_id)
         or (s.scope = 'government_level' and s.government_level_code = org.government_level_code)
-        or (s.scope = 'geographic_area' and s.geographic_area_id = loc.geographic_area_id)
         or (s.scope = 'source' and s.source_document_id = emp.source_document_id)
         or (s.scope = 'export_purpose' and s.export_purpose = $2)
       )
   )
 `;
+
+function addressSuppressionFilter(address: string, domain: string): string {
+  return `not exists (
+    select 1 from suppression_entries address_suppression
+    where address_suppression.revoked_at is null
+      and address_suppression.effective_at <= $1::timestamptz
+      and (
+        address_suppression.expires_at is null
+        or address_suppression.expires_at > $1::timestamptz
+      )
+      and (
+        (address_suppression.scope = 'email' and address_suppression.value = ${address})
+        or (
+          address_suppression.scope = 'domain'
+          and (
+            ${domain} = address_suppression.value
+            or ${domain} like '%.' || address_suppression.value
+          )
+        )
+      )
+  )`;
+}
 
 export class QueryRepository {
   constructor(private readonly client: SqlClient) {}
@@ -124,12 +184,20 @@ export class QueryRepository {
     if (filters.includeGeneralInboxes !== true) {
       conditions.push(`(ea.classification is null or ea.classification <> 'general_inbox')`);
     }
-    if (filters.includeInferredOnly !== true) conditions.push(`ea.id is not null`);
+    if (filters.includeInferredOnly !== true) {
+      // This is a source-evidence filter, not a suppression decision. A person
+      // whose published address was withheld may still export a separately
+      // permitted candidate because the source did publish an address for them.
+      conditions.push(
+        `exists (select 1 from email_addresses source_ea where source_ea.person_id = p.id)`,
+      );
+    }
+    conditions.push(`(ea.id is not null or ec.id is not null)`);
 
     const limitClause = filters.limit === undefined ? '' : `limit ${Number(filters.limit)}`;
 
     const result = await this.client.query<Record<string, unknown>>(
-      `with recursive ${ORG_ANCESTRY_CTE}
+      `with recursive ${ORG_ANCESTRY_CTE}, ${SUPPRESSED_SUBTREES_CTE}
        select
          p.id as person_id, p.first_name, p.middle_name, p.last_name, p.full_name_published,
          p.status as person_status,
@@ -149,6 +217,15 @@ export class QueryRepository {
          ea.address as published_email, ea.classification as email_classification,
          ea.validation_status as email_validation_status,
          ec.address as inferred_email_candidate, ec.confidence as inference_confidence,
+         exists (
+           select 1 from email_candidates withheld_candidate
+           where withheld_candidate.person_id = p.id
+             and withheld_candidate.state not in ('rejected', 'suppressed')
+             and not (${addressSuppressionFilter(
+               'withheld_candidate.address',
+               'withheld_candidate.domain',
+             )})
+         ) as inferred_candidate_withheld,
          sd.url as source_url, sd.source_type_code
        from people p
        join employment_assignments emp on emp.person_id = p.id
@@ -168,6 +245,7 @@ export class QueryRepository {
        left join lateral (
          select * from email_addresses e
          where e.person_id = p.id
+           and ${addressSuppressionFilter('e.address_normalized', 'e.domain')}
          order by case e.classification
            when 'published' then 0 when 'decoded_published' then 1
            when 'general_inbox' then 2 else 3 end, e.last_seen_at desc
@@ -180,6 +258,7 @@ export class QueryRepository {
          -- use, and letting that through would put a withheld address into an
          -- export before the in-memory re-check ever saw it.
          where c.person_id = p.id and c.state not in ('rejected', 'suppressed')
+           and ${addressSuppressionFilter('c.address', 'c.domain')}
          order by c.confidence desc limit 1
        ) ec on true
        left join source_documents sd on sd.id = emp.source_document_id
@@ -336,6 +415,7 @@ function toExportRow(row: Record<string, unknown>): ExportablePersonRow {
     geographicAreaIds: areaId === null ? [] : [areaId],
     publishedEmail: (row['published_email'] as string | null) ?? null,
     inferredEmailCandidate: (row['inferred_email_candidate'] as string | null) ?? null,
+    inferredCandidateWithheld: Boolean(row['inferred_candidate_withheld']),
     emailClassification:
       (row['email_classification'] as ExportablePersonRow['emailClassification']) ?? null,
     emailValidationStatus:

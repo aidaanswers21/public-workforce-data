@@ -214,6 +214,43 @@ export const CRAWL_TARGET_TYPES = [
 ] as const;
 export type CrawlTargetType = (typeof CRAWL_TARGET_TYPES)[number];
 
+/** Lifecycle of an operator-defined collection scope. */
+export const COLLECTION_PROJECT_STATUSES = [
+  'draft',
+  'active',
+  'paused',
+  'completed',
+  'cancelled',
+] as const;
+export type CollectionProjectStatus = (typeof COLLECTION_PROJECT_STATUSES)[number];
+
+/** A finite, separately approved release of work inside a project. */
+export const COLLECTION_BATCH_STATUSES = [
+  'awaiting_approval',
+  'queued',
+  'running',
+  'completed',
+  'completed_with_errors',
+  'cancelled',
+] as const;
+export type CollectionBatchStatus = (typeof COLLECTION_BATCH_STATUSES)[number];
+
+/** Durable scheduler state for one target in one approved batch. */
+export const COLLECTION_JOB_STATUSES = [
+  'queued',
+  'claimed',
+  'running',
+  'completed',
+  'failed',
+  'policy_hold',
+  'cancelled',
+] as const;
+export type CollectionJobStatus = (typeof COLLECTION_JOB_STATUSES)[number];
+
+/** Discovery finds directories; crawl collects from an already discovered target. */
+export const COLLECTION_JOB_KINDS = ['discovery', 'crawl'] as const;
+export type CollectionJobKind = (typeof COLLECTION_JOB_KINDS)[number];
+
 export const CRAWL_STOP_REASONS = [
   'completed',
   'page_budget_exhausted',

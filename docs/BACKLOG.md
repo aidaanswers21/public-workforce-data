@@ -2,10 +2,12 @@
 
 ## Production blockers
 
-Findings from the independent architecture review that are **not** implemented
-in this change. Each one blocks something specific, and the thing it blocks does
-not happen until it is resolved. Owner is the human repository owner in every
-case: a model may propose and implement, and only a person may accept.
+Findings from the independent architecture review that have not been accepted
+by the human owner. A staged implementation may address a finding, but it
+remains listed until the owner accepts the evidence. Each one blocks something
+specific, and the thing it blocks does not happen until it is resolved. Owner
+is the human repository owner in every case: a model may propose and implement,
+and only a person may accept.
 
 **No live source may be fetched and no real outreach export may be used until
 the applicable blockers below are resolved.**
@@ -22,7 +24,11 @@ the applicable blockers below are resolved.**
   run whose targets include a domain with no policy row.
 - **Required tests.** A run refused for an unreviewed domain; a run permitted
   after an approval is recorded; a prohibited row that no approval can unblock.
-- **Status.** Not started. **Blocks live crawl.**
+- **Status.** Implemented. Approved-batch workers load database policy rows and
+  move unreviewed targets to `policy_hold`; the crawler receives the same
+  registry. The authenticated operator console records evidence-hashed reviews,
+  separate production approvals and audit events, and refuses approval for a
+  prohibited source. Independent review and human acceptance remain.
 
 ### C13: discovery-worker policy and robots enforcement
 
@@ -33,7 +39,10 @@ the applicable blockers below are resolved.**
   the same robots provider as the crawl engine.
 - **Required tests.** Discovery refuses an unapproved domain; discovery honours
   a robots disallow; a refusal is recorded as `policy_hold` rather than an error.
-- **Status.** Not started. **Blocks live crawl.**
+- **Status.** Implemented with refusal and robots tests. Discovery evaluates
+  source policy before robots and robots before its fetch, and records a hold or
+  block as a target outcome. Independent review and human acceptance remain.
+  **Blocks live crawl until accepted.**
 
 ### C14: API authentication and controlled export purposes
 
@@ -45,7 +54,11 @@ the applicable blockers below are resolved.**
 - **Required tests.** An unauthenticated request is refused; an unregistered
   purpose is refused; a purpose-scoped suppression is honoured for the purpose
   it names and not for others.
-- **Status.** Not started. **Blocks deployment.**
+- **Status.** Implemented. Every non-health API request goes through an injected
+  authenticator, and record reads require an active row in `export_purposes`
+  with a named owner, approver and approval time. Tests refuse unauthenticated
+  and unregistered-purpose requests; repository tests exercise purpose-scoped
+  suppression. Independent review and human acceptance remain.
 
 ### C15: geographic suppression inheritance
 
@@ -57,7 +70,10 @@ the applicable blockers below are resolved.**
   for organizations, or rename the scope so it cannot be misread.
 - **Required tests.** Suppressing a state withholds a person whose duty location
   is a county inside it, or the documentation says plainly that it does not.
-- **Status.** Not started. **Blocks outreach export.**
+- **Status.** Implemented. Active geographic suppressions are expanded down the
+  geographic-area tree once per query, so a state entry withholds county and
+  lower-level duty locations. Repository tests exercise the inherited case.
+  Independent review and human acceptance remain.
 
 ### C16: concurrent audit-chain correctness
 
@@ -68,7 +84,11 @@ the applicable blockers below are resolved.**
   monotonic sequence the hash covers.
 - **Required tests.** Concurrent appends produce a chain that verifies; a
   deliberate tamper still fails verification.
-- **Status.** Not started. **Blocks deployment.**
+- **Status.** Implemented in migration 0011. The single-connection harness
+  covers sequence uniqueness, timestamp ties and tamper detection. On
+  2026-09-04, 20 simultaneous appends against the dedicated Supabase project
+  produced 20 distinct sequence numbers; every previous-hash link and every
+  recomputed hash verified. Independent review and human acceptance remain.
 
 ### C17: national-scale ancestry and suppression queries
 
@@ -79,7 +99,13 @@ the applicable blockers below are resolved.**
   the plans want; consider a materialized closure table if the recursive CTE
   does not hold up.
 - **Required tests.** A benchmark with a stated row count and a stated budget.
-- **Status.** Not started. **Blocks deployment.**
+- **Status.** Implemented and measured on the dedicated Supabase project on
+  2026-09-04. At 100,000 organizations, 99,999 containment edges and 100,000
+  person/assignment/email rows, complete ancestry materialized in 1,831.886 ms
+  and the indexed root-subtree suppression scan completed in 670.649 ms, each
+  under its 5,000 ms budget. The original query exceeded two minutes; migration
+  0015 and a hashed suppressed-subtree plan resolved it. See `BENCHMARKS.md`.
+  Independent review and human acceptance remain.
 
 ### C18: relationship persistence, cycle prevention and re-observation
 
@@ -91,7 +117,10 @@ the applicable blockers below are resolved.**
   ended relationship means and implement it.
 - **Required tests.** A three-organization cycle is refused; a relationship that
   ends and is re-observed produces the documented result.
-- **Status.** Not started. **Blocks live crawl.**
+- **Status.** Implemented in migration 0013 and the organization repository.
+  Containment writes are serialized, overlapping effective-dated paths are
+  cycle-checked in PostgreSQL, and re-observation preserves an ended interval.
+  Independent review and human acceptance remain.
 
 ### C20: real fetch provenance metadata
 
@@ -103,7 +132,11 @@ the applicable blockers below are resolved.**
   through the crawl result into the pipeline.
 - **Required tests.** A non-200 response stores its real status; a robots
   decision stores what was actually decided.
-- **Status.** Not started. **Blocks live crawl.**
+- **Status.** Implemented. Each harvested record now carries the fetcher's HTTP
+  status and content type plus the actual robots decision and note. The
+  ingestion pipeline persists those values and uses null when robots was not
+  consulted. Tests store a non-200 response without replacing it with 200.
+  Independent review and human acceptance remain.
 
 ### C21: checkpointing, budgets, concurrency and robots failure behaviour
 
@@ -116,7 +149,17 @@ the applicable blockers below are resolved.**
   policy, defaulting to refusal for a production run.
 - **Required tests.** A resumed run does not re-fetch; a resumed run respects the
   original budget; an unreachable robots.txt refuses in production mode.
-- **Status.** Not started. **Blocks live crawl.**
+- **Status.** Implemented. The database now owns finite approved
+  batches, expiring job leases, one active job per registrable domain, page and
+  error stops, crawl-run retention across a lease expiry, and fail-closed
+  production robots behavior. Checkpoints now restore the per-domain page and
+  failure counters, no-progress counter, pagination tokens, and pending POST
+  request details; a task stopped before a budget check remains first in the
+  resume queue. On 2026-09-04, 12 simultaneous workers against the dedicated
+  Supabase project claimed 12 distinct jobs on 12 domains, and a thirteenth
+  claim returned empty. The plan's 15-session pool limit was also confirmed, so
+  the deployed process remains capped at 10. Independent review and human
+  acceptance remain.
 
 ### RLS-1: Supabase row-level security integration test
 
@@ -130,9 +173,13 @@ the applicable blockers below are resolved.**
   returns nothing.
 - **Required tests.** The above, per table group, in CI against a throwaway
   project.
-- **Status.** Not started. **Blocks deployment.**
+- **Status.** The dedicated Supabase project was exercised through PostgREST
+  with its publishable key on 2026-09-04. All 49 public application tables
+  refused anonymous reads. A repeatable CI job against a throwaway project is
+  still required before independent review and human acceptance.
 
-Ordered roughly by what unblocks the most. Nothing here is started.
+Ordered roughly by what unblocks the most. Implemented status is evidence for
+independent review and the human owner; it is not approval.
 
 ## Blocking a real run, in any jurisdiction
 
@@ -183,22 +230,19 @@ Ordered roughly by what unblocks the most. Nothing here is started.
 - **Browser rendering** behind `requiresBrowser`, using a Playwright fetcher
   implementing the `Fetcher` port. Needed for JavaScript-rendered directories,
   which currently show up as `empty_success`.
-- **Parallel targets.** The engine walks one target at a time. Per-domain limits
-  already exist; a scheduler across domains does not.
-- **Resume from stored checkpoints.** `crawl_checkpoints` is written and
-  readable, and the engine accepts `resumeFrom`, but no worker loop reads a
-  checkpoint back on restart.
+- **Scheduler deployment and soak test.** The durable approved-batch queue,
+  cross-worker domain exclusion, expiring leases and checkpoint reload path are
+  implemented behind the finite `collection:work` entry point. It still needs a
+  deployment definition and a multi-connection soak test before live use.
 - **Platform-specific adapters**, once discovery shows which real platforms
   recur. Not before, and only after checking whether the sector vocabulary is
   simply missing the wording.
 
 ## Source policy
 
-- **Policy text re-check.** `policy_text_hash` is stored; nothing re-fetches a
-  policy page and compares it, so a changed policy is currently noticed only by
-  a person.
-- **An admin command to record a review and an approval.** Today both are direct
-  writes to `source_policies`.
+- **Policy text re-check automation.** Reviews and approvals can be recorded in
+  the operator console, but a changed remote policy is not detected
+  automatically.
 
 ## AI extraction
 
@@ -217,13 +261,19 @@ extraction have both failed.
 
 ## Admin
 
-- The full dashboard described in the brief: progress per level and sector,
+- **Local review foundation is implemented.** The browser surface has a
+  workspace-local login, retained fixture data, coverage totals, evidence
+  samples, organization counts, recent runs, search, and sign-out. It is not a
+  production auth system and does not change C14.
+- **Collection projects are implemented locally.** The console can create a
+  jurisdiction-and-sector scope, materialize organizations, generate discovery
+  targets from published websites, approve finite batches, pause and resume,
+  and show target, queue, policy-hold, failure, page and record counts.
+- Complete the remaining dashboard described in the brief: progress per level and sector,
   per-organization counts, directories discovered, crawled, published personnel,
   published emails, inferred candidates, validated, suppressed, failed sources,
   unsupported platforms, sources on policy hold, last crawl date, estimated
-  cost, data-quality samples. Today: a CLI and a read-only JSON API covering
-  runs, failures, coverage, organizations, policies, samples and unmatched
-  titles.
+  cost, policy review workflows, and richer data-quality samples.
 - Export download UI, going through `ExportRepository` so suppression is
   enforced.
 

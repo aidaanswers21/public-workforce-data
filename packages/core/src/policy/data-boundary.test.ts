@@ -26,6 +26,30 @@ describe('scanForProhibitedData', () => {
     expect(scanForProhibitedData('work_phone', '555-010-1001')).toEqual([]);
   });
 
+  it.each([
+    ['title_published', 'Prescription Assistance Program Manager'],
+    ['title_published', 'Medical Director'],
+    ['department_published', 'Community Health and Assistance Programs'],
+    ['organization_published', 'Public Health Department'],
+    ['program_name', 'Prescription Assistance Program'],
+  ])('keeps the professional %s value %s', (field, value) => {
+    expect(scanForProhibitedData(field, value)).toEqual([]);
+  });
+
+  it.each([
+    ['diagnosis', 'hypertension'],
+    ['medical_record_number', 'MR-10293'],
+    ['notes', 'Diagnosed with hypertension'],
+    ['notes', 'Diagnosis: hypertension'],
+    ['notes', 'Medical record 12345'],
+    ['notes', 'Patient ID 12345'],
+    ['notes', 'Health condition - asthma'],
+    ['notes', 'Prescription: lisinopril'],
+    ['notes', 'Disability status: approved'],
+  ])('still rejects personal medical information in %s', (field, value) => {
+    expect(scanForProhibitedData(field, value).map((finding) => finding.kind)).toContain('medical');
+  });
+
   it('never repeats the offending value in the finding', () => {
     const [finding] = scanForProhibitedData('ssn', '123-45-6789');
     expect(JSON.stringify(finding)).not.toContain('123-45-6789');
@@ -125,6 +149,14 @@ describe('student and guardian detection', () => {
   ])('drops the guardian field %s', (field, value) => {
     const findings = scanForProhibitedData(field, value);
     expect(findings.map((finding) => finding.kind)).toContain('guardian_information');
+  });
+
+  it('drops a value that explicitly identifies a guardian', () => {
+    expect(
+      scanForProhibitedData('full_name_published', 'Guardian name: Alex Fields').map(
+        (finding) => finding.kind,
+      ),
+    ).toContain('guardian_information');
   });
 
   it('drops a value that identifies a student by school position', () => {

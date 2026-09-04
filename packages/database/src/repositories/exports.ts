@@ -74,9 +74,17 @@ export class ExportRepository {
 
       await this.client.query(
         `update exports set status = 'completed', row_count = $2, suppressed_count = $3,
-                checksum = $4, suppression_checked_at = $5, completed_at = $5
+                withheld_candidate_count = $4, checksum = $5,
+                suppression_checked_at = $6, completed_at = $6
          where id = $1`,
-        [exportId, result.rowCount, result.suppressedCount, result.checksum, checkedAt],
+        [
+          exportId,
+          result.rowCount,
+          result.suppressedCount,
+          result.withheldCandidateCount,
+          result.checksum,
+          checkedAt,
+        ],
       );
       await this.compliance.appendAudit({
         actor: input.requestedBy,
@@ -88,6 +96,7 @@ export class ExportRepository {
           purpose: input.purpose,
           rowCount: result.rowCount,
           suppressedCount: result.suppressedCount,
+          withheldCandidateCount: result.withheldCandidateCount,
           checksum: result.checksum,
           filters: input.filters,
         },

@@ -48,10 +48,40 @@ full provenance, crawls them again to show the recrawl adds nothing, records an
 opt-out, and writes `out/fixture-export.csv` with that person absent. It uses an
 in-process PostgreSQL and touches no network.
 
+To keep that fixture data and inspect it in a browser, run `pnpm local:setup`
+once and then `pnpm local:start`. Open the local URL printed by the second
+command and sign in with the credentials in the gitignored `.env.local` file.
+The server listens on this computer only. This local login does not provide
+production authentication and does not make the unauthenticated API safe to
+deploy.
+
+The console also has a **Collection projects** area. It turns a configured
+jurisdiction and taxonomy-backed sector and organization-type selections into
+explicit organization membership, discovery targets, and finite approved
+batches. Its government-level overview makes clear which national scopes are
+modeled and which have a reviewed source configuration. Preparing a project
+does not contact a source. Workers can lease only work from an active project
+and a specifically approved batch, with source-policy, robots, page, error and
+per-domain controls still enforced.
+
+The scope menus are active: changing location, government level or sector
+resolves a matching registered jurisdiction and clearly blocks combinations
+that still need source configuration. A worker can either stop after an
+operator-set job count or continue until one specifically approved batch is
+empty. Continue-until-complete does not cross into another batch or remove the
+safety circuit breakers.
+
+The schema and migrations target PostgreSQL 15+ and Supabase, but the local
+browser console uses the gitignored embedded database in `storage/`. A remote
+Supabase project is not connected merely because the repository contains a
+`supabase/` migration directory. A real connection exists only when a remote
+`DATABASE_URL` is deliberately configured and its migrations are applied with
+separate human approval.
+
 ## Layout
 
 ```
-apps/        admin inspection CLI, read-only API
+apps/        local operator console, admin inspection CLI, read-only API
 services/    crawler, discovery and validation workers
 packages/    shared types, taxonomy, core domain logic, extraction, database,
              directory adapters, sector packs, jurisdiction configuration,
@@ -91,7 +121,7 @@ Texas education configuration is marked `verified: false`, the importer refuses
 to run against an unverified source, and the crawler refuses production
 collection from any source a person has not approved.
 
-**Nine production blockers are open** and are listed with their risk, required
+**Ten production blockers are open** and are listed with their risk, required
 resolution and required tests at the top of [BACKLOG](docs/BACKLOG.md). No live
 source may be fetched and no real outreach export may be used until the
 applicable ones are resolved. See [CURRENT_STATE](docs/CURRENT_STATE.md).

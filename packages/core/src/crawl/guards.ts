@@ -45,11 +45,25 @@ export class CrawlGuards {
     seenContentHashes?: readonly string[];
     seenRecordKeys?: readonly string[];
     pagesFetched?: number;
+    seenPaginationTokens?: readonly string[];
+    pagesPerDomain?: Readonly<Record<string, number>>;
+    consecutiveFailuresPerDomain?: Readonly<Record<string, number>>;
+    pagesWithoutNewRecords?: number;
   }): void {
     for (const hash of snapshot.visitedUrlHashes ?? []) this.visitedUrlHashes.add(hash);
     for (const hash of snapshot.seenContentHashes ?? []) this.seenContentHashes.add(hash);
     for (const key of snapshot.seenRecordKeys ?? []) this.seenRecordKeys.add(key);
+    for (const token of snapshot.seenPaginationTokens ?? []) {
+      this.seenPaginationTokens.add(token);
+    }
+    for (const [domain, count] of Object.entries(snapshot.pagesPerDomain ?? {})) {
+      this.pagesPerDomain.set(domain, count);
+    }
+    for (const [domain, count] of Object.entries(snapshot.consecutiveFailuresPerDomain ?? {})) {
+      this.consecutiveFailuresPerDomain.set(domain, count);
+    }
     this.pagesFetched = snapshot.pagesFetched ?? 0;
+    this.pagesWithoutNewRecords = snapshot.pagesWithoutNewRecords ?? 0;
   }
 
   /** Checked before a URL is fetched. */
@@ -201,12 +215,20 @@ export class CrawlGuards {
     visitedUrlHashes: string[];
     seenContentHashes: string[];
     seenRecordKeys: string[];
+    seenPaginationTokens: string[];
+    pagesPerDomain: Record<string, number>;
+    consecutiveFailuresPerDomain: Record<string, number>;
+    pagesWithoutNewRecords: number;
   } {
     return {
       pagesFetched: this.pagesFetched,
       visitedUrlHashes: [...this.visitedUrlHashes],
       seenContentHashes: [...this.seenContentHashes],
       seenRecordKeys: [...this.seenRecordKeys],
+      seenPaginationTokens: [...this.seenPaginationTokens],
+      pagesPerDomain: Object.fromEntries(this.pagesPerDomain),
+      consecutiveFailuresPerDomain: Object.fromEntries(this.consecutiveFailuresPerDomain),
+      pagesWithoutNewRecords: this.pagesWithoutNewRecords,
     };
   }
 }

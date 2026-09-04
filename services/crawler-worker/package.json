@@ -29,7 +29,8 @@
     "@public-workforce/taxonomy": "workspace:*",
     "@public-workforce/sector-education": "workspace:*",
     "@public-workforce/sector-state-local": "workspace:*",
-    "@public-workforce/sector-federal": "workspace:*"
+    "@public-workforce/sector-federal": "workspace:*",
+    "@public-workforce/discovery-worker": "workspace:*"
   },
   "devDependencies": {}
 }

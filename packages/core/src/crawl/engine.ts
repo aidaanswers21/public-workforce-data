@@ -12,18 +12,20 @@ import type {
   FetchedPage,
   Fetcher,
   PaginationRequest,
+  RobotsDecision,
   RobotsProvider,
   Timestamp,
   Uuid,
 } from '@public-workforce/shared-types';
 import type { Logger } from '@public-workforce/observability';
 import { canonicalizeUrl, registrableDomain, resolveUrl } from '../normalize/urls.js';
-import { dedupeExtractedRecords, recordIdentityFingerprint } from '../dedup.js';
-import { shortHash } from '../hash.js';
+import { dedupeExtractedRecords } from '../dedup.js';
+import { sha256, shortHash, stableStringify } from '../hash.js';
 import { newUuid, urlHash } from '../ids.js';
 import { type Clock, nowTimestamp, systemClock } from '../time.js';
 import { CrawlGuards } from './guards.js';
 import { isAllowedDomain, type CrawlPolicy } from './policy.js';
+import { applyDataBoundary } from '../policy/data-boundary.js';
 import { SourcePolicyRegistry, type CollectionMode } from '../policy/source-policy.js';
 
 export type TaskKind = 'listing' | 'profile' | 'discovery';
@@ -43,6 +45,11 @@ export interface HarvestedRecord {
   sourceUrl: string;
   sourceContentHash: string;
   fetchedAt: Timestamp;
+  httpStatus: number;
+  contentType: string | null;
+  /** Null means robots was deliberately not consulted, as in fixture mode. */
+  robotsAllowed: boolean | null;
+  robotsPolicyNote: string | null;
   depth: number;
   /** Directory-wide context established by the page, such as organization or unit. */
   pageContext: Readonly<Record<string, string>>;
@@ -154,6 +161,16 @@ export class CrawlEngine {
           depth: snapshot.depth,
           paginationToken: snapshot.paginationToken,
           context: snapshot.context,
+          ...(snapshot.paginationRequest == null
+            ? {}
+            : {
+                request: {
+                  url: snapshot.url,
+                  token: snapshot.paginationToken ?? snapshot.url,
+                  context: snapshot.context,
+                  ...snapshot.paginationRequest,
+                },
+              }),
         });
       }
       log.info({ pendingTasks: queue.length }, 'resumed crawl from checkpoint');
@@ -173,6 +190,9 @@ export class CrawlEngine {
       const hash = urlHash(task.url);
       const before = guards.beforeFetch({ url: task.url, urlHash: hash, depth: task.depth });
       if (before.stop !== null) {
+        // The budget stopped before any request. Keep this task at the front so
+        // a later, explicitly enlarged batch can resume without losing a page.
+        queue.unshift(task);
         guards.noteStop(before.stop);
         log.warn({ stop: before.stop }, 'crawl halted by guard');
         break;
@@ -215,8 +235,10 @@ export class CrawlEngine {
         break;
       }
 
+      let robotsDecision: RobotsDecision | null = null;
       if (job.policy.respectRobots) {
         const decision = await this.deps.robots.check(task.url, job.policy.userAgent);
+        robotsDecision = decision;
         if (!decision.allowed) {
           errors.push(
             this.errorRecord(
@@ -373,7 +395,7 @@ export class CrawlEngine {
           continue;
         } else {
           const extraction = job.adapter.extractListing(page, adapterContext);
-          recordsOnPage = dedupeExtractedRecords(extraction.records);
+          recordsOnPage = [...extraction.records];
           pageContext = extraction.context;
           empty = extraction.empty;
           pagination = [...extraction.pagination.requests];
@@ -403,8 +425,19 @@ export class CrawlEngine {
         continue;
       }
 
+      // Checkpoint identity is created only from fields that survived the data
+      // boundary. Adapter keys may contain readable names, titles or other raw
+      // values, so none of them can enter a persisted resume payload.
+      recordsOnPage = dedupeExtractedRecords(
+        recordsOnPage.flatMap((record) => {
+          const safe = checkpointSafeRecord(record);
+          return safe === null ? [] : [safe];
+        }),
+      );
+      if (recordsOnPage.length === 0) empty = true;
+
       const fingerprints = new Map(
-        recordsOnPage.map((record) => [record, recordIdentityFingerprint(record)] as const),
+        recordsOnPage.map((record) => [record, record.recordKey] as const),
       );
       const extraction = guards.afterExtraction({
         url: task.url,
@@ -424,6 +457,11 @@ export class CrawlEngine {
           sourceUrl: page.finalUrl,
           sourceContentHash: page.contentHash,
           fetchedAt: page.fetchedAt,
+          httpStatus: page.status,
+          contentType: page.contentType,
+          robotsAllowed: robotsDecision?.allowed ?? null,
+          robotsPolicyNote:
+            robotsDecision === null ? null : (robotsDecision.note ?? robotsDecision.matchedRule),
           depth: task.depth,
           pageContext,
         });
@@ -603,6 +641,15 @@ export class CrawlEngine {
       adapterKey: job.adapter.key,
       paginationToken: task.paginationToken,
       context: task.context,
+      paginationRequest:
+        task.request === undefined
+          ? null
+          : {
+              kind: task.request.kind,
+              ...(task.request.method === undefined ? {} : { method: task.request.method }),
+              ...(task.request.body === undefined ? {} : { body: task.request.body }),
+              ...(task.request.headers === undefined ? {} : { headers: task.request.headers }),
+            },
     }));
     return {
       crawlRunId: job.crawlRunId,
@@ -612,6 +659,10 @@ export class CrawlEngine {
       seenContentHashes: counters.seenContentHashes,
       seenRecordKeys: counters.seenRecordKeys,
       pagesFetched: counters.pagesFetched,
+      seenPaginationTokens: counters.seenPaginationTokens,
+      pagesPerDomain: counters.pagesPerDomain,
+      consecutiveFailuresPerDomain: counters.consecutiveFailuresPerDomain,
+      pagesWithoutNewRecords: counters.pagesWithoutNewRecords,
       updatedAt: nowTimestamp(this.clock),
     };
   }
@@ -666,6 +717,44 @@ export class CrawlEngine {
       occurredAt: nowTimestamp(this.clock),
     };
   }
+}
+
+/**
+ * Sanitize a record before assigning the opaque key used by guards and
+ * checkpoints. The pipeline applies the same boundary again before database
+ * writes, so this is an early privacy barrier rather than a replacement for
+ * the ingestion control.
+ */
+function checkpointSafeRecord(record: ExtractedPersonRecord): ExtractedPersonRecord | null {
+  const boundary = applyDataBoundary({
+    full_name_published: record.fullNamePublished,
+    title_published: record.titlePublished,
+    department_published: record.departmentPublished,
+    organization_published: record.organizationPublished,
+    phone_published: record.phonePublished,
+  });
+  const fullNamePublished = boundary.allowed['full_name_published'];
+  if (fullNamePublished === undefined) return null;
+
+  const safe = {
+    ...record,
+    fullNamePublished,
+    titlePublished: boundary.allowed['title_published'] ?? null,
+    departmentPublished: boundary.allowed['department_published'] ?? null,
+    organizationPublished: boundary.allowed['organization_published'] ?? null,
+    phonePublished: boundary.allowed['phone_published'] ?? null,
+  };
+  const recordKey = sha256(
+    stableStringify({
+      fullNamePublished: safe.fullNamePublished,
+      titlePublished: safe.titlePublished,
+      departmentPublished: safe.departmentPublished,
+      organizationPublished: safe.organizationPublished,
+      phonePublished: safe.phonePublished,
+      profileUrl: safe.profileUrl,
+    }),
+  );
+  return { ...safe, recordKey };
 }
 
 /**

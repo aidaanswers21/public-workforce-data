@@ -5,6 +5,7 @@ import type {
   CrawlStopReason,
   CrawlTargetStatus,
   CrawlTargetType,
+  PaginationKind,
   Uuid,
   Timestamp,
 } from './index.js';
@@ -142,6 +143,11 @@ export interface CrawlCheckpoint {
   seenContentHashes: readonly string[];
   seenRecordKeys: readonly string[];
   pagesFetched: number;
+  /** Optional for backward compatibility with checkpoints written before 0012. */
+  seenPaginationTokens?: readonly string[];
+  pagesPerDomain?: Readonly<Record<string, number>>;
+  consecutiveFailuresPerDomain?: Readonly<Record<string, number>>;
+  pagesWithoutNewRecords?: number;
   updatedAt: Timestamp;
 }
 
@@ -152,6 +158,12 @@ export interface CrawlTaskSnapshot {
   adapterKey: string | null;
   paginationToken: string | null;
   context: Record<string, unknown>;
+  paginationRequest?: {
+    kind: PaginationKind;
+    method?: 'GET' | 'POST';
+    body?: string;
+    headers?: Record<string, string>;
+  } | null;
 }
 
 export interface CrawlStopSignal {

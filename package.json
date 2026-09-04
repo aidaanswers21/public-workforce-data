@@ -25,7 +25,11 @@
     "verify": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build",
     "db:migrate": "tsx packages/database/src/cli/migrate.ts",
     "crawl:fixture": "tsx services/crawler-worker/src/cli/fixture-crawl.ts",
-    "admin": "tsx apps/admin/src/cli.ts"
+    "admin": "tsx apps/admin/src/cli.ts",
+    "local:setup": "tsx services/crawler-worker/src/cli/fixture-crawl.ts --persistent",
+    "local:start": "tsx apps/admin/src/server.ts",
+    "collection:work": "tsx services/crawler-worker/src/cli/collection-worker.ts",
+    "collection:daemon": "node services/crawler-worker/dist/cli/collection-worker.js --daemon"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",

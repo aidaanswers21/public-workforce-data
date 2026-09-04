@@ -15,8 +15,11 @@ import {
   ExportRepository,
   IngestionRepository,
   OrganizationRepository,
+  PGliteClient,
   QueryRepository,
   TestDatabase,
+  loadMigrations,
+  migrate,
   seedReferenceData,
 } from '@public-workforce/database';
 import type { Uuid } from '@public-workforce/shared-types';
@@ -35,12 +38,14 @@ const FIXTURES = join(
   'table-numbered',
 );
 const OUT_DIR = join(repoRoot, 'out');
+const LOCAL_DATABASE_PATH = join(repoRoot, 'storage', 'local-admin-db');
 const HOST = 'https://sample-isd.example.org';
 const EXPORT_PURPOSE = 'internal-review';
 
 /**
  * Runs the whole pipeline against saved fixtures, with no network and no
- * external database.
+ * external database. Passing `--persistent` stores the same fixture data in a
+ * workspace-local database for the operator dashboard.
  *
  * The worked example is an education organization, but nothing it exercises is
  * education-specific: the same code path serves a federal bureau or a county
@@ -50,7 +55,10 @@ const EXPORT_PURPOSE = 'internal-review';
  */
 async function main(): Promise<void> {
   const logger = createLogger({ name: 'fixture-crawl' });
-  const database = await TestDatabase.create();
+  const persistent = process.argv.includes('--persistent');
+  const databasePath = resolve(process.env['LOCAL_DATABASE_PATH'] ?? LOCAL_DATABASE_PATH);
+  if (persistent) mkdirSync(dirname(databasePath), { recursive: true });
+  const database = persistent ? await PGliteClient.open(databasePath) : await TestDatabase.create();
   const taxonomy = buildTaxonomy();
   // An independent school district: education-sector work at the
   // special-district level. Both facts come from the jurisdiction
@@ -59,6 +67,7 @@ async function main(): Promise<void> {
   const { titleRules, vocabulary } = buildScopedRules(taxonomy, scope);
 
   try {
+    if (persistent) await migrate(database, loadMigrations());
     await seedReferenceData(database, taxonomy);
 
     const ingestion = new IngestionRepository(database);
@@ -199,6 +208,7 @@ async function main(): Promise<void> {
     await runOnce('second pass, proving a repeat collection is idempotent');
 
     await compliance.recordComplaint({
+      idempotencyKey: 'fixture-demo-opt-out',
       channel: 'email',
       contactType: 'email',
       contactValue: 'wei.chen@sample-isd.example.org',
@@ -240,7 +250,8 @@ async function main(): Promise<void> {
     logger.info({ coverage }, 'coverage after the fixture run');
     process.stdout.write(
       `\nWrote ${built.rowCount} rows to ${outPath}\n` +
-        `After suppressing the parent organization subtree: ${afterSubtree.rowCount} rows\n`,
+        `After suppressing the parent organization subtree: ${afterSubtree.rowCount} rows\n` +
+        (persistent ? `Local database: ${databasePath}\n` : ''),
     );
   } finally {
     await database.close();

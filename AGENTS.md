@@ -134,10 +134,9 @@ Vertical knowledge lives in exactly four places: a sector pack
 
 `tests/neutral-core-guard.test.ts` enforces this by reading the source. It
 strips comments first, so documentation examples are allowed and executable code
-is not. One file is exempt by path,
-`packages/taxonomy/src/reference/domains.ts`, because a table of `.us` DNS
-labels is registry data rather than a branch on a vertical, and the test asserts
-that file contains no imports, functions or branching.
+is not. Two files are exempt by exact path. The taxonomy domain table is
+registry data, and the data-boundary module must name the protected fields it
+rejects. The test constrains both exemptions so neither can hide vertical logic.
 
 ## Conventions
 

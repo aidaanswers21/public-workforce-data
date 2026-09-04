@@ -239,6 +239,29 @@ describe('CrawlEngine guards', () => {
 });
 
 describe('CrawlEngine robots handling', () => {
+  it('threads observed response and robots metadata into harvested provenance', async () => {
+    const fetcher = MapFetcher.from({
+      'https://sample-isd.example.org/staff': {
+        body: html('generic-html/table-numbered/page-1.html'),
+        status: 206,
+        contentType: 'text/html; charset=windows-1252',
+      },
+    });
+    const result = await engine(fetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff',
+        policy: withPolicyDefaults({ requestDelayMs: 0, respectRobots: true }),
+      }),
+    );
+
+    expect(result.records[0]).toMatchObject({
+      httpStatus: 206,
+      contentType: 'text/html; charset=windows-1252',
+      robotsAllowed: true,
+      robotsPolicyNote: null,
+    });
+  });
+
   it('records a blocked source and stops instead of fetching it', async () => {
     const fetcher = MapFetcher.from({
       'https://sample-isd.example.org/private/staff': html(
@@ -317,6 +340,12 @@ describe('CrawlEngine checkpointing', () => {
       job({
         seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
         resumeFrom: firstRun.checkpoint,
+        policy: withPolicyDefaults({
+          requestDelayMs: 0,
+          respectRobots: false,
+          maxPagesPerRun: 10,
+          maxPagesPerDomain: 10,
+        }),
       }),
     );
     expect(resumeFetcher.requested).not.toContain(
@@ -341,6 +370,103 @@ describe('CrawlEngine checkpointing', () => {
     );
     const allKeys = [...first.records, ...second.records].map((r) => r.record.recordKey);
     expect(new Set(allKeys).size).toBe(allKeys.length);
+  });
+
+  it('carries the per-domain page budget across a resume', async () => {
+    const first = await engine(MapFetcher.from(NUMBERED)).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        policy: withPolicyDefaults({
+          requestDelayMs: 0,
+          respectRobots: false,
+          maxPagesPerRun: 1,
+          maxPagesPerDomain: 1,
+        }),
+      }),
+    );
+    const resumeFetcher = MapFetcher.from(NUMBERED);
+    const resumed = await engine(resumeFetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        resumeFrom: first.checkpoint,
+        policy: withPolicyDefaults({
+          requestDelayMs: 0,
+          respectRobots: false,
+          maxPagesPerRun: 10,
+          maxPagesPerDomain: 1,
+        }),
+      }),
+    );
+
+    expect(resumeFetcher.requested).toHaveLength(0);
+    expect(resumed.stops.map((stop) => stop.reason)).toContain('domain_budget_exhausted');
+    expect(resumed.stats.pagesFetched).toBe(1);
+  });
+
+  it('stores only opaque post-boundary keys for prohibited records', async () => {
+    const rawValues = [
+      'Jamie Fields, Class of 2027',
+      'Guardian name: Alex Fields',
+      'Patient ID: MED-90210',
+      'Robin Vale 123-45-6789',
+    ];
+    const records = [
+      ...rawValues.map((fullNamePublished, index) => ({
+        recordKey: `raw-personal-key-${index}-${fullNamePublished}`,
+        fullNamePublished,
+        titlePublished: 'Program Assistant',
+        departmentPublished: null,
+        organizationPublished: null,
+        phonePublished: null,
+        emails: [],
+        profileUrl: null,
+        extractionMethod: 'html_table' as const,
+        confidence: 0.9,
+        selector: 'table > tr',
+        snippet: fullNamePublished,
+      })),
+      {
+        recordKey: 'readable-valid-key-Dana-Lee',
+        fullNamePublished: 'Dana Lee',
+        titlePublished: 'Program Analyst',
+        departmentPublished: null,
+        organizationPublished: null,
+        phonePublished: null,
+        emails: [],
+        profileUrl: null,
+        extractionMethod: 'html_table' as const,
+        confidence: 0.9,
+        selector: 'table > tr',
+        snippet: 'Dana Lee',
+      },
+    ];
+    const privacyAdapter = new Proxy(genericHtmlAdapter, {
+      get(target, property, receiver) {
+        if (property === 'key') return 'checkpoint-privacy-probe';
+        if (property === 'extractListing') {
+          return () => ({
+            records,
+            pagination: { kind: null, requests: [], exhausted: true, note: null },
+            context: {},
+            empty: false,
+            warnings: [],
+          });
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const persisted: CrawlCheckpoint[] = [];
+    const result = await engine(MapFetcher.from({ 'https://example.gov/directory': '<html />' }), {
+      onCheckpoint: (checkpoint) => void persisted.push(checkpoint),
+    }).run(job({ seedUrl: 'https://example.gov/directory', adapter: privacyAdapter }));
+
+    const checkpointJson = JSON.stringify([...persisted, result.checkpoint]);
+    for (const raw of [...rawValues, 'MED-90210', '123-45-6789', 'readable-valid-key']) {
+      expect(checkpointJson).not.toContain(raw);
+    }
+    expect(result.checkpoint.seenRecordKeys).toHaveLength(1);
+    expect(result.checkpoint.seenRecordKeys[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.records.map((record) => record.record.fullNamePublished)).toEqual(['Dana Lee']);
   });
 });
 

@@ -48,6 +48,9 @@
     },
     {
       "path": "../../packages/sectors/federal-government"
+    },
+    {
+      "path": "../discovery-worker"
     }
   ]
 }

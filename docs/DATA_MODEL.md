@@ -1,6 +1,7 @@
 # Data model
 
-Forty-three tables. Organizations, relationships, people, employment and contact are
+Forty-eight domain tables, plus `schema_migrations` in the local migration
+harness. Organizations, relationships, people, employment and contact are
 modelled separately, so one person can hold several assignments and several
 addresses without any of them overwriting another, and so an organization can
 move under a new parent without its history being rewritten.
@@ -13,7 +14,8 @@ Two different mechanisms, chosen on whether the set will grow.
 classification, validation status, collection status, policy stance,
 normalization method, assignment status, organization identity tier, complaint
 channel, complaint resolution, suppression scope, suppression source, crawl stop
-reason, error kind, export status. Adding a value here is a deliberate schema
+reason, error kind, export status, and collection project, batch, and job
+lifecycles. Adding a value here is a deliberate schema
 change because the code branches on every one of them.
 
 **Controlled reference tables** hold everything that grows as sectors and
@@ -36,17 +38,18 @@ time a new kind of public body appears will stop being extended.
 
 ## Tables
 
-| Group                | Tables                                                                                                                                                                                                                                      |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Reference (0001)     | `government_levels`, `sectors`, `organization_types`, `relationship_types`, `geographic_area_types`, `identifier_systems`, `source_types`, `evidence_classes`, `job_families`, `role_categories`, `seniority_levels`, `contact_point_types` |
-| Provenance (0002)    | `crawl_runs`, `source_policies`, `directory_platforms`, `source_documents`, `source_observations`                                                                                                                                           |
-| Geography (0003)     | `geographic_areas`, `jurisdictions`                                                                                                                                                                                                         |
-| Organizations (0004) | `organizations`, `organization_relationships`, `organizational_units`, `organization_locations`, `external_identifiers`                                                                                                                     |
-| People (0005)        | `people`, `employment_assignments`, `contact_points`                                                                                                                                                                                        |
-| Email (0006)         | `email_addresses`, `email_candidates`, `email_validation_results`, `domain_email_patterns`                                                                                                                                                  |
-| Crawling (0007)      | `crawl_targets`, `crawl_pages`, `crawl_errors`, `crawl_checkpoints`                                                                                                                                                                         |
-| Compliance (0008)    | `suppression_entries`, `complaints`, `exports`, `audit_events`                                                                                                                                                                              |
-| Extensions (0009)    | `education_organization_attributes`                                                                                                                                                                                                         |
+| Group                | Tables                                                                                                                                                                                                                                                                                 |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reference (0001)     | `government_levels`, `sectors`, `organization_types`, `relationship_types`, `geographic_area_types`, `identifier_systems`, `source_types`, `evidence_classes`, `job_families`, `role_categories`, `seniority_levels`, `contact_point_types`, `extraction_methods`, `obfuscation_kinds` |
+| Provenance (0002)    | `crawl_runs`, `source_policies`, `directory_platforms`, `source_documents`, `source_document_versions`, `source_observations`                                                                                                                                                          |
+| Geography (0003)     | `geographic_areas`, `jurisdictions`                                                                                                                                                                                                                                                    |
+| Organizations (0004) | `organizations`, `organization_relationships`, `organizational_units`, `organization_locations`, `external_identifiers`                                                                                                                                                                |
+| People (0005)        | `people`, `employment_assignments`, `contact_points`                                                                                                                                                                                                                                   |
+| Email (0006)         | `email_addresses`, `email_candidates`, `email_validation_results`, `domain_email_patterns`                                                                                                                                                                                             |
+| Crawling (0007)      | `crawl_targets`, `crawl_pages`, `crawl_errors`, `crawl_checkpoints`                                                                                                                                                                                                                    |
+| Compliance (0008)    | `suppression_entries`, `complaints`, `exports`, `audit_events`                                                                                                                                                                                                                         |
+| Extensions (0009)    | `education_organization_attributes`                                                                                                                                                                                                                                                    |
+| Corrections (0011)   | `organization_identity_evidence`                                                                                                                                                                                                                                                       |
 
 ## Organizations
 
@@ -94,17 +97,62 @@ tier: two "Lincoln Elementary" schools in two districts are two schools, and a
 key of type plus name plus jurisdiction alone would merge them. The same applies
 to two Parks and Recreation departments in two municipalities.
 
-Because the fingerprint is deterministic and unique, an identifier-less recrawl
-of the same source record resolves to the same organization rather than adding
-another. An ambiguous record is kept, keyed on the source document so it is
-still idempotent, and listed by
+The repository reconciles official identifiers, source-local identifiers and
+exact prior scoped fingerprints inside one transaction. It never falls back to
+type, name and jurisdiction alone: that would erase the parent or domain that
+keeps look-alike organizations separate. Stronger evidence upgrades the
+canonical fingerprint regardless of arrival order. Every observed official
+identifier, source-local identifier, tier fingerprint, name and source URL is
+retained in `organization_identity_evidence`, so a rename or stronger later
+source does not discard the earlier identity evidence. A weaker later
+observation can refresh last-seen and evidence history, but cannot replace the
+canonical fields or their provenance pointer.
+
+An identifier-less recrawl with an exact retained parent- or domain-scoped
+fingerprint therefore resolves to the same organization rather than adding
+another. Conflicting identity evidence fails explicitly instead of silently
+merging. An ambiguous record is kept, keyed on the source document so it is still
+idempotent, and listed by
 `OrganizationRepository.identityReviewQueue()` for a person to confirm. It is
 never merged into a look-alike and never silently duplicated.
+
+## Collection control plane
+
+`collection_projects` stores an operator's jurisdiction configuration, sector
+and government-level scope, optional organization filters, and finite page,
+target, and error ceilings. An absent organization estimate is stored as null;
+the selected organization count is an actual query result, never an invented
+estimate.
+
+The operator console reads government levels, sectors and organization types
+from the same controlled taxonomy that seeds these tables. It does not maintain
+a second list of codes in UI code. Jurisdiction and location choices come from
+registered configurations and imported geographic facts, so an unavailable
+scope is shown as not configured rather than being made to look runnable.
+
+The project filter document also records whether the operator wants a worker to
+finish an approved batch or stop after a smaller local job count. Finishing a
+batch means draining that batch's known targets. It does not remove page, error,
+retry, policy, robots or domain controls, and it never carries approval into a
+later batch.
+
+`collection_project_organizations` is the reviewable membership snapshot.
+`collection_batches` records one finite release, including the approving human,
+time, and approval note. Approval belongs to that batch and does not become
+standing permission for another. `collection_jobs` gives each target durable
+queue state, an expiring lease, attempts, its crawl run and observed counts.
+Only an active project with an approved batch is claimable. A partial unique
+index prevents two workers from holding active jobs for the same registrable
+domain.
 
 Related tables:
 
 - `organization_relationships` places an organization under another, with a
   relationship type and an effective-dated window.
+- Containment relationships are cycle-checked in PostgreSQL. Re-observing an
+  ended edge with the same start date preserves its historical end date; a
+  renewed relationship is a new effective-dated interval rather than a silent
+  rewrite of history.
 - `organizational_units` holds departments, divisions, bureaus and offices
   inside an organization.
 - `organization_locations` holds professional office addresses.
@@ -167,12 +215,14 @@ existing one and only moves `last_seen_at`, which is what makes a recrawl
 idempotent without making it forgetful. What a page said in March is still
 readable after it changes in June.
 
-`source_observations` is append-only and holds one row per field per record per
+`source_observations` is insert-only and holds one row per field per record per
 **document version**: the raw string, the normalized value, the extraction
 method, the confidence, the selector it came from, and an **evidence class**.
 Keying on the version rather than the URL is what lets a page change its mind
 about someone's title and produce a second observation beside the first, rather
-than overwriting it.
+than overwriting it. Replaying the same observation is idempotent; attempting to
+reuse its key with different content fails, and database triggers reject both
+updates and deletes.
 
 The evidence classes are `organization`, `employment`, `contact`, `location` and
 `policy`. Employment evidence and contact evidence are separate rows, because
@@ -212,9 +262,12 @@ is also approved impossible to store. See `SOURCE_POLICY_REVIEW.md`.
 
 Two different keys, for two different jobs:
 
-- **`recordKey`** is derived from (adapter, source URL, local key). It is stable
-  for the same row on the same page, which is what makes recrawling one page
-  idempotent. It is deliberately useless for cross-page identity.
+- **`recordKey`** is an internal key produced by an adapter for extraction and
+  deduplication. Before checkpointing, the crawl engine applies the public-data
+  boundary, rejects records that no longer identify a person, and replaces the
+  adapter key with an opaque SHA-256 digest of the sanitized record identity.
+  Only that 64-character digest may be persisted in a checkpoint, so raw names,
+  email addresses and prohibited fields cannot leak into resumability state.
 - **`identity_key`** on `people` is (organization, normalized last + first name).
   Middle names are excluded, because "Jane Smith" and "Jane M. Smith" are one
   person and treating them as two is the largest source of duplicates in
@@ -277,14 +330,12 @@ tells you about the domain, not the mailbox.
 | `source`               | Everything derived from one source policy                     |
 | `jurisdiction`         | Everyone under one jurisdiction                               |
 | `government_level`     | Everyone at one level of government                           |
-| `geographic_area`      | Everyone whose duty location falls in one area                |
+| `geographic_area`      | Everyone in an area or any descendant area                    |
 | `export_purpose`       | A named export purpose                                        |
 | `global`               | Everyone                                                      |
 
-`geographic_area` matches the areas listed on a row and does **not** walk up the
-area tree today, so suppressing a state does not suppress the counties inside
-it. That is a limitation, not a design: it is tracked as production blocker C15
-in `BACKLOG.md` and it blocks an outreach export.
+`geographic_area` is inherited down the area tree. Suppressing a state therefore
+withholds duty locations in its counties and any areas nested beneath them.
 
 Each carries a reason, a source, an effective date and an optional expiry. Rows
 are immutable: a trigger rejects any update other than revocation, and rejects
@@ -317,17 +368,48 @@ getting only one of them right is the likeliest silent failure in the system.
 
 ## Audit
 
-`audit_events` is append-only by trigger, and each row's hash covers the
-previous row's hash. Altering or removing an event breaks every event after it,
-which `ComplianceRepository.verifyAuditChain` detects.
+`audit_events` is append-only by trigger. A database-owned sequence and a
+transaction advisory lock impose one order for application calls and trigger
+events, including timestamp ties and an empty chain. The database function
+`audit_event_append` is the only appender; the canonical hash covers the prior
+hash, sequence, UTC timestamp, actor type and identifier, action, subject and
+metadata. Its execution privileges are withheld from `PUBLIC`.
+
+`ComplianceRepository.verifyAuditChain` recomputes the canonical database hash
+in sequence order. Changing metadata or a link, reordering rows, or removing an
+event is detected.
+
+## Complaint intake
+
+Complaint intake first stores the raw contact value, normalized lookup value,
+channel, actor and idempotency key durably. Resolution is a separate transaction
+that locks and re-checks the complaint row before it creates any effects, so
+concurrent delivery of one idempotency key resolves once. Resolution considers
+only exact public work-email or work-phone matches. Exactly one person is
+suppressed automatically; zero or multiple people go to
+`needs_review` without choosing an arbitrary match. An exact email address can
+still receive address-level suppression when the person match is ambiguous.
+
+If suppression fails, the complaint remains durable as `needs_review` with the
+failure recorded. Retrying the same idempotency key resumes that complaint and
+cannot create a duplicate complaint or orphan suppression.
 
 ## Required output fields
 
 A row is evaluated in three independent decisions: the record itself, its
-published address, and its inferred candidate. A suppressed published address
-withholds the row, because exporting a guess at the same mailbox would be an
-obvious way around the request. A suppressed candidate blanks that one column
-and keeps the row, unless the candidate was the row's only address.
+published address, and its inferred candidate. Record-level scopes withhold the
+whole row. Email- and domain-level suppression is channel-specific: each
+matching published or inferred address is blanked independently, and the row is
+kept when another permitted channel remains. A row with no permitted address is
+withheld.
+
+The export record persists `withheld_candidate_count`, including candidates
+that were considered but never returned to application memory. This makes the
+suppression result auditable without exposing the withheld address.
+
+`suppressed_count` and `suppressedPersonIds` count only rows withheld by an
+active suppression rule. A direct caller that supplies an address-less row does
+not cause it to be mislabeled as suppressed, although the row is still omitted.
 
 Candidates in the `rejected` and `suppressed` states never reach an export at
 all: the SQL excludes both before the in-memory re-check ever sees them.

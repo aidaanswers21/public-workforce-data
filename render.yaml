@@ -1,0 +1,22 @@
+services:
+  - type: worker
+    name: public-workforce-collector
+    runtime: node
+    region: oregon
+    plan: starter
+    branch: main
+    autoDeployTrigger: off
+    buildCommand: corepack enable && corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm build
+    startCommand: pnpm collection:daemon
+    maxShutdownDelaySeconds: 300
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: CRAWLER_USER_AGENT
+        sync: false
+      - key: CRAWLER_CONTACT_URL
+        sync: false
+      - key: WORKER_POLL_INTERVAL_MS
+        value: '5000'
+      - key: LOG_LEVEL
+        value: info
