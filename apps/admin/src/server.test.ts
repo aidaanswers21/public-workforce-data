@@ -283,6 +283,31 @@ describe('local admin server', () => {
     expect(await response.text()).toContain('Request blocked');
   });
 
+  it('accepts a direct hosted form submission when the browser omits Origin', async () => {
+    const publicOrigin = 'https://console.example.test';
+    const { origin } = await start({
+      hosted: true,
+      publicOrigin,
+      password: undefined,
+      passwordHash: hashAdminPassword('hosted-password', 'originless-test-salt'),
+    });
+    const response = await fetch(`${origin}/login`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: {
+        'x-forwarded-host': 'console.example.test',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        email: 'operator@example.test',
+        password: 'hosted-password',
+      }),
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('set-cookie')).toContain('__Host-public_workforce_admin=');
+  });
+
   it('throttles repeated login failures', async () => {
     const { origin } = await start();
     const attempt = () =>
