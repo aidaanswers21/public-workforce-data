@@ -62,6 +62,7 @@ const projectBuilderCatalog = {
       description: 'Official fixture organization records and published attributes.',
       organizationTypeCodes: ['state_department'],
       sectorCodes: ['general_government'],
+      sourceKeys: ['fixture-release'],
       attributeColumns: [
         { key: 'populationServed', label: 'Population served', format: 'integer' as const },
       ],

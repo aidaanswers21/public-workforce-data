@@ -6,6 +6,7 @@ export type WebsiteAvailability = 'all' | 'published' | 'missing';
 export interface OrganizationRecordFilters {
   organizationTypeCodes: readonly string[];
   sectorCodes: readonly string[];
+  sourceKeys: readonly string[];
   stateCode?: string | null;
   query?: string;
   websiteAvailability?: WebsiteAvailability;
@@ -61,7 +62,11 @@ export class OrganizationRecordRepository {
     if (!['all', 'published', 'missing'].includes(websiteAvailability)) {
       throw new Error('website availability is not valid');
     }
-    if (filters.organizationTypeCodes.length === 0 || filters.sectorCodes.length === 0) {
+    if (
+      filters.organizationTypeCodes.length === 0 ||
+      filters.sectorCodes.length === 0 ||
+      filters.sourceKeys.length === 0
+    ) {
       return { records: [], total: 0, limit, offset };
     }
     const result = await this.client.query<Record<string, unknown>>(
@@ -71,17 +76,19 @@ export class OrganizationRecordRepository {
        join source_document_versions v on v.id = r.source_document_version_id
        where r.organization_type_code = any($1::text[])
          and r.sector_code = any($2::text[])
-         and ($3::text is null or r.location ->> 'stateCode' = $3)
-         and ($4::text = '' or r.name ilike '%' || $4 || '%'
-              or r.source_record_key ilike '%' || $4 || '%')
-         and ($5::text = 'all'
-              or ($5 = 'published' and r.website_url is not null)
-              or ($5 = 'missing' and r.website_url is null))
+         and r.source_key = any($3::text[])
+         and ($4::text is null or r.location ->> 'stateCode' = $4)
+         and ($5::text = '' or r.name ilike '%' || $5 || '%'
+              or r.source_record_key ilike '%' || $5 || '%')
+         and ($6::text = 'all'
+              or ($6 = 'published' and r.website_url is not null)
+              or ($6 = 'missing' and r.website_url is null))
        order by r.name_normalized, r.id
-       limit $6 offset $7`,
+       limit $7 offset $8`,
       [
         [...filters.organizationTypeCodes],
         [...filters.sectorCodes],
+        [...filters.sourceKeys],
         filters.stateCode || null,
         query,
         websiteAvailability,

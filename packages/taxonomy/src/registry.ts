@@ -69,6 +69,7 @@ export interface OrganizationExplorerPreset {
   description: string;
   organizationTypeCodes: readonly string[];
   sectorCodes: readonly string[];
+  sourceKeys: readonly string[];
   attributeColumns: readonly ExplorerAttributeColumn[];
 }
 
