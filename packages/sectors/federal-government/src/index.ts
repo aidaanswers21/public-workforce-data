@@ -63,6 +63,22 @@ export const federalGovernmentSectorPack: SectorPack = {
       pattern: '^\\d{2}$',
       authority: 'U.S. Department of the Treasury',
     },
+    {
+      code: 'usagov_agency_node_id',
+      name: 'USA.gov agency directory node identifier',
+      description: 'Stable record identifier published in the USA.gov agency directory.',
+      appliesTo: 'organization',
+      pattern: '^\\d+$',
+      authority: 'U.S. General Services Administration',
+    },
+    {
+      code: 'federal_register_agency_id',
+      name: 'Federal Register agency identifier',
+      description: 'Agency identifier used by the Federal Register public API.',
+      appliesTo: 'organization',
+      pattern: '^\\d+$',
+      authority: 'Office of the Federal Register',
+    },
   ],
 
   roleCategories: [

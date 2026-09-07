@@ -190,6 +190,15 @@ importers:
         specifier: workspace:*
         version: link:../../taxonomy
 
+  packages/jurisdiction-config/us-national-spine:
+    dependencies:
+      '@public-workforce/core':
+        specifier: workspace:*
+        version: link:../../core
+      '@public-workforce/jurisdiction-kit':
+        specifier: workspace:*
+        version: link:../kit
+
   packages/observability:
     dependencies:
       pino:

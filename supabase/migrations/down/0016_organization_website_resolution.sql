@@ -1,0 +1,6 @@
+drop index organizations_missing_website_idx;
+drop table organization_website_candidates;
+alter table source_document_versions
+  drop constraint source_document_versions_id_document_unique;
+drop type website_resolution_method;
+drop type organization_website_candidate_status;

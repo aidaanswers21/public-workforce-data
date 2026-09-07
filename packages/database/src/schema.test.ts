@@ -136,6 +136,7 @@ describe('structural guarantees', () => {
       'organization_identity_evidence',
       'organization_locations',
       'external_identifiers',
+      'organization_website_candidates',
       'people',
       'employment_assignments',
       'email_addresses',
@@ -217,6 +218,7 @@ describe('structural guarantees', () => {
       'contact_points',
       'email_addresses',
       'education_organization_attributes',
+      'organization_website_candidates',
     ];
     for (const table of tables) {
       const column = await database.query<{ is_nullable: string }>(

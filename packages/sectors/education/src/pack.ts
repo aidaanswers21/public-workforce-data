@@ -118,6 +118,26 @@ export const educationSectorPack: SectorPack = {
       description:
         'A school attendance boundary. Geographic, and unrelated to the organizational hierarchy.',
     },
+    {
+      code: 'elementary_school_district_area',
+      name: 'Elementary school district area',
+      description: 'Census geographic area for an elementary school district.',
+    },
+    {
+      code: 'secondary_school_district_area',
+      name: 'Secondary school district area',
+      description: 'Census geographic area for a secondary school district.',
+    },
+    {
+      code: 'unified_school_district_area',
+      name: 'Unified school district area',
+      description: 'Census geographic area for a unified school district.',
+    },
+    {
+      code: 'school_district_administrative_area',
+      name: 'School district administrative area',
+      description: 'Census geographic area used for school district administration.',
+    },
   ],
 
   jobFamilies: [

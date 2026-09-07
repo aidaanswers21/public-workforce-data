@@ -9,7 +9,7 @@ production crawl run.
 | Capability                                                                                                  | Status                                |
 | ----------------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | Monorepo, strict TypeScript, lint, typecheck (sources and tests), build, tests                              | Working                               |
-| Schema: 49 tables in the local harness, 14 reference tables, enums, constraints, triggers                   | Working, tested against real Postgres |
+| Schema: 50 tables in the local harness, 14 reference tables, enums, constraints, triggers                   | Working, tested against real Postgres |
 | Migrations up and down, checksum guard                                                                      | Working                               |
 | Controlled reference data seeded from the composed taxonomy                                                 | Working                               |
 | Sector packs: education, state and local government, federal government                                     | Working                               |
@@ -35,6 +35,8 @@ production crawl run.
 | CSV export with 33 fields and independent channel suppression accounting                                    | Working                               |
 | Texas education jurisdiction configuration                                                                  | Written, sources not yet verified     |
 | Discovery worker                                                                                            | Working, not run against real sites   |
+| National bulk-file organizer and exact-identifier website overlays                                          | Working locally, no production import |
+| Missing-website queue and evidence-backed candidate review                                                  | Working locally, no live search run   |
 | Private local/hosted operator console, admin inspection CLI and read-only API                               | Working, hosted runtime configured    |
 | Collection projects, active scope controls, approved-batch completion, durable leased scheduler jobs        | Working, no live batch run            |
 | Long-lived approved-job daemon and Render web/worker Blueprint                                              | Working, manual deploys configured    |
@@ -45,11 +47,11 @@ production crawl run.
 ## What is deliberately not done
 
 - **No production crawl has run.** Everything is fixture-driven.
-- **No official source is verified.** Every `OfficialSource` in the Texas
-  education configuration is `verified: false`, and the importer refuses to run
-  against an unverified source. A person must open each URL and confirm the
-  column mapping first. Outbound access to the relevant government hosts was
-  blocked in the environment this was built in, so no URL here has been fetched.
+- **No official source is approved for production import.** Census, NCES,
+  AskTED, USA.gov and Federal Register artifacts were downloaded and their
+  schemas inspected on 2026-09-07. The Texas configuration now reflects the
+  observed headers, but its `OfficialSource` rows remain `verified: false` until
+  the owner confirms the exact artifacts for production.
 - **No real source policy has been reviewed or approved yet.** The scheduler
   loads policy rows from the database and moves unreviewed targets to
   `policy_hold`; discovery independently checks the same policy registry and
@@ -66,7 +68,10 @@ production crawl run.
 - **Only the education sector has an extension table.** State, local and federal
   packs contribute types, roles, titles and vocabulary, and none of them needs
   attributes the neutral core does not already carry.
-- **Only one jurisdiction is configured.** Texas education. The project builder
+- **Only one executable collection jurisdiction is configured.** Texas
+  education. National bulk sources are represented by a separate organization
+  spine organizer because one source spans several government levels and is not
+  itself a crawl jurisdiction. The project builder
   shows the full government-level spine and uses taxonomy-backed dropdowns and
   organization-type choices, but it does not claim an unconfigured scope is
   executable. State, county,
@@ -109,11 +114,12 @@ The tests that carry the generalization and persistence guarantees:
 
 ## Immediate next steps
 
-1. Verify the four Texas education official sources by hand and set
-   `verified: true`.
-2. Review and approve source policies for those domains.
-3. Run the importer against the verified files; check the county count against 254.
-4. Run discovery over a small approved sample of organization sites.
-5. Read the failure breakdown; decide whether any real platform justifies an
+1. Review the organized national-spine summary and unresolved classifications.
+2. Confirm the exact official artifacts intended for a production import.
+3. Approve and run a controlled production organization import.
+4. Review and approve policies for any source that will receive live requests.
+5. Resolve missing organization websites in bulk-first order.
+6. Run directory discovery over a small approved sample of organization sites.
+7. Read the failure breakdown; decide whether any real platform justifies an
    adapter, or whether the sector vocabulary is simply missing wording.
-6. Only then consider widening, to another sector or another jurisdiction.
+8. Only then consider widening employee collection.

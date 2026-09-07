@@ -38,24 +38,29 @@ time a new kind of public body appears will stop being extended.
 
 ## Tables
 
-| Group                | Tables                                                                                                                                                                                                                                                                                 |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Reference (0001)     | `government_levels`, `sectors`, `organization_types`, `relationship_types`, `geographic_area_types`, `identifier_systems`, `source_types`, `evidence_classes`, `job_families`, `role_categories`, `seniority_levels`, `contact_point_types`, `extraction_methods`, `obfuscation_kinds` |
-| Provenance (0002)    | `crawl_runs`, `source_policies`, `directory_platforms`, `source_documents`, `source_document_versions`, `source_observations`                                                                                                                                                          |
-| Geography (0003)     | `geographic_areas`, `jurisdictions`                                                                                                                                                                                                                                                    |
-| Organizations (0004) | `organizations`, `organization_relationships`, `organizational_units`, `organization_locations`, `external_identifiers`                                                                                                                                                                |
-| People (0005)        | `people`, `employment_assignments`, `contact_points`                                                                                                                                                                                                                                   |
-| Email (0006)         | `email_addresses`, `email_candidates`, `email_validation_results`, `domain_email_patterns`                                                                                                                                                                                             |
-| Crawling (0007)      | `crawl_targets`, `crawl_pages`, `crawl_errors`, `crawl_checkpoints`                                                                                                                                                                                                                    |
-| Compliance (0008)    | `suppression_entries`, `complaints`, `exports`, `audit_events`                                                                                                                                                                                                                         |
-| Extensions (0009)    | `education_organization_attributes`                                                                                                                                                                                                                                                    |
-| Corrections (0011)   | `organization_identity_evidence`                                                                                                                                                                                                                                                       |
+| Group                      | Tables                                                                                                                                                                                                                                                                                 |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reference (0001)           | `government_levels`, `sectors`, `organization_types`, `relationship_types`, `geographic_area_types`, `identifier_systems`, `source_types`, `evidence_classes`, `job_families`, `role_categories`, `seniority_levels`, `contact_point_types`, `extraction_methods`, `obfuscation_kinds` |
+| Provenance (0002)          | `crawl_runs`, `source_policies`, `directory_platforms`, `source_documents`, `source_document_versions`, `source_observations`                                                                                                                                                          |
+| Geography (0003)           | `geographic_areas`, `jurisdictions`                                                                                                                                                                                                                                                    |
+| Organizations (0004, 0016) | `organizations`, `organization_relationships`, `organizational_units`, `organization_locations`, `external_identifiers`, `organization_website_candidates`                                                                                                                             |
+| People (0005)              | `people`, `employment_assignments`, `contact_points`                                                                                                                                                                                                                                   |
+| Email (0006)               | `email_addresses`, `email_candidates`, `email_validation_results`, `domain_email_patterns`                                                                                                                                                                                             |
+| Crawling (0007)            | `crawl_targets`, `crawl_pages`, `crawl_errors`, `crawl_checkpoints`                                                                                                                                                                                                                    |
+| Compliance (0008)          | `suppression_entries`, `complaints`, `exports`, `audit_events`                                                                                                                                                                                                                         |
+| Extensions (0009)          | `education_organization_attributes`                                                                                                                                                                                                                                                    |
+| Corrections (0011)         | `organization_identity_evidence`                                                                                                                                                                                                                                                       |
 
 ## Organizations
 
 `organizations` is neutral. It carries a name, a normalized name, a government
 level code, a sector code, an organization type code, an optional jurisdiction,
 a website, an identity fingerprint and provenance. It has **no parent column**.
+
+A website published by a source may populate the organization row. A URL found
+through a registry, directory or search result first enters
+`organization_website_candidates` with its source version, method, match signals
+and confidence. It becomes canonical only through a recorded verification.
 See `ORGANIZATION_HIERARCHY.md` for why, and for how ancestry is queried.
 
 ### Level and sector are orthogonal
@@ -242,7 +247,8 @@ distinguishable after any number of recrawls.
 Provenance is a **NOT NULL foreign key** to `source_documents` with
 `on delete restrict`, plus a named `<table>_has_provenance` CHECK, on
 `organizations`, `organization_relationships`, `organizational_units`,
-`organization_locations`, `external_identifiers`, `people`,
+`organization_locations`, `external_identifiers`,
+`organization_website_candidates`, `people`,
 `employment_assignments`, `contact_points`, `email_addresses` and
 `education_organization_attributes`. A row without evidence cannot be inserted,
 and a document something still cites cannot be deleted.

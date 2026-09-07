@@ -30,6 +30,9 @@
       "@public-workforce/jurisdiction-texas-education": [
         "packages/jurisdiction-config/texas-education/src/index.ts"
       ],
+      "@public-workforce/jurisdiction-us-national-spine": [
+        "packages/jurisdiction-config/us-national-spine/src/index.ts"
+      ],
       "@public-workforce/crawler-worker": ["services/crawler-worker/src/index.ts"],
       "@public-workforce/discovery-worker": ["services/discovery-worker/src/index.ts"],
       "@public-workforce/validation-worker": ["services/validation-worker/src/index.ts"]

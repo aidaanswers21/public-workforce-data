@@ -88,6 +88,17 @@ export const stateLocalGovernmentSectorPack: SectorPack = {
     },
   ],
 
+  identifierSystems: [
+    {
+      code: 'census_government_id',
+      name: 'Census government identifier (PID6)',
+      description: 'Stable identifier in the Census Bureau Government Units Listing.',
+      appliesTo: 'organization',
+      pattern: '^\\d{6}$',
+      authority: 'U.S. Census Bureau',
+    },
+  ],
+
   roleCategories: [
     {
       code: 'city_county_manager',

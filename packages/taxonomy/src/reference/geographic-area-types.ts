@@ -21,6 +21,11 @@ export const BASE_GEOGRAPHIC_AREA_TYPES: readonly ReferenceRow[] = [
     description: 'A county or county equivalent, including parishes and boroughs.',
   },
   {
+    code: 'county_subdivision',
+    name: 'County subdivision',
+    description: 'A Census county subdivision, whether governmental or statistical.',
+  },
+  {
     code: 'municipality',
     name: 'Municipality',
     description: 'An incorporated city, town, village or borough.',
