@@ -36,6 +36,7 @@ export const educationSectorPack: SectorPack = {
         'Explore official school directory records, enrollment, staffing, locations, websites, and provenance.',
       organizationTypeCodes: ['school'],
       sectorCodes: ['education'],
+      sourceKeys: ['nces-ccd-school-directory-2024-25'],
       attributeColumns: [
         { key: 'enrollment', label: 'Students enrolled', format: 'integer' },
         { key: 'teacherFte', label: 'Teacher FTE', format: 'decimal' },
@@ -53,6 +54,7 @@ export const educationSectorPack: SectorPack = {
         'Explore official district directory records, enrollment, staffing, locations, websites, and provenance.',
       organizationTypeCodes: ['school_district'],
       sectorCodes: ['education'],
+      sourceKeys: ['nces-ccd-lea-directory-2024-25'],
       attributeColumns: [
         { key: 'enrollment', label: 'Students enrolled', format: 'integer' },
         { key: 'teacherFte', label: 'Teacher FTE', format: 'decimal' },

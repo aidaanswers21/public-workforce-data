@@ -160,6 +160,7 @@ describe('sector composition', () => {
           description: 'Fixture source records.',
           organizationTypeCodes: ['test_authority'],
           sectorCodes: ['other'],
+          sourceKeys: ['fixture-release'],
           attributeColumns: [
             { key: 'publishedCount', label: 'Published count', format: 'integer' },
           ],

@@ -113,6 +113,7 @@ export interface OrganizationExplorerPreset {
   description: string;
   organizationTypeCodes: readonly string[];
   sectorCodes: readonly string[];
+  sourceKeys: readonly string[];
   attributeColumns: readonly {
     key: string;
     label: string;
@@ -340,6 +341,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
           organizationRecords.list({
             organizationTypeCodes: preset.organizationTypeCodes,
             sectorCodes: preset.sectorCodes,
+            sourceKeys: preset.sourceKeys,
             stateCode,
             query: url.searchParams.get('q') ?? '',
             websiteAvailability,

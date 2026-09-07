@@ -58,8 +58,11 @@ The **Explore organizations** page reads the provenance-bearing source records
 directly, including records that are correctly held from canonical import. Its
 views are supplied by sector packs. The education pack contributes school and
 district views with enrollment, teacher FTE, total staff FTE, grade span and
-school year columns. Each row opens a profile with its location, website,
-identifiers, complete published attributes and immutable source version.
+school year columns. Each view names its primary official release, so state
+overlay rows remain available for exact-ID enrichment without appearing as
+duplicate organizations in the explorer. Each row opens a profile with its
+location, website, identifiers, complete published attributes and immutable
+source version.
 
 An operator may select up to 250 visible records at once and add them to a
 collection project. Migration `0018_collection_project_source_records.sql`
