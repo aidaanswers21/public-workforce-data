@@ -30,7 +30,8 @@
     "local:start": "tsx apps/admin/src/server.ts",
     "admin:serve": "node apps/admin/dist/server.js",
     "collection:work": "tsx services/crawler-worker/src/cli/collection-worker.ts",
-    "collection:daemon": "node services/crawler-worker/dist/cli/collection-worker.js --daemon"
+    "collection:daemon": "node services/crawler-worker/dist/cli/collection-worker.js --daemon",
+    "spine:organize": "tsx packages/jurisdiction-config/us-national-spine/src/cli.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",

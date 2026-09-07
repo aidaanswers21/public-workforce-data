@@ -17,32 +17,41 @@ import type { ColumnMapping, JurisdictionConfig } from '@public-workforce/jurisd
  */
 
 const TEA_ORGANIZATION_REFERENCE: ColumnMapping = {
-  // Column names must be confirmed against the downloaded file before the first
-  // import. They are the field names as commonly published, not a guess at a
-  // file this repository has read: outbound access to tea.texas.gov is not
-  // available from the environment this was built in.
-  organizationName: 'DISTNAME',
-  organizationId: 'DISTRICT',
-  countyName: 'CNTYNAME',
+  organizationName: 'District Name',
+  organizationId: 'District Number',
+  countyName: 'County Name',
+  cityName: 'District Site City',
+  stateCode: 'District Site State',
+  websiteUrl: 'District Web Page Address',
+  extensionColumns: {
+    enrollment: 'District Enrollment as of Oct 2025',
+    organizationTypePublished: 'District Type',
+  },
 };
 
 const TEA_CAMPUS_REFERENCE: ColumnMapping = {
-  organizationName: 'CAMPNAME',
-  organizationId: 'CAMPUS',
-  parentOrganizationName: 'DISTNAME',
-  parentOrganizationId: 'DISTRICT',
-  countyName: 'CNTYNAME',
+  organizationName: 'School Name',
+  organizationId: 'School Number',
+  parentOrganizationName: 'District Name',
+  parentOrganizationId: 'District Number',
+  countyName: 'County Name',
+  cityName: 'School Site City',
+  stateCode: 'School Site State',
+  websiteUrl: 'School Web Page Address',
   extensionColumns: {
-    schoolType: 'GRDTYPE',
-    lowGrade: 'GRDSPAN_LOW',
-    highGrade: 'GRDSPAN_HIGH',
+    gradeRange: 'Grade Range',
+    enrollment: 'School Enrollment as of Oct 2025',
+    operationalStatus: 'School Status',
+    schoolType: 'Instruction Type',
   },
 };
 
 const NCES_CCD: ColumnMapping = {
   organizationName: 'LEA_NAME',
   organizationId: 'LEAID',
-  countyName: 'LCOUNTY',
+  cityName: 'LCITY',
+  stateCode: 'LSTATE',
+  websiteUrl: 'WEBSITE',
 };
 
 export const texasEducationJurisdiction: JurisdictionConfig = {
@@ -65,27 +74,27 @@ export const texasEducationJurisdiction: JurisdictionConfig = {
   officialSources: [
     {
       key: 'tea-district-reference',
-      name: 'Texas Education Agency district reference file',
-      url: 'https://tea.texas.gov/reports-and-data/school-data/download-data',
+      name: 'Texas Education Agency AskTED organization download',
+      url: 'https://tealprod.tea.state.tx.us/Tea.AskTed.Web/Forms/DownloadSite.aspx',
       sourceTypeCode: 'csv',
       format: 'csv',
       provides:
         'The authoritative list of Texas public school districts with county and district number.',
       verified: false,
       verificationNote:
-        'Open the TEA download page, locate the current district reference file, record its direct URL and confirm the column names in columnMappings.teaOrganizationReference.',
+        'The 2026-09-07 download and headers were inspected locally. The owner must still confirm this exact artifact and mapping before a production import.',
     },
     {
       key: 'tea-campus-reference',
-      name: 'Texas Education Agency campus reference file',
-      url: 'https://tea.texas.gov/reports-and-data/school-data/download-data',
+      name: 'Texas Education Agency AskTED campus download',
+      url: 'https://tealprod.tea.state.tx.us/Tea.AskTed.Web/Forms/DownloadSite.aspx',
       sourceTypeCode: 'csv',
       format: 'csv',
       provides:
         'The authoritative list of Texas public school campuses with grade span and district number.',
       verified: false,
       verificationNote:
-        'Same page as the district reference file. Confirm the campus file URL and the column names in columnMappings.teaCampusReference.',
+        'The 2026-09-07 download and headers were inspected locally. The owner must still confirm this exact artifact and mapping before a production import.',
     },
     {
       key: 'askted',
@@ -96,7 +105,7 @@ export const texasEducationJurisdiction: JurisdictionConfig = {
       provides: 'District and campus contact details, including official website addresses.',
       verified: false,
       verificationNote:
-        'Confirm the current AskTED entry point and whether it offers a bulk download. If it does not, directory discovery runs from organization websites instead and this source is documentation only.',
+        'The entry point and bulk downloads resolved on 2026-09-07. The owner must confirm them before a production import or crawl.',
     },
     {
       key: 'nces-ccd',
@@ -107,7 +116,7 @@ export const texasEducationJurisdiction: JurisdictionConfig = {
       provides: 'Federal NCES identifiers, used to cross-reference the state lists.',
       verified: false,
       verificationNote:
-        'Choose the current school year directory files, record their direct URLs and confirm the column names in columnMappings.ncesCcd.',
+        'The 2024-25 final directory artifacts and headers were inspected locally on 2026-09-07. The owner must confirm that release before production import.',
     },
   ],
 
@@ -220,8 +229,8 @@ export const texasEducationJurisdiction: JurisdictionConfig = {
   ],
 
   notes: [
-    'No official source is marked verified yet. The importer refuses to run until a person confirms each URL and column mapping.',
-    'AskTED is the most likely source of official website addresses. If it offers no bulk export, discovery falls back to crawling organization homepages for directory links.',
+    'No official source is marked verified for production. The importer refuses to run until the owner confirms each inspected URL and column mapping.',
+    'AskTED publishes bulk organization and website data. Employee fields in that file are excluded from the organization-spine allowlist.',
     'The area alias table is partial. After the first import, compare the distinct county count against expectedAreaCount and add whatever is missing.',
     'Texas state government is a separate jurisdiction configuration, not part of this one.',
   ],

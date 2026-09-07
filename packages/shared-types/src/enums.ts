@@ -153,6 +153,32 @@ export const ORGANIZATION_IDENTITY_TIERS = [
 ] as const;
 export type OrganizationIdentityTier = (typeof ORGANIZATION_IDENTITY_TIERS)[number];
 
+/** Review state for a possible official organization website. */
+export const ORGANIZATION_WEBSITE_CANDIDATE_STATUSES = [
+  'proposed',
+  'verified',
+  'rejected',
+  'superseded',
+] as const;
+export type OrganizationWebsiteCandidateStatus =
+  (typeof ORGANIZATION_WEBSITE_CANDIDATE_STATUSES)[number];
+
+/**
+ * How a website candidate was found.
+ *
+ * These are evidence classes, not provider names. Adding a new registry or
+ * search vendor does not change the workflow or require a schema change.
+ */
+export const WEBSITE_RESOLUTION_METHODS = [
+  'official_identifier_overlay',
+  'official_registry_match',
+  'official_directory_match',
+  'search_result',
+  'homepage_redirect',
+  'manual',
+] as const;
+export type WebsiteResolutionMethod = (typeof WEBSITE_RESOLUTION_METHODS)[number];
+
 export const ASSIGNMENT_STATUSES = ['active', 'inactive', 'historical', 'unknown'] as const;
 export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number];
 

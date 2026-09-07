@@ -30,6 +30,9 @@ export default defineConfig({
       '@public-workforce/jurisdiction-texas-education': source(
         'packages/jurisdiction-config/texas-education',
       ),
+      '@public-workforce/jurisdiction-us-national-spine': source(
+        'packages/jurisdiction-config/us-national-spine',
+      ),
       '@public-workforce/crawler-worker': source('services/crawler-worker'),
       '@public-workforce/discovery-worker': source('services/discovery-worker'),
       '@public-workforce/validation-worker': source('services/validation-worker'),

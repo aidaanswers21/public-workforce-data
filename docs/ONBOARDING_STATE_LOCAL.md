@@ -110,14 +110,21 @@ Seed rows in `seedOrganizations` are for local development only. They carry
 `identifiersPending: true` and no website, because inventing either would put
 unverified values in the database with no source document behind them.
 
-### 9. Discover directories
+### 9. Resolve missing organization websites
+
+Apply exact-identifier overlays from other official bulk sources first. Put the
+remaining organizations through the evidence-backed workflow in
+`WEBSITE_RESOLUTION.md`. Search results are candidates until a person verifies
+them; they never become canonical merely because a name looks similar.
+
+### 10. Discover directories
 
 Run the discovery worker over the organizations' websites. It records
 `crawl_targets`, or marks the site `unsupported_platform` when no adapter claims
 it. Keeping discovery separate from crawling is what makes "we could not find a
 directory" and "we found one and it broke" different, countable outcomes.
 
-### 10. Check the sector vocabulary before writing an adapter
+### 11. Check the sector vocabulary before writing an adapter
 
 Local government pages use different words from education pages. Before
 assuming an adapter is needed, check whether the sector pack's
@@ -125,19 +132,19 @@ assuming an adapter is needed, check whether the sector pack's
 this jurisdiction's sites use. A vocabulary addition is a few lines in the pack;
 an adapter is a package. See `SECTOR_EXTENSIONS.md`.
 
-### 11. Reuse adapters; write one only when genuinely needed
+### 12. Reuse adapters; write one only when genuinely needed
 
 Check the unsupported-platform count first. Write a new adapter only when a real
 platform appears repeatedly and `generic-html` handles it badly. One city with
 unusual markup is not a platform.
 
-### 12. Set crawl tuning
+### 13. Set crawl tuning
 
 `crawlPolicy` overrides only what the jurisdiction needs.
 `extraUrlExclusions` adds paths that are never directories.
 `domainDenyList` records domains never to crawl, each with a reason.
 
-### 13. Add QA fixtures and report coverage
+### 14. Add QA fixtures and report coverage
 
 Save at least one fixture per directory platform found, with expected output.
 Then run `pnpm admin coverage` scoped to the level and sector, and read it

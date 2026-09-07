@@ -133,6 +133,106 @@ export function parseCsv(content: string, delimiter = ','): string[][] {
 }
 
 /**
+ * Streaming form of the same RFC 4180 parser.
+ *
+ * Bulk public files can contain hundreds of thousands of rows. Callers should
+ * not need to hold the entire file in memory merely to normalize one row at a
+ * time. Quoted fields, embedded newlines and escaped quotes work across chunk
+ * boundaries.
+ */
+export async function* parseCsvStream(
+  chunks: AsyncIterable<string | Uint8Array>,
+  delimiter = ',',
+): AsyncGenerator<string[]> {
+  const decoder = new TextDecoder();
+  let row: string[] = [];
+  let field = '';
+  let inQuotes = false;
+  let quotePending = false;
+  let firstChunk = true;
+
+  const completed: string[][] = [];
+  const finishField = (): void => {
+    row.push(field);
+    field = '';
+  };
+  const finishRow = (): void => {
+    finishField();
+    if (row.some((cell) => cell.trim().length > 0)) completed.push(row);
+    row = [];
+  };
+
+  for await (const chunk of chunks) {
+    let text = typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+    if (firstChunk) {
+      text = text.replace(/^\uFEFF/, '');
+      firstChunk = false;
+    }
+    for (let index = 0; index < text.length; index += 1) {
+      const char = text[index] as string;
+      if (quotePending) {
+        quotePending = false;
+        if (char === '"') {
+          field += '"';
+          continue;
+        }
+        inQuotes = false;
+      }
+      if (inQuotes) {
+        if (char === '"') {
+          if (index + 1 >= text.length) {
+            quotePending = true;
+          } else if (text[index + 1] === '"') {
+            field += '"';
+            index += 1;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          field += char;
+        }
+      } else if (char === '"' && field.length === 0) {
+        inQuotes = true;
+      } else if (char === delimiter) {
+        finishField();
+      } else if (char === '\n') {
+        finishRow();
+      } else if (char !== '\r') {
+        field += char;
+      }
+    }
+    while (completed.length > 0) yield completed.shift() as string[];
+  }
+
+  const tail = decoder.decode();
+  if (tail.length > 0) field += tail;
+  if (quotePending) inQuotes = false;
+  if (inQuotes) throw new Error('unterminated quoted field in delimited source');
+  if (field.length > 0 || row.length > 0) finishRow();
+  while (completed.length > 0) yield completed.shift() as string[];
+}
+
+/** Turn a streamed header and rows into source-preserving objects. */
+export async function* parseDelimitedObjects(
+  chunks: AsyncIterable<string | Uint8Array>,
+  delimiter = ',',
+): AsyncGenerator<Record<string, string>> {
+  let header: string[] | null = null;
+  for await (const row of parseCsvStream(chunks, delimiter)) {
+    if (header === null) {
+      header = row.map((value) => collapseWhitespace(value));
+      continue;
+    }
+    const record: Record<string, string> = {};
+    for (let index = 0; index < header.length; index += 1) {
+      const key = header[index];
+      if (key !== undefined) record[key] = collapseWhitespace(row[index] ?? '');
+    }
+    yield record;
+  }
+}
+
+/**
  * Turns a delimited official file into organization records.
  *
  * Works the same for a state agency list, a county department roster and a

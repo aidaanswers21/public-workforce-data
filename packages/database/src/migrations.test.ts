@@ -85,7 +85,7 @@ describe('migrate', () => {
     );
 
     const upgraded = await migrate(database, migrations);
-    expect(upgraded.applied).toEqual(['0011', '0012', '0013', '0014', '0015']);
+    expect(upgraded.applied).toEqual(['0011', '0012', '0013', '0014', '0015', '0016']);
     const audit = await database.query<{ sequence_number: string; valid: boolean }>(
       `select sequence_number,
               hash = audit_event_hash(
@@ -136,6 +136,7 @@ describe('rollback', () => {
     const migrations = loadMigrations();
     const reverted = await rollback(database, migrations, '0007');
     expect(reverted).toEqual([
+      '0016',
       '0015',
       '0014',
       '0013',
@@ -171,6 +172,7 @@ describe('rollback', () => {
 
     const migrations = loadMigrations();
     expect(await rollback(database, migrations, '0011')).toEqual([
+      '0016',
       '0015',
       '0014',
       '0013',
@@ -193,6 +195,7 @@ describe('rollback', () => {
       '0013',
       '0014',
       '0015',
+      '0016',
     ]);
     expect(await database.count('complaints')).toBe(1);
     expect(await database.count('suppression_entries')).toBe(1);
