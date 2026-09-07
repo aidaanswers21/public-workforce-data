@@ -48,6 +48,7 @@ export const TABLE_NAMES = [
   'crawl_checkpoints',
   'collection_projects',
   'collection_project_organizations',
+  'collection_project_source_records',
   'collection_batches',
   'collection_jobs',
   'suppression_entries',

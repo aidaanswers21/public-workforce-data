@@ -149,6 +149,27 @@ describe('sector composition', () => {
     expect(taxonomy.titleRules.some((rule) => rule.roleCategoryCode === 'test_role')).toBe(true);
   });
 
+  it('exposes sector-owned organization explorer presets without interpreting them', () => {
+    const configured: SectorPack = {
+      ...pack,
+      explorerPresets: [
+        {
+          key: 'test-organizations',
+          name: 'Test organizations',
+          singularName: 'Test organization',
+          description: 'Fixture source records.',
+          organizationTypeCodes: ['test_authority'],
+          sectorCodes: ['other'],
+          attributeColumns: [
+            { key: 'publishedCount', label: 'Published count', format: 'integer' },
+          ],
+        },
+      ],
+    };
+
+    expect(new Taxonomy([configured]).explorerPresets).toEqual(configured.explorerPresets);
+  });
+
   it('merges vocabulary onto the base rather than replacing it', () => {
     const taxonomy = new Taxonomy([pack]);
     expect(taxonomy.vocabulary.headingTerms).toContain('test roster');

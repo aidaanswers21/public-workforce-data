@@ -8,11 +8,14 @@ import {
   PGliteClient,
   PostgresClient,
   CollectionProjectRepository,
+  OrganizationRecordRepository,
   SourcePolicyRepository,
   WebsiteResolutionRepository,
   type CollectionBatchSummary,
   type CollectionProjectSummary,
   type MissingWebsiteOrganization,
+  type OrganizationRecordPage,
+  type OrganizationSourceRecord,
   loadMigrations,
   migrate,
   type CoverageSummary,
@@ -44,6 +47,7 @@ const EMPTY_PROJECT_BUILDER_CATALOG: ProjectBuilderCatalog = {
   governmentLevels: [],
   sectors: [],
   organizationTypes: [],
+  explorerPresets: [],
 };
 
 export interface AdminServerOptions {
@@ -99,6 +103,21 @@ export interface ProjectBuilderCatalog {
   sectors: readonly ProjectBuilderOption[];
   organizationTypes: readonly ProjectBuilderOrganizationType[];
   states?: readonly ProjectBuilderOption[];
+  explorerPresets: readonly OrganizationExplorerPreset[];
+}
+
+export interface OrganizationExplorerPreset {
+  key: string;
+  name: string;
+  singularName: string;
+  description: string;
+  organizationTypeCodes: readonly string[];
+  sectorCodes: readonly string[];
+  attributeColumns: readonly {
+    key: string;
+    label: string;
+    format: 'integer' | 'decimal' | 'text';
+  }[];
 }
 
 export interface CollectionProjectTemplate {
@@ -137,6 +156,7 @@ interface SpineFilters {
 export function createAdminServer(options: AdminServerOptions): Server {
   const reports = new AdminReports(options.database);
   const projects = new CollectionProjectRepository(options.database);
+  const organizationRecords = new OrganizationRecordRepository(options.database);
   const sourcePolicies = new SourcePolicyRepository(options.database);
   const websites = new WebsiteResolutionRepository(options.database);
   const projectTemplates = options.projectTemplates ?? [];
@@ -299,6 +319,106 @@ export function createAdminServer(options: AdminServerOptions): Server {
         return;
       }
 
+      if (request.method === 'GET' && url.pathname === '/organization-records') {
+        const preset = explorerPreset(url.searchParams.get('preset'), projectBuilderCatalog);
+        if (preset === null) {
+          sendHtml(
+            response,
+            200,
+            renderMessage(
+              'No organization explorer is configured',
+              'Register an explorer preset in a sector pack to browse its official source records.',
+            ),
+          );
+          return;
+        }
+        const stateCode = knownStateCode(url.searchParams.get('stateCode'), projectBuilderCatalog);
+        const websiteAvailability = websiteFilter(url.searchParams.get('website'));
+        const pageNumber = positiveInteger(url.searchParams.get('page'), 1);
+        const pageSize = 100;
+        const [recordPage, projectRows] = await Promise.all([
+          organizationRecords.list({
+            organizationTypeCodes: preset.organizationTypeCodes,
+            sectorCodes: preset.sectorCodes,
+            stateCode,
+            query: url.searchParams.get('q') ?? '',
+            websiteAvailability,
+            limit: pageSize,
+            offset: (pageNumber - 1) * pageSize,
+          }),
+          projects.list(),
+        ]);
+        sendHtml(
+          response,
+          200,
+          renderOrganizationRecords(
+            preset,
+            recordPage,
+            projectRows,
+            projectBuilderCatalog,
+            {
+              query: url.searchParams.get('q') ?? '',
+              stateCode: stateCode ?? '',
+              websiteAvailability,
+              page: pageNumber,
+              message: url.searchParams.get('message') ?? '',
+            },
+            hosted,
+          ),
+        );
+        return;
+      }
+
+      const organizationRecordMatch = /^\/organization-records\/([0-9a-f-]+)$/.exec(url.pathname);
+      if (request.method === 'GET' && organizationRecordMatch !== null) {
+        const record = await organizationRecords.get(organizationRecordMatch[1] as string);
+        if (record === null) {
+          sendHtml(
+            response,
+            404,
+            renderMessage('Organization record not found', 'Return to the organization explorer.'),
+          );
+          return;
+        }
+        const preset = matchingExplorerPreset(record, projectBuilderCatalog);
+        sendHtml(
+          response,
+          200,
+          renderOrganizationRecordProfile(
+            record,
+            preset,
+            await projects.list(),
+            url.searchParams.get('message') ?? '',
+            hosted,
+          ),
+        );
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/organization-records/projects') {
+        const form = new URLSearchParams(await readBody(request));
+        const presetKey = form.get('preset') ?? '';
+        const returnPath = safeExplorerReturnPath(form.get('returnTo'), presetKey);
+        try {
+          const result = await organizationRecords.addToProject(
+            form.get('projectId') ?? '',
+            form.getAll('recordIds'),
+            authenticatedEmail,
+          );
+          const message = `${result.selected} selected; ${result.crawlReady} collection-ready; ${result.held} awaiting classification`;
+          redirect(
+            response,
+            `${returnPath}${returnPath.includes('?') ? '&' : '?'}message=${encodeURIComponent(message)}`,
+          );
+        } catch (error) {
+          redirect(
+            response,
+            `${returnPath}${returnPath.includes('?') ? '&' : '?'}message=${encodeURIComponent(errorMessage(error))}`,
+          );
+        }
+        return;
+      }
+
       if (request.method === 'GET' && url.pathname === '/spine') {
         const filters = spineFilters(url, projectBuilderCatalog, organizationSpineInventory);
         const [summary, queue] = await Promise.all([
@@ -392,6 +512,11 @@ export function createAdminServer(options: AdminServerOptions): Server {
 
       if (request.method === 'GET' && url.pathname === '/assets/project-builder.js') {
         sendJavascript(response, PROJECT_BUILDER_SCRIPT);
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/assets/organization-records.js') {
+        sendJavascript(response, ORGANIZATION_RECORDS_SCRIPT);
         return;
       }
 
@@ -837,7 +962,7 @@ function renderDashboard(data: DashboardData, query: string, hosted: boolean): s
     `<div class="app-shell">
       <header class="topbar">
         <a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a>
-        <div class="topbar-actions"><a class="nav-link" href="/spine">Organization spine</a><a class="nav-link" href="/projects">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div>
+        <div class="topbar-actions"><a class="nav-link" href="/spine">Organization spine</a><a class="nav-link" href="/organization-records">Explore organizations</a><a class="nav-link" href="/projects">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div>
       </header>
       <main class="dashboard">
         <section class="dashboard-heading">
@@ -874,6 +999,170 @@ function renderDashboard(data: DashboardData, query: string, hosted: boolean): s
       </main>
       <footer><span>${hosted ? 'Hosted' : 'Local'} review surface</span><span>Public professional data only</span></footer>
     </div>`,
+    'dashboard-page',
+  );
+}
+
+interface OrganizationRecordViewFilters {
+  query: string;
+  stateCode: string;
+  websiteAvailability: 'all' | 'published' | 'missing';
+  page: number;
+  message: string;
+}
+
+function renderOrganizationRecords(
+  preset: OrganizationExplorerPreset,
+  result: OrganizationRecordPage,
+  projects: readonly CollectionProjectSummary[],
+  catalog: ProjectBuilderCatalog,
+  filters: OrganizationRecordViewFilters,
+  hosted: boolean,
+): string {
+  const projectOptions = selectableProjectOptions(projects);
+  const columnHeaders = preset.attributeColumns
+    .slice(0, 3)
+    .map((column) => `<th>${escapeHtml(column.label)}</th>`)
+    .join('');
+  const rows = result.records
+    .map((record) => {
+      const location = record.location;
+      const locality = [location['city'], location['stateCode']]
+        .filter((value) => typeof value === 'string' && value.length > 0)
+        .join(', ');
+      const columns = preset.attributeColumns
+        .slice(0, 3)
+        .map(
+          (column) =>
+            `<td>${escapeHtml(formatExplorerValue(record.attributes[column.key], column.format))}</td>`,
+        )
+        .join('');
+      return `<tr>
+        <td><input type="checkbox" name="recordIds" value="${escapeAttribute(record.id)}" aria-label="Select ${escapeAttribute(record.name)}"></td>
+        <td><a class="table-link" href="/organization-records/${escapeAttribute(record.id)}?preset=${escapeAttribute(preset.key)}"><strong>${escapeHtml(record.name)}</strong></a><span>${escapeHtml(record.sourceRecordKey)} · ${escapeHtml(locality || 'Location not published')}</span></td>
+        ${columns}
+        <td>${record.websiteUrl === null ? 'Not published' : `<a class="table-link" href="${escapeAttribute(record.websiteUrl)}" target="_blank" rel="noreferrer">Open website</a>`}</td>
+        <td><span class="project-status ${record.organizationId === null ? 'paused' : 'active'}">${record.organizationId === null ? 'Awaiting classification' : 'Collection-ready'}</span></td>
+      </tr>`;
+    })
+    .join('');
+  const pageCount = Math.max(1, Math.ceil(result.total / result.limit));
+  const presetLinks = catalog.explorerPresets
+    .map(
+      (item) =>
+        `<a class="secondary-link${item.key === preset.key ? ' selected-filter' : ''}" href="/organization-records?preset=${escapeAttribute(item.key)}">${escapeHtml(item.name)}</a>`,
+    )
+    .join('');
+  const states = catalog.states ?? [];
+  const returnTo = explorerUrl(preset.key, filters);
+  const from = result.total === 0 ? 0 : result.offset + 1;
+  const to = Math.min(result.offset + result.records.length, result.total);
+
+  return page(
+    `${preset.name} explorer`,
+    `${appHeader('/projects', hosted)}
+    <main class="dashboard">
+      <section class="dashboard-heading">
+        <div><p class="eyebrow">Official organization data</p><h1>${escapeHtml(preset.name)} explorer</h1><p class="muted">${escapeHtml(preset.description)}</p></div>
+        <span class="summary-chip">${result.total.toLocaleString()} records</span>
+      </section>
+      ${filters.message.length > 0 ? `<div class="flash">${escapeHtml(filters.message)}</div>` : ''}
+      <section class="notice"><span class="shield">i</span><div><strong>Selection does not start collection</strong><p>Add records to a project now. Records awaiting authoritative classification remain held and cannot become crawl targets until that classification is supported.</p></div></section>
+      <nav class="preset-links" aria-label="Organization explorers">${presetLinks}</nav>
+      <section class="panel project-section">
+        <form class="spine-filters explorer-filters" method="get" action="/organization-records">
+          <input type="hidden" name="preset" value="${escapeAttribute(preset.key)}">
+          <label>Search<input name="q" value="${escapeAttribute(filters.query)}" placeholder="Name or official ID"></label>
+          ${filterSelect('stateCode', 'State', filters.stateCode, states)}
+          <label>Website<select name="website"><option value="all"${filters.websiteAvailability === 'all' ? ' selected' : ''}>All</option><option value="published"${filters.websiteAvailability === 'published' ? ' selected' : ''}>Published</option><option value="missing"${filters.websiteAvailability === 'missing' ? ' selected' : ''}>Missing</option></select></label>
+          <button type="submit">Apply filters</button><a class="secondary-link" href="/organization-records?preset=${escapeAttribute(preset.key)}">Clear</a>
+        </form>
+        <form method="post" action="/organization-records/projects" data-record-selection>
+          <input type="hidden" name="preset" value="${escapeAttribute(preset.key)}">
+          <input type="hidden" name="returnTo" value="${escapeAttribute(returnTo)}">
+          <div class="bulk-toolbar">
+            <button class="secondary-button" type="button" data-select-page>Select this page</button>
+            <button class="secondary-button" type="button" data-clear-page>Clear selection</button>
+            <label>Collection project<select name="projectId" required ${projectOptions.length === 0 ? 'disabled' : ''}><option value="">Choose a project</option>${projectOptions}</select></label>
+            <button type="submit" ${projectOptions.length === 0 ? 'disabled' : ''}>Add selected to project</button>
+          </div>
+          <div class="table-scroll"><table><thead><tr><th>Select</th><th>${escapeHtml(preset.singularName)}</th>${columnHeaders}<th>Website</th><th>Collection state</th></tr></thead><tbody>${rows.length > 0 ? rows : `<tr><td class="empty" colspan="${preset.attributeColumns.slice(0, 3).length + 4}">No records match these filters.</td></tr>`}</tbody></table></div>
+        </form>
+        <div class="pagination"><span>Showing ${from.toLocaleString()}-${to.toLocaleString()} of ${result.total.toLocaleString()}</span><div>${filters.page > 1 ? `<a class="secondary-link" href="${escapeAttribute(explorerUrl(preset.key, { ...filters, page: filters.page - 1, message: '' }))}">Previous</a>` : ''}${filters.page < pageCount ? `<a class="secondary-link" href="${escapeAttribute(explorerUrl(preset.key, { ...filters, page: filters.page + 1, message: '' }))}">Next</a>` : ''}</div></div>
+        ${projectOptions.length === 0 ? '<p class="table-note">Create a collection project before adding records. The project remains a draft until a separate batch is approved.</p>' : '<p class="table-note">Bulk selection records your intended scope. It does not contact any public website or release worker jobs.</p>'}
+      </section>
+    </main>${appFooter(hosted)}<script src="/assets/organization-records.js" defer></script>`,
+    'dashboard-page',
+  );
+}
+
+function renderOrganizationRecordProfile(
+  record: OrganizationSourceRecord,
+  preset: OrganizationExplorerPreset | null,
+  projects: readonly CollectionProjectSummary[],
+  message: string,
+  hosted: boolean,
+): string {
+  const columns = preset?.attributeColumns ?? [];
+  const primaryKeys = new Set(columns.map((column) => column.key));
+  const primaryAttributes = columns
+    .map(
+      (column) =>
+        `<div><dt>${escapeHtml(column.label)}</dt><dd>${escapeHtml(formatExplorerValue(record.attributes[column.key], column.format))}</dd></div>`,
+    )
+    .join('');
+  const otherAttributes = Object.entries(record.attributes)
+    .filter(([key]) => !primaryKeys.has(key))
+    .map(
+      ([key, value]) =>
+        `<div><dt>${escapeHtml(label(key))}</dt><dd>${escapeHtml(formatExplorerValue(value, 'text'))}</dd></div>`,
+    )
+    .join('');
+  const location = record.location;
+  const address = [
+    location['addressLine1'],
+    location['addressLine2'],
+    [location['city'], location['stateCode'], location['postalCode']]
+      .filter((value) => typeof value === 'string' && value.length > 0)
+      .join(' '),
+  ]
+    .filter((value) => typeof value === 'string' && value.length > 0)
+    .join(', ');
+  const identifiers = [...record.identifiers, ...record.parentIdentifiers]
+    .map((identifier) => {
+      const system = primitiveText(identifier['systemCode'] ?? identifier['system'], 'identifier');
+      const value = primitiveText(identifier['value'], 'Not published');
+      return `<li><strong>${escapeHtml(label(system))}</strong><span>${escapeHtml(value)}</span></li>`;
+    })
+    .join('');
+  const projectOptions = selectableProjectOptions(projects);
+  const backPath = `/organization-records${preset === null ? '' : `?preset=${encodeURIComponent(preset.key)}`}`;
+  return page(
+    record.name,
+    `${appHeader(backPath, hosted)}
+    <main class="dashboard narrow-dashboard">
+      <section class="dashboard-heading">
+        <div><p class="eyebrow">${escapeHtml(preset?.singularName ?? 'Organization')} profile</p><h1>${escapeHtml(record.name)}</h1><p class="muted">Official source record ${escapeHtml(record.sourceRecordKey)}</p></div>
+        <span class="project-status large ${record.organizationId === null ? 'paused' : 'active'}">${record.organizationId === null ? 'Awaiting classification' : 'Collection-ready'}</span>
+      </section>
+      ${message.length > 0 ? `<div class="flash">${escapeHtml(message)}</div>` : ''}
+      <section class="metrics">
+        ${primaryAttributes.length > 0 ? primaryAttributes.replaceAll('<div>', '<article class="metric-card">').replaceAll('</div>', '</article>').replaceAll('<dt>', '<span>').replaceAll('</dt>', '</span>').replaceAll('<dd>', '<strong>').replaceAll('</dd>', '</strong>') : metric('Published attributes', Object.keys(record.attributes).length, 'Values preserved from the official source')}
+      </section>
+      <div class="project-grid">
+        <section class="panel panel-body"><p class="eyebrow">Published details</p><h2>Location and website</h2><dl class="profile-details"><div><dt>Address</dt><dd>${escapeHtml(address || 'Not published')}</dd></div><div><dt>Website</dt><dd>${record.websiteUrl === null ? 'Not published' : `<a class="table-link" href="${escapeAttribute(record.websiteUrl)}" target="_blank" rel="noreferrer">${escapeHtml(record.websiteUrl)}</a>`}</dd></div><div><dt>Classification</dt><dd>${escapeHtml(
+          [record.organizationTypeCode, record.governmentLevelCode, record.sectorCode]
+            .filter(Boolean)
+            .map((value) => label(String(value)))
+            .join(' · ') || 'Incomplete',
+        )}</dd></div></dl></section>
+        <section class="panel panel-body"><p class="eyebrow">Official identity</p><h2>Identifiers</h2><ul class="breakdown profile-identifiers">${identifiers.length > 0 ? identifiers : '<li>No identifiers were published.</li>'}</ul></section>
+      </div>
+      ${otherAttributes.length > 0 ? `<section class="panel panel-body project-section"><p class="eyebrow">Additional source values</p><dl class="profile-details attribute-grid">${otherAttributes}</dl></section>` : ''}
+      <section class="panel panel-body project-section"><p class="eyebrow">Provenance</p><h2>Where this came from</h2><dl class="profile-details"><div><dt>Official source</dt><dd><a class="table-link" href="${escapeAttribute(record.sourceUrl)}" target="_blank" rel="noreferrer">${escapeHtml(record.sourceKey)}</a></dd></div><div><dt>Source effective date</dt><dd>${escapeHtml(record.sourceEffectiveDate ?? 'Not published')}</dd></div><div><dt>Retrieved</dt><dd>${formatDate(record.sourceRetrievedAt)}</dd></div><div><dt>Evidence version</dt><dd>${record.sourceVersion} · ${escapeHtml(record.sourceContentHash.slice(0, 16))}</dd></div></dl></section>
+      ${record.organizationId === null ? `<section class="warning-card"><strong>This record is preserved but not yet crawl-ready.</strong><p>${escapeHtml(record.classificationReviewReason ?? 'Authoritative classification is required before canonical import.')}</p></section>` : ''}
+      <section class="panel panel-body project-section"><p class="eyebrow">Project scope</p><h2>Add this organization</h2><p>This records the intended scope only. It does not create or approve a collection batch.</p><form class="release-form" method="post" action="/organization-records/projects"><input type="hidden" name="recordIds" value="${escapeAttribute(record.id)}"><input type="hidden" name="preset" value="${escapeAttribute(preset?.key ?? '')}"><input type="hidden" name="returnTo" value="/organization-records/${escapeAttribute(record.id)}"><label>Collection project<select name="projectId" required ${projectOptions.length === 0 ? 'disabled' : ''}><option value="">Choose a project</option>${projectOptions}</select></label><button type="submit" ${projectOptions.length === 0 ? 'disabled' : ''}>Add to project</button></form>${projectOptions.length === 0 ? '<p class="table-note">Create a collection project first.</p>' : ''}</section>
+    </main>${appFooter(hosted)}`,
     'dashboard-page',
   );
 }
@@ -996,6 +1285,7 @@ function renderProjects(
         <td><a class="table-link" href="/projects/${escapeAttribute(project.id)}"><strong>${escapeHtml(project.name)}</strong></a><span>${escapeHtml(project.stateCode ?? 'National')} · ${escapeHtml(project.sectorCodes.map(label).join(', '))}</span></td>
         <td><span class="project-status ${escapeHtml(project.status)}">${escapeHtml(label(project.status))}</span></td>
         <td>${project.organizationsSelected.toLocaleString()}</td>
+        <td>${project.sourceRecordsSelected.toLocaleString()}<span>${project.sourceRecordsHeld.toLocaleString()} held</span></td>
         <td>${project.directoriesReady.toLocaleString()}</td>
         <td>${project.recordsCollected.toLocaleString()}</td>
         <td>${project.queuedJobs + project.runningJobs}</td>
@@ -1014,7 +1304,7 @@ function renderProjects(
       <section class="notice"><span class="shield">✓</span><div><strong>Preparation is separate from collection</strong><p>Creating a project or target does not contact a website. A worker can claim only an explicitly approved batch whose source policy allows it.</p></div></section>
       <section class="panel">
         <div class="panel-heading"><div><p class="eyebrow">Portfolio</p><h2>Configured work</h2></div><span class="summary-chip">${projects.length} project${projects.length === 1 ? '' : 's'}</span></div>
-        <div class="table-scroll"><table><thead><tr><th>Scope</th><th>Status</th><th>Organizations</th><th>Directories ready</th><th>Records</th><th>Open jobs</th><th>Holds / failures</th></tr></thead><tbody>${rows.length > 0 ? rows : '<tr><td class="empty" colspan="7">No collection projects yet. Create one from a reviewed jurisdiction configuration.</td></tr>'}</tbody></table></div>
+        <div class="table-scroll"><table><thead><tr><th>Scope</th><th>Status</th><th>Organizations</th><th>Source selections</th><th>Directories ready</th><th>Records</th><th>Open jobs</th><th>Holds / failures</th></tr></thead><tbody>${rows.length > 0 ? rows : '<tr><td class="empty" colspan="8">No collection projects yet. Create one from a reviewed jurisdiction configuration.</td></tr>'}</tbody></table></div>
       </section>
       ${templates.length === 0 ? '<section class="warning-card"><strong>No jurisdiction configurations are registered.</strong><p>Add a configuration before creating a collection project.</p></section>' : ''}
     </main>${appFooter(hosted)}`,
@@ -1172,9 +1462,9 @@ function renderProjectDetail(
       ${message.length > 0 ? `<div class="flash" role="status">${escapeHtml(message)}</div>` : ''}
       <section class="metrics project-metrics">
         ${metric('Selected organizations', project.organizationsSelected, `${project.websitesAvailable} with a published website`)}
+        ${metric('Source records selected', project.sourceRecordsSelected, `${project.sourceRecordsReady} ready · ${project.sourceRecordsHeld} awaiting classification`)}
         ${metric('Directories ready', project.directoriesReady, 'Discovered and awaiting a crawl batch')}
         ${metric('Records collected', project.recordsCollected, `${project.targetsCrawled} targets completed`)}
-        ${metric('Holds and failures', project.policyHolds + project.failedJobs, `${project.policyHolds} source-policy holds`)}
       </section>
       <div class="project-grid">
         <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Prepare</p><h2>Scope and targets</h2></div></div><div class="panel-body"><p>Refresh membership from the current database filters, then create discovery targets only from website URLs that sources actually published.</p><div class="button-row"><form method="post" action="/projects/${escapeAttribute(project.id)}/refresh"><button class="secondary-button" type="submit">Refresh organizations</button></form><form method="post" action="/projects/${escapeAttribute(project.id)}/generate"><button class="secondary-button" type="submit">Generate discovery work</button></form></div><dl class="limits"><div><dt>Organization types</dt><dd>${project.filters.organizationTypeCodes.length === 0 ? 'All in scope' : escapeHtml(project.filters.organizationTypeCodes.join(', '))}</dd></div><div><dt>Worker behavior</dt><dd>${project.filters.workMode === 'approved_batch_complete' ? 'Continue until approved batch is complete' : 'Stop at operator job count'}</dd></div><div><dt>Batch safety cap</dt><dd>${project.batchSize} targets</dd></div><div><dt>Per-target safety cap</dt><dd>${project.maxPagesPerTarget} pages</dd></div><div><dt>Batch circuit breaker</dt><dd>${project.maxPagesPerBatch} pages or ${project.maxErrorsPerBatch} errors</dd></div></dl></div></section>
@@ -1189,7 +1479,7 @@ function renderProjectDetail(
 }
 
 function appHeader(backTo: string, hosted: boolean): string {
-  return `<header class="topbar"><a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a><div class="topbar-actions"><a class="nav-link" href="/spine">Organization spine</a><a class="nav-link" href="${escapeAttribute(backTo)}">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div></header>`;
+  return `<header class="topbar"><a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a><div class="topbar-actions"><a class="nav-link" href="/spine">Organization spine</a><a class="nav-link" href="/organization-records">Explore organizations</a><a class="nav-link" href="${escapeAttribute(backTo)}">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div></header>`;
 }
 
 function appFooter(hosted: boolean): string {
@@ -1238,6 +1528,91 @@ function allowedSelection(value: string | null, options: readonly { code: string
 
 function selected(value: string): string[] {
   return value.length === 0 ? [] : [value];
+}
+
+function explorerPreset(
+  requestedKey: string | null,
+  catalog: ProjectBuilderCatalog,
+): OrganizationExplorerPreset | null {
+  return (
+    catalog.explorerPresets.find((preset) => preset.key === requestedKey) ??
+    catalog.explorerPresets[0] ??
+    null
+  );
+}
+
+function matchingExplorerPreset(
+  record: OrganizationSourceRecord,
+  catalog: ProjectBuilderCatalog,
+): OrganizationExplorerPreset | null {
+  return (
+    catalog.explorerPresets.find(
+      (preset) =>
+        record.organizationTypeCode !== null &&
+        preset.organizationTypeCodes.includes(record.organizationTypeCode) &&
+        record.sectorCode !== null &&
+        preset.sectorCodes.includes(record.sectorCode),
+    ) ?? null
+  );
+}
+
+function knownStateCode(value: string | null, catalog: ProjectBuilderCatalog): string | null {
+  return value !== null && (catalog.states ?? []).some((state) => state.code === value)
+    ? value
+    : null;
+}
+
+function websiteFilter(value: string | null): 'all' | 'published' | 'missing' {
+  return value === 'published' || value === 'missing' ? value : 'all';
+}
+
+function positiveInteger(value: string | null, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function selectableProjectOptions(projects: readonly CollectionProjectSummary[]): string {
+  return projects
+    .filter((project) => project.status !== 'completed' && project.status !== 'cancelled')
+    .map(
+      (project) =>
+        `<option value="${escapeAttribute(project.id)}">${escapeHtml(project.name)} · ${escapeHtml(project.stateCode ?? 'National')}</option>`,
+    )
+    .join('');
+}
+
+function explorerUrl(presetKey: string, filters: OrganizationRecordViewFilters): string {
+  const params = new URLSearchParams({ preset: presetKey });
+  if (filters.query.trim().length > 0) params.set('q', filters.query.trim());
+  if (filters.stateCode.length > 0) params.set('stateCode', filters.stateCode);
+  if (filters.websiteAvailability !== 'all') params.set('website', filters.websiteAvailability);
+  if (filters.page > 1) params.set('page', String(filters.page));
+  return `/organization-records?${params.toString()}`;
+}
+
+function safeExplorerReturnPath(value: string | null, presetKey: string): string {
+  if (value !== null && /^\/organization-records(?:\/[0-9a-f-]+)?(?:\?[^#]*)?$/.test(value)) {
+    return value;
+  }
+  return `/organization-records?preset=${encodeURIComponent(presetKey)}`;
+}
+
+function formatExplorerValue(value: unknown, format: 'integer' | 'decimal' | 'text'): string {
+  if (value === null || value === undefined || value === '') return 'Not published';
+  if (format === 'integer' && typeof value === 'number') return Math.round(value).toLocaleString();
+  if (format === 'decimal' && typeof value === 'number') {
+    return value.toLocaleString(undefined, { maximumFractionDigits: 2 });
+  }
+  return primitiveText(value, 'Not published');
+}
+
+function primitiveText(value: unknown, fallback: string): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  if (value !== null && typeof value === 'object') return JSON.stringify(value) ?? fallback;
+  return fallback;
 }
 
 function slug(value: string): string {
@@ -1331,10 +1706,25 @@ const STYLES = `
 .login-shell{display:grid;min-height:100vh;grid-template-columns:minmax(380px,1fr) minmax(440px,1fr)}.login-brand{display:flex;flex-direction:column;justify-content:center;padding:clamp(48px,8vw,120px);background:var(--ink);color:white;position:relative;overflow:hidden}.login-brand:after{content:"";position:absolute;width:420px;height:420px;right:-190px;bottom:-180px;border:1px solid rgba(255,255,255,.14);border-radius:50%;box-shadow:0 0 0 68px rgba(255,255,255,.035),0 0 0 136px rgba(255,255,255,.025)}.login-brand .eyebrow{margin-top:42px;color:#9dcfc1}.login-brand h1{max-width:600px;margin:0;font-family:ui-serif,serif;font-size:clamp(3rem,6vw,5.7rem);font-weight:500;line-height:.96;letter-spacing:-.045em}.brand-copy{max-width:520px;margin:28px 0;color:#c6d1d2;font-size:1.08rem;line-height:1.7}.boundary-note{display:flex;align-items:center;gap:12px;margin-top:42px;color:#d7e1df;font-size:.9rem}.login-panel{display:grid;place-items:center;padding:48px;background:radial-gradient(circle at 85% 10%,#e5eee8 0,transparent 32%),var(--paper)}.login-card{width:min(100%,450px);padding:46px;border:1px solid var(--line);border-radius:22px;background:rgba(255,254,250,.94);box-shadow:var(--shadow)}.login-card h2{margin:0;font-family:ui-serif,serif;font-size:2.4rem;font-weight:500;letter-spacing:-.025em}.login-card form{display:grid;gap:10px;margin-top:30px}.login-card label{margin-top:8px;font-size:.82rem;font-weight:750}.login-card input,.search input{width:100%;border:1px solid #b9c1bc;border-radius:10px;background:white;color:var(--ink);outline:none}.login-card input{height:50px;padding:0 14px}.login-card input:focus,.search input:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(23,107,104,.12)}.login-card button,.button-link{display:grid;height:50px;margin-top:14px;place-items:center;border:0;border-radius:10px;background:var(--teal);color:white;font-weight:750;text-decoration:none}.login-card button:hover,.button-link:hover{background:#105956}.fine-print{margin:24px 0 0;color:#7a8589;font-size:.78rem;line-height:1.55}.error{margin:20px 0 0;padding:12px 14px;border:1px solid #ddb1a9;border-radius:9px;background:#fbebe7;color:#8f3528;font-size:.88rem}
 .topbar{display:flex;height:76px;align-items:center;justify-content:space-between;padding:0 clamp(24px,5vw,72px);border-bottom:1px solid var(--line);background:rgba(255,254,250,.92)}.wordmark{display:flex;align-items:center;gap:12px;color:var(--ink);font-family:ui-serif,serif;font-size:1.02rem;font-weight:700;text-decoration:none}.wordmark small{display:block;margin-top:2px;color:var(--muted);font-family:Inter,sans-serif;font-size:.66rem;font-weight:650;letter-spacing:.08em;text-transform:uppercase}.topbar-actions{display:flex;align-items:center;gap:18px}.local-badge{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:.82rem}.quiet-button{border:1px solid var(--line);border-radius:8px;padding:9px 14px;background:transparent;color:var(--ink);font-size:.82rem;font-weight:700}.quiet-button:hover{background:#eeece5}.dashboard{width:min(1480px,calc(100% - 48px));margin:0 auto;padding:52px 0 68px}.dashboard-heading{display:flex;align-items:end;justify-content:space-between;gap:32px;margin-bottom:28px}.dashboard-heading h1{margin:0;font-family:ui-serif,serif;font-size:clamp(2.5rem,5vw,4.4rem);font-weight:500;letter-spacing:-.045em}.dashboard-heading .muted{margin:12px 0 0}.freshness{min-width:200px;padding-left:20px;border-left:2px solid var(--gold)}.freshness span{display:block;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.08em}.freshness strong{display:block;margin-top:7px;font-family:ui-serif,serif;font-size:1.02rem}.notice{display:flex;align-items:center;gap:16px;margin-bottom:20px;padding:16px 20px;border:1px solid #b8d8ce;border-radius:12px;background:var(--teal-soft)}.notice .shield{display:grid;width:34px;height:34px;place-items:center;border-radius:50%;background:var(--teal);color:white;font-weight:900}.notice p{margin:3px 0 0;color:#456760;font-size:.84rem}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}.metric-card,.panel{border:1px solid var(--line);background:var(--panel);box-shadow:0 8px 24px rgba(23,44,53,.04)}.metric-card{padding:24px;border-radius:14px}.metric-card p{margin:0;color:var(--muted);font-size:.8rem;font-weight:700}.metric-card strong{display:block;margin:10px 0 7px;font-family:ui-serif,serif;font-size:2.5rem;font-weight:500}.metric-card span{color:#7a8589;font-size:.76rem}.content-grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(240px,1fr);gap:20px}.panel{border-radius:14px;overflow:hidden}.panel-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:24px 26px;border-bottom:1px solid var(--line)}.panel-heading .eyebrow{margin-bottom:5px}.panel h2{margin:0;font-family:ui-serif,serif;font-size:1.6rem;font-weight:500}.search{display:flex;width:min(430px,50%)}.search input{height:40px;padding:0 12px;border-radius:8px 0 0 8px}.search button{border:0;border-radius:0 8px 8px 0;padding:0 16px;background:var(--ink);color:white;font-size:.78rem;font-weight:750}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left}th{padding:13px 18px;border-bottom:1px solid var(--line);background:#f0eee7;color:#66757a;font-size:.69rem;letter-spacing:.06em;text-transform:uppercase}td{padding:17px 18px;border-bottom:1px solid #e8e5dd;color:#43565d;font-size:.82rem;vertical-align:middle}tbody tr:last-child td{border-bottom:0}td strong{display:block;color:var(--ink);font-size:.86rem}td span:not(.pill):not(.run-status){display:block;margin-top:4px;color:#788489;font-size:.76rem}.pill{display:inline-block;padding:5px 8px;border-radius:20px;background:#edf1ed;color:#53645f;font-size:.68rem;font-weight:750;white-space:nowrap}.confidence{display:inline-block;width:54px;height:5px;margin-right:8px;border-radius:10px;background:#e0e3df;overflow:hidden;vertical-align:middle}.confidence span{display:block;height:100%;background:var(--teal)}td small{color:var(--muted)}.table-note{margin:0;padding:14px 20px;border-top:1px solid var(--line);background:#faf9f4;color:#738085;font-size:.73rem}.empty{padding:32px!important;color:var(--muted);text-align:center}.breakdown{margin:0;padding:8px 24px 18px;list-style:none}.breakdown li{display:flex;align-items:center;justify-content:space-between;padding:17px 2px;border-bottom:1px solid #e8e5dd;color:var(--ink);font-size:.84rem}.breakdown li:last-child{border:0}.breakdown small{display:block;margin-top:4px;color:var(--muted);font-size:.7rem;font-weight:500}.breakdown strong{font-family:ui-serif,serif;font-size:1.3rem}.runs-panel{margin-top:20px}.summary-chip{padding:7px 10px;border-radius:20px;background:var(--teal-soft);color:#2f655d;font-size:.72rem;font-weight:750}.run-status{display:inline-block;width:8px;height:8px;margin-right:9px;border-radius:50%;background:#879398}.run-status.completed{background:#59a686}.run-status.failed{background:#b95746}footer{display:flex;justify-content:space-between;padding:24px clamp(24px,5vw,72px);border-top:1px solid var(--line);color:#7c878a;font-size:.72rem}.message-shell{display:grid;min-height:100vh;place-items:center;padding:30px}.message-shell h1{font-family:ui-serif,serif;font-weight:500}.button-link{margin-top:25px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .nav-link,.table-link{color:var(--teal);font-size:.82rem;font-weight:750;text-decoration:none}.table-link strong{color:var(--teal)}.primary-link,.secondary-link{display:inline-flex;align-items:center;justify-content:center;border-radius:9px;padding:12px 17px;font-size:.82rem;font-weight:750;text-decoration:none}.primary-link{background:var(--teal);color:white}.primary-link.disabled{opacity:.45;pointer-events:none}.secondary-link{border:1px solid var(--line);color:var(--ink)}.narrow-dashboard{max-width:980px}.project-builder-dashboard{max-width:1180px}.project-form{overflow:visible}.form-section{padding:28px;border-bottom:1px solid var(--line)}.form-section h2{margin:0 0 18px}.section-copy{margin:-8px 0 20px;color:var(--muted);font-size:.82rem;line-height:1.55}.project-form label,.release-form label{display:block;margin:16px 0 7px;font-size:.8rem;font-weight:750}.project-form input,.project-form select,.project-form textarea,.release-form input,.release-form select,.release-form textarea{width:100%;border:1px solid #b9c1bc;border-radius:9px;padding:11px 13px;background:white;color:var(--ink)}.project-form select:disabled{background:#f2f1ec;color:#52636a;opacity:1}.field-help{margin:10px 0 0;color:var(--muted);font-size:.75rem;line-height:1.5}.scope-resolution{min-height:20px;margin:12px 0 0;color:var(--teal);font-size:.78rem;font-weight:750}.scope-resolution.unavailable{color:#8f3d31}.form-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 18px}.form-grid.three-columns{grid-template-columns:repeat(3,1fr)}.wide-field{grid-column:span 2}.form-actions{display:flex;justify-content:flex-end;gap:12px;padding:22px 28px}.form-actions button,.release-form button{border:0;border-radius:9px;padding:12px 17px;background:var(--teal);color:white;font-weight:750}.form-actions button:disabled,.release-form button:disabled{opacity:.45}.coverage-spine{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}.coverage-spine div{min-height:84px;padding:16px;border:1px solid var(--line);border-radius:11px;background:#fffefa}.coverage-spine strong,.coverage-spine span{display:block}.coverage-spine strong{font-size:.82rem}.coverage-spine span{margin-top:7px;color:var(--muted);font-size:.67rem;line-height:1.4}.choice-builder{display:grid;grid-template-columns:1fr 1fr;gap:16px}.choice-bin{min-height:250px;padding:17px;border:1px dashed #aebbb6;border-radius:12px;background:#f8f7f2}.choice-bin.drag-over{border-color:var(--teal);background:var(--teal-soft)}.choice-bin h3{margin:0 0 13px;font-size:.78rem;text-transform:uppercase;letter-spacing:.06em}.choice-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.scope-option{padding:12px;border:1px solid var(--line);border-radius:9px;background:white;color:var(--ink);text-align:left}.scope-option:hover,.scope-option:focus{border-color:var(--teal);box-shadow:0 0 0 2px rgba(23,107,104,.1)}.scope-option strong,.scope-option small{display:block}.scope-option strong{font-size:.77rem}.scope-option small{margin-top:5px;color:var(--muted);font-size:.65rem;line-height:1.35}.scope-option[hidden]{display:none}.selected-bin .scope-option{border-color:#a8cfc3;background:#eef8f4}.choice-empty{margin:45px auto;color:var(--muted);font-size:.8rem;text-align:center}.advanced-filters{margin-top:20px;border-top:1px solid var(--line);padding-top:17px}.advanced-filters summary{cursor:pointer;color:var(--teal);font-size:.8rem;font-weight:750}.scale-note{display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;padding:16px;border-left:3px solid var(--gold);background:#faf4e7}.scale-note strong{min-width:240px;font-size:.82rem}.scale-note span{color:var(--muted);font-size:.78rem;line-height:1.5}.work-mode{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 18px;padding:0;border:0}.work-mode legend{margin-bottom:8px;font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em}.work-mode label{display:flex;gap:10px;margin:0;padding:15px;border:1px solid var(--line);border-radius:10px;background:#f8f7f2}.work-mode input{width:auto;margin:2px 0 0}.work-mode span,.work-mode strong,.work-mode small{display:block}.work-mode strong{font-size:.79rem}.work-mode small{margin-top:5px;color:var(--muted);font-size:.68rem;line-height:1.4}.data-coverage-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.data-coverage-grid div{padding:16px;border:1px solid var(--line);border-radius:10px;background:#f8f7f2}.data-coverage-grid strong,.data-coverage-grid span{display:block}.data-coverage-grid strong{font-size:.8rem}.data-coverage-grid span{margin-top:6px;color:var(--muted);font-size:.72rem;line-height:1.5}.project-status{display:inline-block;padding:6px 9px;border-radius:20px;background:#e5e8e5;color:#55645f;font-size:.7rem;font-weight:800}.project-status.active,.project-status.completed{background:var(--teal-soft);color:#28675d}.project-status.paused,.project-status.awaiting_approval,.project-status.policy_hold{background:#f5e8c9;color:#8a5f19}.project-status.cancelled,.project-status.failed,.project-status.completed_with_errors{background:#f5ded9;color:#8f3d31}.project-status.large{padding:9px 13px;font-size:.76rem}.project-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.panel-body{padding:25px}.panel-body>p{margin-top:0;color:var(--muted);font-size:.83rem;line-height:1.6}.button-row,.project-controls{display:flex;flex-wrap:wrap;gap:10px}.secondary-button{border:1px solid #aebbb6;border-radius:8px;padding:10px 13px;background:white;color:var(--ink);font-size:.78rem;font-weight:750}.limits{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:26px 0 0}.limits div{padding-top:13px;border-top:1px solid var(--line)}.limits dt{color:var(--muted);font-size:.7rem;text-transform:uppercase}.limits dd{margin:6px 0 0;font-size:.82rem;font-weight:700}.check-label{display:flex!important;align-items:flex-start;gap:10px;margin-top:17px!important}.check-label input{width:auto!important;margin-top:3px}.release-form button{width:100%;margin-top:18px}.project-section{margin-top:20px}.project-controls{justify-content:flex-end;margin-top:20px}.flash{margin-bottom:20px;padding:13px 16px;border:1px solid #b8d8ce;border-radius:9px;background:var(--teal-soft);color:#315e57;font-size:.82rem}.warning-card{margin-top:20px;padding:20px;border:1px solid #dbbd84;border-radius:12px;background:#fff4dc}.warning-card p{margin-bottom:0;color:var(--muted)}
-.status-track{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}.pipeline-stage{display:flex;align-items:center;gap:12px;padding:15px;border:1px solid var(--line);border-radius:11px;background:#ebe9e3}.pipeline-stage>span{display:grid;width:30px;height:30px;flex:0 0 30px;place-items:center;border-radius:50%;background:#9aa3a0;color:white;font-size:.75rem;font-weight:850}.pipeline-stage.complete{border-color:#b8d8ce;background:#eef7f3}.pipeline-stage.complete>span{background:var(--teal)}.pipeline-stage strong,.pipeline-stage small{display:block}.pipeline-stage strong{font-size:.78rem}.pipeline-stage small{margin-top:4px;color:var(--muted);font-size:.67rem;line-height:1.35}.spine-grid{grid-template-columns:minmax(0,2.4fr) minmax(280px,1fr)}.spine-filters{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr)) auto auto;align-items:end;gap:12px;padding:18px 22px;border-bottom:1px solid var(--line);background:#faf9f4}.spine-filters label{color:var(--muted);font-size:.7rem;font-weight:750}.spine-filters select{display:block;width:100%;height:40px;margin-top:6px;border:1px solid #b9c1bc;border-radius:8px;padding:0 10px;background:white;color:var(--ink)}.spine-filters button{height:40px;border:0;border-radius:8px;padding:0 16px;background:var(--teal);color:white;font-size:.78rem;font-weight:750}.spine-filters .secondary-link{height:40px}.work-summary{display:grid;grid-template-columns:1fr 1fr;gap:20px}.inventory-notes{margin:0;padding-left:20px;color:var(--muted);font-size:.8rem;line-height:1.7}
-@media(max-width:1100px){.spine-filters{grid-template-columns:repeat(2,1fr)}}
+.status-track{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}.pipeline-stage{display:flex;align-items:center;gap:12px;padding:15px;border:1px solid var(--line);border-radius:11px;background:#ebe9e3}.pipeline-stage>span{display:grid;width:30px;height:30px;flex:0 0 30px;place-items:center;border-radius:50%;background:#9aa3a0;color:white;font-size:.75rem;font-weight:850}.pipeline-stage.complete{border-color:#b8d8ce;background:#eef7f3}.pipeline-stage.complete>span{background:var(--teal)}.pipeline-stage strong,.pipeline-stage small{display:block}.pipeline-stage strong{font-size:.78rem}.pipeline-stage small{margin-top:4px;color:var(--muted);font-size:.67rem;line-height:1.35}.spine-grid{grid-template-columns:minmax(0,2.4fr) minmax(280px,1fr)}.spine-filters{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr)) auto auto;align-items:end;gap:12px;padding:18px 22px;border-bottom:1px solid var(--line);background:#faf9f4}.spine-filters label{color:var(--muted);font-size:.7rem;font-weight:750}.spine-filters input,.spine-filters select{display:block;width:100%;height:40px;margin-top:6px;border:1px solid #b9c1bc;border-radius:8px;padding:0 10px;background:white;color:var(--ink)}.spine-filters button{height:40px;border:0;border-radius:8px;padding:0 16px;background:var(--teal);color:white;font-size:.78rem;font-weight:750}.spine-filters .secondary-link{height:40px}.work-summary{display:grid;grid-template-columns:1fr 1fr;gap:20px}.inventory-notes{margin:0;padding-left:20px;color:var(--muted);font-size:.8rem;line-height:1.7}.preset-links{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:20px}.selected-filter{border-color:var(--teal);background:var(--teal-soft);color:var(--teal)}.explorer-filters{grid-template-columns:minmax(220px,2fr) minmax(140px,1fr) minmax(140px,1fr) auto auto}.bulk-toolbar{display:flex;align-items:end;gap:10px;padding:16px 20px;border-bottom:1px solid var(--line);background:#fffefa}.bulk-toolbar label{min-width:280px;margin-left:auto;color:var(--muted);font-size:.7rem;font-weight:750}.bulk-toolbar select{display:block;width:100%;height:40px;margin-top:6px;border:1px solid #b9c1bc;border-radius:8px;padding:0 10px;background:white}.bulk-toolbar>button[type=submit]{height:40px;border:0;border-radius:8px;padding:0 16px;background:var(--teal);color:white;font-size:.78rem;font-weight:750}.bulk-toolbar button:disabled{opacity:.45}.pagination{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;color:var(--muted);font-size:.78rem}.pagination div{display:flex;gap:8px}.profile-details{display:grid;gap:14px;margin:20px 0 0}.profile-details div{padding-top:12px;border-top:1px solid var(--line)}.profile-details dt{color:var(--muted);font-size:.7rem;text-transform:uppercase}.profile-details dd{margin:6px 0 0;font-size:.84rem;overflow-wrap:anywhere}.attribute-grid{grid-template-columns:repeat(3,1fr)}.profile-identifiers{padding:8px 0 0}.profile-identifiers li span{overflow-wrap:anywhere}
+@media(max-width:1100px){.spine-filters,.explorer-filters{grid-template-columns:repeat(2,1fr)}.bulk-toolbar{align-items:stretch;flex-wrap:wrap}.bulk-toolbar label{margin-left:0}}
 @media(max-width:960px){.login-shell{grid-template-columns:1fr}.login-brand{min-height:46vh;padding:52px}.login-panel{padding:36px 20px}.metrics{grid-template-columns:repeat(2,1fr)}.content-grid,.project-grid,.spine-grid{grid-template-columns:1fr}.status-track{grid-template-columns:repeat(2,1fr)}.coverage-spine{grid-template-columns:repeat(2,1fr)}.form-grid.three-columns{grid-template-columns:repeat(2,1fr)}.choice-builder{grid-template-columns:1fr}.breakdown-panel{order:-1}.breakdown{display:grid;grid-template-columns:repeat(2,1fr);gap:0 24px}.dashboard-heading{align-items:start}.freshness{margin-top:8px}}
-@media(max-width:640px){.login-brand{padding:38px 24px}.login-brand h1{font-size:3rem}.login-card{padding:30px 24px}.topbar{height:auto;padding:14px 18px}.topbar-actions{gap:10px;flex-wrap:wrap;justify-content:flex-end}.local-badge{display:none}.dashboard{width:calc(100% - 28px);padding-top:34px}.dashboard-heading{display:block}.dashboard-heading .project-status{margin-top:18px}.freshness{margin-top:22px}.metrics{grid-template-columns:1fr 1fr;gap:10px}.metric-card{padding:18px}.panel-heading{align-items:stretch;flex-direction:column;padding:20px}.search{width:100%}.breakdown{grid-template-columns:1fr}.notice{align-items:flex-start}.status-track,.spine-filters,.work-summary,.coverage-spine,.form-grid,.form-grid.three-columns,.limits,.data-coverage-grid,.work-mode{grid-template-columns:1fr}.wide-field{grid-column:auto}.choice-list{grid-template-columns:1fr}.scale-note{display:block}.scale-note strong{display:block;margin-bottom:8px}.form-section{padding:22px 18px}footer{padding:20px;flex-direction:column;gap:8px}}
+@media(max-width:640px){.login-brand{padding:38px 24px}.login-brand h1{font-size:3rem}.login-card{padding:30px 24px}.topbar{height:auto;padding:14px 18px}.topbar-actions{gap:10px;flex-wrap:wrap;justify-content:flex-end}.local-badge{display:none}.dashboard{width:calc(100% - 28px);padding-top:34px}.dashboard-heading{display:block}.dashboard-heading .project-status{margin-top:18px}.freshness{margin-top:22px}.metrics{grid-template-columns:1fr 1fr;gap:10px}.metric-card{padding:18px}.panel-heading{align-items:stretch;flex-direction:column;padding:20px}.search{width:100%}.breakdown{grid-template-columns:1fr}.notice{align-items:flex-start}.status-track,.spine-filters,.explorer-filters,.work-summary,.coverage-spine,.form-grid,.form-grid.three-columns,.limits,.data-coverage-grid,.work-mode,.attribute-grid{grid-template-columns:1fr}.wide-field{grid-column:auto}.choice-list{grid-template-columns:1fr}.scale-note{display:block}.scale-note strong{display:block;margin-bottom:8px}.form-section{padding:22px 18px}.bulk-toolbar{display:grid}.bulk-toolbar label{min-width:0}.pagination{align-items:flex-start;gap:12px;flex-direction:column}footer{padding:20px;flex-direction:column;gap:8px}}
+`;
+
+const ORGANIZATION_RECORDS_SCRIPT = `
+(() => {
+  const form = document.querySelector('[data-record-selection]');
+  if (!(form instanceof HTMLFormElement)) return;
+  const checkboxes = [...form.querySelectorAll('input[name="recordIds"]')]
+    .filter((item) => item instanceof HTMLInputElement);
+  form.querySelector('[data-select-page]')?.addEventListener('click', () => {
+    for (const checkbox of checkboxes) checkbox.checked = true;
+  });
+  form.querySelector('[data-clear-page]')?.addEventListener('click', () => {
+    for (const checkbox of checkboxes) checkbox.checked = false;
+  });
+})();
 `;
 
 const PROJECT_BUILDER_SCRIPT = `
@@ -1501,6 +1891,7 @@ async function main(): Promise<void> {
       governmentLevels: taxonomy.governmentLevels,
       sectors: taxonomy.sectors,
       organizationTypes: taxonomy.organizationTypes,
+      explorerPresets: taxonomy.explorerPresets,
       states: buildOrganizationSpineInventory().states.map((state) => ({
         ...state,
         description: 'State or District of Columbia location filter.',

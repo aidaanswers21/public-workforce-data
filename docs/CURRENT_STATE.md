@@ -9,7 +9,7 @@ production crawl run.
 | Capability                                                                                                  | Status                                |
 | ----------------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | Monorepo, strict TypeScript, lint, typecheck (sources and tests), build, tests                              | Working                               |
-| Schema: 52 tables in the local harness, 14 reference tables, enums, constraints, triggers                   | Working, tested against real Postgres |
+| Schema: 53 tables in the local harness, 14 reference tables, enums, constraints, triggers                   | Working, tested against real Postgres |
 | Migrations up and down, checksum guard                                                                      | Working                               |
 | Controlled reference data seeded from the composed taxonomy                                                 | Working                               |
 | Sector packs: education, state and local government, federal government                                     | Working                               |
@@ -35,9 +35,10 @@ production crawl run.
 | CSV export with 33 fields and independent channel suppression accounting                                    | Working                               |
 | Texas education jurisdiction configuration                                                                  | Written, sources not yet verified     |
 | Discovery worker                                                                                            | Working, not run against real sites   |
-| National bulk-file organizer, durable staging importer and exact-identifier website overlays                | Working locally, no production import |
+| National bulk-file organizer, durable staging importer and exact-identifier website overlays                | Working; first hosted import complete |
 | Missing-website queue and evidence-backed candidate review                                                  | Working locally, no live search run   |
-| Private local/hosted operator console with separate staged and hosted organization-spine coverage           | Working locally, deploy pending       |
+| Private local/hosted operator console with separate staged and hosted organization-spine coverage           | Working and hosted                    |
+| Sector-configured organization explorer with profiles, official aggregates, provenance and bulk selection   | Working                               |
 | Collection projects, active scope controls, approved-batch completion, durable leased scheduler jobs        | Working, no live batch run            |
 | Long-lived approved-job daemon and Render web/worker Blueprint                                              | Working, manual deploys configured    |
 | Cross-worker one-active-job-per-domain guard, page and error batch stops                                    | Working                               |
@@ -47,16 +48,17 @@ production crawl run.
 ## What is deliberately not done
 
 - **No production crawl has run.** Everything is fixture-driven.
-- **No official source is approved for production import.** Census, NCES,
-  AskTED, USA.gov and Federal Register artifacts were downloaded and their
-  schemas inspected on 2026-09-07. The Texas configuration now reflects the
-  observed headers, but its `OfficialSource` rows remain `verified: false` until
-  the owner confirms the exact artifacts for production.
-- **No real source policy has been reviewed or approved yet.** The scheduler
+- **The first organization import is complete, but no production directory
+  crawl has run.** The hosted database contains 231,016 provenance-bearing
+  source records and 52,557 exact-ID canonical organizations. The remaining
+  source records stay in explicit classification, overlay or reconciliation
+  holds rather than receiving guessed values.
+- **Bulk-import approval does not approve live collection.** The scheduler
   loads policy rows from the database and moves unreviewed targets to
   `policy_hold`; discovery independently checks the same policy registry and
-  robots before fetching. The operator workflow exists, but only a person may
-  decide what a real policy says and approve production collection.
+  robots before fetching. Existing source-policy approvals are narrowly scoped
+  to the completed organization import. A person must separately review and
+  approve any live directory batch.
 - **Ten production blockers are open.** C12 to C18, C20, C21 and RLS-1 are
   documented in `BACKLOG.md` with their risk, resolution, required tests and
   what each one blocks. No live source may be fetched and no real outreach
@@ -68,8 +70,8 @@ production crawl run.
 - **Only the education sector has an extension table.** State, local and federal
   packs contribute types, roles, titles and vocabulary, and none of them needs
   attributes the neutral core does not already carry.
-- **National Census collection scopes are configured but not loaded in
-  production.** Eight configurations cover the source-supported county,
+- **National Census collection scopes are configured and their exact-ID rows
+  are loaded.** Eight configurations cover the source-supported county,
   municipal, township and education combinations in the organized release.
   The project builder can narrow a national configuration by state. Federal and
   state general-government rows remain held until their authoritative hierarchy
@@ -113,11 +115,13 @@ The tests that carry the generalization and persistence guarantees:
 
 1. Review the organized national-spine summary and unresolved classifications.
 2. Confirm the exact official artifacts intended for a production import.
-3. Apply migrations 0016 and 0017, then approve and run the controlled
-   production organization import.
-4. Review and approve policies for any source that will receive live requests.
-5. Resolve missing organization websites in bulk-first order.
-6. Run directory discovery over a small approved sample of organization sites.
-7. Read the failure breakdown; decide whether any real platform justifies an
+3. Use the organization explorer to inspect official aggregate values and add
+   source records to draft collection projects.
+4. Resolve authoritative government-level classification for held source rows
+   before treating them as crawl-ready organizations.
+5. Review and approve policies for any source that will receive live requests.
+6. Resolve missing organization websites in bulk-first order.
+7. Run directory discovery over a small separately approved sample of organization sites.
+8. Read the failure breakdown; decide whether any real platform justifies an
    adapter, or whether the sector vocabulary is simply missing wording.
-8. Only then consider widening employee collection.
+9. Only then consider widening employee collection.
