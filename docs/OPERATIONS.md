@@ -116,7 +116,8 @@ API's authentication system. Render terminates HTTPS and the application:
   `ADMIN_PASSWORD_HASH`, `ADMIN_SESSION_SECRET`, and an HTTPS public origin;
 - accepts a scrypt password hash, never a plaintext hosted password;
 - signs an eight-hour `HttpOnly`, `Secure`, `SameSite=Strict` session cookie;
-- checks the browser `Origin` on every state-changing request;
+- validates same-origin request metadata on every state-changing request,
+  including a same-host fallback for browsers that omit `Origin`;
 - throttles repeated failed logins and sends HSTS and restrictive browser
   security headers; and
 - exposes only database readiness at `/health`, with no records or credentials.

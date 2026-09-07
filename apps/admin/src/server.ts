@@ -125,8 +125,16 @@ export function createAdminServer(options: AdminServerOptions): Server {
       if (
         request.method === 'POST' &&
         options.publicOrigin !== undefined &&
-        request.headers.origin !== options.publicOrigin
+        !isTrustedMutationRequest(request, options.publicOrigin)
       ) {
+        console.error(
+          JSON.stringify({
+            event: 'admin_origin_rejected',
+            origin: request.headers.origin ?? null,
+            host: request.headers['x-forwarded-host'] ?? request.headers.host ?? null,
+            fetchSite: request.headers['sec-fetch-site'] ?? null,
+          }),
+        );
         sendHtml(
           response,
           403,
@@ -612,6 +620,20 @@ function clientLoginKey(request: IncomingMessage): string {
     ? (forwarded[0] ?? request.socket.remoteAddress ?? 'unknown')
     : (forwarded?.split(',')[0]?.trim() ?? request.socket.remoteAddress ?? 'unknown');
   return createHash('sha256').update(client).digest('hex');
+}
+
+function isTrustedMutationRequest(request: IncomingMessage, publicOrigin: string): boolean {
+  const expected = new URL(publicOrigin);
+  const origin = request.headers.origin;
+  if (origin === expected.origin) return true;
+  if (origin !== undefined && origin !== 'null') return false;
+
+  const forwardedHost = request.headers['x-forwarded-host'];
+  const host = (
+    Array.isArray(forwardedHost) ? forwardedHost[0] : forwardedHost?.split(',')[0]
+  )?.trim();
+  const requestHost = host ?? request.headers.host;
+  return requestHost === expected.host;
 }
 
 async function readBody(request: IncomingMessage): Promise<string> {
