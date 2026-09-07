@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { resolve } from 'node:path';
@@ -22,7 +22,12 @@ import { buildJurisdictionRegistry, buildTaxonomy } from '@public-workforce/craw
 import { AdminReports, type DataQualitySample, type RunSummaryRow } from './reports.js';
 
 const COOKIE_NAME = 'public_workforce_admin';
+const HOSTED_COOKIE_NAME = '__Host-public_workforce_admin';
 const SESSION_LIFETIME_MS = 8 * 60 * 60 * 1000;
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_FAILURE_LIMIT = 5;
+const SCRYPT_KEY_LENGTH = 32;
+const SCRYPT_OPTIONS = { N: 32_768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 } as const;
 const DEFAULT_DATABASE_PATH = 'storage/local-admin-db';
 const EMPTY_PROJECT_BUILDER_CATALOG: ProjectBuilderCatalog = {
   governmentLevels: [],
@@ -33,8 +38,11 @@ const EMPTY_PROJECT_BUILDER_CATALOG: ProjectBuilderCatalog = {
 export interface AdminServerOptions {
   database: SqlClient;
   email: string;
-  password: string;
+  password?: string;
+  passwordHash?: string;
   sessionSecret: string;
+  hosted?: boolean;
+  publicOrigin?: string;
   now?: () => Date;
   projectTemplates?: readonly CollectionProjectTemplate[];
   projectBuilderCatalog?: ProjectBuilderCatalog;
@@ -90,26 +98,62 @@ export function createAdminServer(options: AdminServerOptions): Server {
   const projectTemplates = options.projectTemplates ?? [];
   const projectBuilderCatalog = options.projectBuilderCatalog ?? EMPTY_PROJECT_BUILDER_CATALOG;
   const now = options.now ?? (() => new Date());
+  const hosted = options.hosted ?? false;
+  if (
+    hosted &&
+    (options.password !== undefined ||
+      options.passwordHash === undefined ||
+      options.publicOrigin === undefined ||
+      !options.publicOrigin.startsWith('https://') ||
+      options.sessionSecret.length < 32)
+  ) {
+    throw new Error(
+      'Hosted admin requires a password hash, HTTPS public origin, and a strong session secret.',
+    );
+  }
+  const cookieName = hosted ? HOSTED_COOKIE_NAME : COOKIE_NAME;
+  const failedLogins = new Map<string, { failures: number; blockedUntil: number }>();
 
   const handleRequest = async (
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> => {
-    setSecurityHeaders(response);
+    setSecurityHeaders(response, hosted);
     try {
       const url = new URL(request.url ?? '/', 'http://127.0.0.1');
 
+      if (
+        request.method === 'POST' &&
+        options.publicOrigin !== undefined &&
+        request.headers.origin !== options.publicOrigin
+      ) {
+        sendHtml(
+          response,
+          403,
+          renderMessage('Request blocked', 'Use the hosted console directly.'),
+        );
+        return;
+      }
+
       if (request.method === 'GET' && url.pathname === '/health') {
-        sendJson(response, 200, { status: 'ok', database: 'local' });
+        try {
+          await options.database.query('select 1 as ok');
+          sendJson(response, 200, { status: 'ok', database: 'ready' });
+        } catch (error) {
+          console.error(
+            JSON.stringify({ event: 'admin_health_failed', message: errorMessage(error) }),
+          );
+          sendJson(response, 503, { status: 'unavailable', database: 'unavailable' });
+        }
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/login') {
-        if (isAuthenticated(request, options.sessionSecret, now())) {
+        if (isAuthenticated(request, cookieName, options.sessionSecret, now())) {
           redirect(response, '/');
           return;
         }
-        sendHtml(response, 200, renderLogin());
+        sendHtml(response, 200, renderLogin(hosted));
         return;
       }
 
@@ -117,18 +161,40 @@ export function createAdminServer(options: AdminServerOptions): Server {
         const form = new URLSearchParams(await readBody(request));
         const email = form.get('email') ?? '';
         const password = form.get('password') ?? '';
-        if (!secureEqual(email, options.email) || !secureEqual(password, options.password)) {
-          sendHtml(response, 401, renderLogin('That email or password did not match.'));
+        const loginKey = clientLoginKey(request);
+        const loginState = failedLogins.get(loginKey);
+        if (loginState !== undefined && loginState.blockedUntil > now().getTime()) {
+          response.setHeader(
+            'Retry-After',
+            String(Math.ceil((loginState.blockedUntil - now().getTime()) / 1000)),
+          );
+          sendHtml(response, 429, renderLogin(hosted, 'Too many attempts. Try again later.'));
           return;
         }
+        const emailMatches = secureEqual(email, options.email);
+        const passwordMatches = verifyAdminPassword(
+          password,
+          options.password,
+          options.passwordHash,
+        );
+        if (!emailMatches || !passwordMatches) {
+          const failures = (loginState?.failures ?? 0) + 1;
+          failedLogins.set(loginKey, {
+            failures,
+            blockedUntil: failures >= LOGIN_FAILURE_LIMIT ? now().getTime() + LOGIN_WINDOW_MS : 0,
+          });
+          sendHtml(response, 401, renderLogin(hosted, 'That email or password did not match.'));
+          return;
+        }
+        failedLogins.delete(loginKey);
 
         const expiresAt = now().getTime() + SESSION_LIFETIME_MS;
         const token = createSessionToken(email, expiresAt, options.sessionSecret);
         response.setHeader(
           'Set-Cookie',
-          `${COOKIE_NAME}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(
+          `${cookieName}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(
             SESSION_LIFETIME_MS / 1000,
-          )}`,
+          )}${hosted ? '; Secure' : ''}`,
         );
         redirect(response, '/');
         return;
@@ -137,13 +203,18 @@ export function createAdminServer(options: AdminServerOptions): Server {
       if (request.method === 'POST' && url.pathname === '/logout') {
         response.setHeader(
           'Set-Cookie',
-          `${COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`,
+          `${cookieName}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${hosted ? '; Secure' : ''}`,
         );
         redirect(response, '/login');
         return;
       }
 
-      const authenticatedEmail = authenticatedUser(request, options.sessionSecret, now());
+      const authenticatedEmail = authenticatedUser(
+        request,
+        cookieName,
+        options.sessionSecret,
+        now(),
+      );
       if (authenticatedEmail === null) {
         redirect(response, '/login');
         return;
@@ -161,13 +232,17 @@ export function createAdminServer(options: AdminServerOptions): Server {
         sendHtml(
           response,
           200,
-          renderDashboard({ coverage, records: visibleRecords, runs, organizations }, query),
+          renderDashboard(
+            { coverage, records: visibleRecords, runs, organizations },
+            query,
+            hosted,
+          ),
         );
         return;
       }
 
       if (request.method === 'GET' && url.pathname === '/projects') {
-        sendHtml(response, 200, renderProjects(await projects.list(), projectTemplates));
+        sendHtml(response, 200, renderProjects(await projects.list(), projectTemplates, hosted));
         return;
       }
 
@@ -175,7 +250,11 @@ export function createAdminServer(options: AdminServerOptions): Server {
         sendHtml(
           response,
           200,
-          renderSourcePolicies(await sourcePolicies.list(), url.searchParams.get('message') ?? ''),
+          renderSourcePolicies(
+            await sourcePolicies.list(),
+            url.searchParams.get('message') ?? '',
+            hosted,
+          ),
         );
         return;
       }
@@ -223,7 +302,11 @@ export function createAdminServer(options: AdminServerOptions): Server {
       }
 
       if (request.method === 'GET' && url.pathname === '/projects/new') {
-        sendHtml(response, 200, renderNewProject(projectTemplates, projectBuilderCatalog));
+        sendHtml(
+          response,
+          200,
+          renderNewProject(projectTemplates, projectBuilderCatalog, '', hosted),
+        );
         return;
       }
 
@@ -240,7 +323,12 @@ export function createAdminServer(options: AdminServerOptions): Server {
           sendHtml(
             response,
             400,
-            renderNewProject(projectTemplates, projectBuilderCatalog, 'Choose a configured scope.'),
+            renderNewProject(
+              projectTemplates,
+              projectBuilderCatalog,
+              'Choose a configured scope.',
+              hosted,
+            ),
           );
           return;
         }
@@ -307,7 +395,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
           sendHtml(
             response,
             400,
-            renderNewProject(projectTemplates, projectBuilderCatalog, errorMessage(error)),
+            renderNewProject(projectTemplates, projectBuilderCatalog, errorMessage(error), hosted),
           );
         }
         return;
@@ -336,6 +424,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
             await projects.listBatches(projectId),
             template,
             url.searchParams.get('message') ?? '',
+            hosted,
           ),
         );
         return;
@@ -396,7 +485,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
         response,
         500,
         renderMessage(
-          'The local console hit an error',
+          'The operator console hit an error',
           'The database is still safe. Try refreshing.',
         ),
       );
@@ -422,12 +511,17 @@ function filterRecords(records: DataQualitySample[], query: string): DataQuality
   );
 }
 
-function authenticatedUser(request: IncomingMessage, secret: string, now: Date): string | null {
+function authenticatedUser(
+  request: IncomingMessage,
+  cookieName: string,
+  secret: string,
+  now: Date,
+): string | null {
   const cookieHeader = request.headers.cookie ?? '';
   const token = cookieHeader
     .split(';')
     .map((part) => part.trim().split('='))
-    .find(([name]) => name === COOKIE_NAME)?.[1];
+    .find(([name]) => name === cookieName)?.[1];
   if (token === undefined) return null;
 
   const separator = token.lastIndexOf('.');
@@ -452,8 +546,13 @@ function authenticatedUser(request: IncomingMessage, secret: string, now: Date):
   }
 }
 
-function isAuthenticated(request: IncomingMessage, secret: string, now: Date): boolean {
-  return authenticatedUser(request, secret, now) !== null;
+function isAuthenticated(
+  request: IncomingMessage,
+  cookieName: string,
+  secret: string,
+  now: Date,
+): boolean {
+  return authenticatedUser(request, cookieName, secret, now) !== null;
 }
 
 function createSessionToken(email: string, expiresAt: number, secret: string): string {
@@ -471,6 +570,50 @@ function secureEqual(left: string, right: string): boolean {
   return timingSafeEqual(leftDigest, rightDigest);
 }
 
+export function hashAdminPassword(password: string, salt: string = randomUUID()): string {
+  const hash = scryptSync(password, salt, SCRYPT_KEY_LENGTH, SCRYPT_OPTIONS);
+  return `scrypt$32768$8$1$${Buffer.from(salt, 'utf8').toString('base64url')}$${hash.toString('base64url')}`;
+}
+
+function verifyAdminPassword(
+  password: string,
+  plainPassword: string | undefined,
+  encodedHash: string | undefined,
+): boolean {
+  if (encodedHash === undefined) {
+    return plainPassword !== undefined && secureEqual(password, plainPassword);
+  }
+  const [algorithm, n, r, p, saltValue, hashValue, ...rest] = encodedHash.split('$');
+  if (
+    algorithm !== 'scrypt' ||
+    n !== '32768' ||
+    r !== '8' ||
+    p !== '1' ||
+    saltValue === undefined ||
+    hashValue === undefined ||
+    rest.length > 0
+  ) {
+    return false;
+  }
+  try {
+    const salt = Buffer.from(saltValue, 'base64url').toString('utf8');
+    const expected = Buffer.from(hashValue, 'base64url');
+    if (expected.length !== SCRYPT_KEY_LENGTH) return false;
+    const actual = scryptSync(password, salt, expected.length, SCRYPT_OPTIONS);
+    return timingSafeEqual(actual, expected);
+  } catch {
+    return false;
+  }
+}
+
+function clientLoginKey(request: IncomingMessage): string {
+  const forwarded = request.headers['x-forwarded-for'];
+  const client = Array.isArray(forwarded)
+    ? (forwarded[0] ?? request.socket.remoteAddress ?? 'unknown')
+    : (forwarded?.split(',')[0]?.trim() ?? request.socket.remoteAddress ?? 'unknown');
+  return createHash('sha256').update(client).digest('hex');
+}
+
 async function readBody(request: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   let length = 0;
@@ -483,7 +626,7 @@ async function readBody(request: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-function setSecurityHeaders(response: ServerResponse): void {
+function setSecurityHeaders(response: ServerResponse, hosted: boolean): void {
   response.setHeader(
     'Content-Security-Policy',
     "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
@@ -492,6 +635,8 @@ function setSecurityHeaders(response: ServerResponse): void {
   response.setHeader('X-Frame-Options', 'DENY');
   response.setHeader('Referrer-Policy', 'no-referrer');
   response.setHeader('Cache-Control', 'no-store');
+  if (hosted)
+    response.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
 }
 
 function redirect(response: ServerResponse, location: string): void {
@@ -518,7 +663,7 @@ function sendJavascript(response: ServerResponse, body: string): void {
   response.end(body);
 }
 
-function renderLogin(error = ''): string {
+function renderLogin(hosted: boolean, error = ''): string {
   return page(
     'Sign in',
     `<main class="login-shell">
@@ -526,17 +671,17 @@ function renderLogin(error = ''): string {
         <div class="brand-mark" aria-hidden="true">PW</div>
         <p class="eyebrow">Public Workforce Data</p>
         <h1 id="brand-title">Evidence you can inspect.</h1>
-        <p class="brand-copy">Review collection runs, coverage, provenance, and data quality from a private console on this Mac.</p>
+        <p class="brand-copy">Review collection runs, coverage, provenance, and data quality from a private ${hosted ? 'hosted' : 'local'} console.</p>
         <div class="boundary-note">
           <span class="status-dot" aria-hidden="true"></span>
-          <span>Local fixture data only. No live collection.</span>
+          <span>Public professional data only. Collection still requires an approved batch.</span>
         </div>
       </section>
       <section class="login-panel" aria-labelledby="login-title">
         <div class="login-card">
           <p class="eyebrow">Operator access</p>
           <h2 id="login-title">Welcome back</h2>
-          <p class="muted">Use the local credentials created for this workspace.</p>
+          <p class="muted">Use the operator credentials configured for this ${hosted ? 'service' : 'workspace'}.</p>
           ${error.length > 0 ? `<div class="error" role="alert">${escapeHtml(error)}</div>` : ''}
           <form method="post" action="/login">
             <label for="email">Email</label>
@@ -545,7 +690,7 @@ function renderLogin(error = ''): string {
             <input id="password" name="password" type="password" autocomplete="current-password" required>
             <button type="submit">Sign in to console</button>
           </form>
-          <p class="fine-print">This console listens only on your computer. The credentials are not valid for any cloud service.</p>
+          <p class="fine-print">${hosted ? 'This session is protected by HTTPS and a secure, signed cookie.' : 'This console listens only on your computer. The credentials are not valid for any cloud service.'}</p>
         </div>
       </section>
     </main>`,
@@ -553,7 +698,7 @@ function renderLogin(error = ''): string {
   );
 }
 
-function renderDashboard(data: DashboardData, query: string): string {
+function renderDashboard(data: DashboardData, query: string, hosted: boolean): string {
   const latestRun = data.runs[0];
   const lastCrawl = data.coverage.lastCrawlAt;
   const records = data.records
@@ -591,15 +736,15 @@ function renderDashboard(data: DashboardData, query: string): string {
     `<div class="app-shell">
       <header class="topbar">
         <a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a>
-        <div class="topbar-actions"><a class="nav-link" href="/projects">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>Local workspace</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div>
+        <div class="topbar-actions"><a class="nav-link" href="/projects">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div>
       </header>
       <main class="dashboard">
         <section class="dashboard-heading">
-          <div><p class="eyebrow">Collection overview</p><h1>Good ${timeOfDay()}, operator.</h1><p class="muted">A clear view of what the fixture pipeline collected and preserved.</p></div>
-          <div class="freshness"><span>Last fixture run</span><strong>${lastCrawl === null ? 'Not run yet' : formatDate(lastCrawl)}</strong></div>
+          <div><p class="eyebrow">Collection overview</p><h1>Good ${timeOfDay()}, operator.</h1><p class="muted">A clear view of what the governed pipeline collected and preserved.</p></div>
+          <div class="freshness"><span>Last collection run</span><strong>${lastCrawl === null ? 'Not run yet' : formatDate(lastCrawl)}</strong></div>
         </section>
 
-        <section class="notice"><span class="shield" aria-hidden="true">✓</span><div><strong>Safe test environment</strong><p>All records below came from saved fixtures. No live source was contacted.</p></div></section>
+        <section class="notice"><span class="shield" aria-hidden="true">✓</span><div><strong>Governed collection</strong><p>No source is contacted unless a person approves a finite batch and the source policy allows it.</p></div></section>
 
         <section class="metrics" aria-label="Coverage summary">
           ${metric('People', data.coverage.people, 'Public role records')}
@@ -609,9 +754,9 @@ function renderDashboard(data: DashboardData, query: string): string {
         </section>
 
         <div class="content-grid">
-          <section class="panel records-panel">
+        <section class="panel records-panel">
             <div class="panel-heading"><div><p class="eyebrow">Evidence sample</p><h2>Collected records</h2></div><form class="search" method="get" action="/"><label class="sr-only" for="q">Search records</label><input id="q" name="q" value="${escapeAttribute(query)}" placeholder="Search name, role, organization"><button type="submit">Search</button></form></div>
-            <div class="table-scroll"><table><thead><tr><th>Person and role</th><th>Organization</th><th>Level</th><th>Email evidence</th><th>Confidence</th></tr></thead><tbody>${records.length > 0 ? records : `<tr><td class="empty" colspan="5">${query.length > 0 ? 'No records match this search.' : 'No records yet. Run the fixture setup first.'}</td></tr>`}</tbody></table></div>
+            <div class="table-scroll"><table><thead><tr><th>Person and role</th><th>Organization</th><th>Level</th><th>Email evidence</th><th>Confidence</th></tr></thead><tbody>${records.length > 0 ? records : `<tr><td class="empty" colspan="5">${query.length > 0 ? 'No records match this search.' : 'No records have been collected yet.'}</td></tr>`}</tbody></table></div>
             <p class="table-note">Names and titles stay exactly as published. Normalized values do not replace source evidence.</p>
           </section>
 
@@ -626,7 +771,7 @@ function renderDashboard(data: DashboardData, query: string): string {
           <div class="table-scroll"><table><thead><tr><th>Status</th><th>Mode</th><th>Started</th><th>Pages</th><th>Records</th><th>Errors</th></tr></thead><tbody>${runs.length > 0 ? runs : '<tr><td class="empty" colspan="6">No collection runs yet.</td></tr>'}</tbody></table></div>
         </section>
       </main>
-      <footer><span>Local review surface</span><span>Public professional data only</span></footer>
+      <footer><span>${hosted ? 'Hosted' : 'Local'} review surface</span><span>Public professional data only</span></footer>
     </div>`,
     'dashboard-page',
   );
@@ -635,6 +780,7 @@ function renderDashboard(data: DashboardData, query: string): string {
 function renderProjects(
   projects: readonly CollectionProjectSummary[],
   templates: readonly CollectionProjectTemplate[],
+  hosted: boolean,
 ): string {
   const rows = projects
     .map(
@@ -651,7 +797,7 @@ function renderProjects(
     .join('');
   return page(
     'Collection projects',
-    `${appHeader('/projects')}
+    `${appHeader('/projects', hosted)}
     <main class="dashboard">
       <section class="dashboard-heading">
         <div><p class="eyebrow">Collection control plane</p><h1>Collection projects</h1><p class="muted">Choose a governed scope, prepare targets, and release only finite approved batches.</p></div>
@@ -663,12 +809,16 @@ function renderProjects(
         <div class="table-scroll"><table><thead><tr><th>Scope</th><th>Status</th><th>Organizations</th><th>Directories ready</th><th>Records</th><th>Open jobs</th><th>Holds / failures</th></tr></thead><tbody>${rows.length > 0 ? rows : '<tr><td class="empty" colspan="7">No collection projects yet. Create one from a reviewed jurisdiction configuration.</td></tr>'}</tbody></table></div>
       </section>
       ${templates.length === 0 ? '<section class="warning-card"><strong>No jurisdiction configurations are registered.</strong><p>Add a configuration before creating a collection project.</p></section>' : ''}
-    </main>${appFooter()}`,
+    </main>${appFooter(hosted)}`,
     'dashboard-page',
   );
 }
 
-function renderSourcePolicies(policies: readonly SourcePolicyRecord[], message: string): string {
+function renderSourcePolicies(
+  policies: readonly SourcePolicyRecord[],
+  message: string,
+  hosted: boolean,
+): string {
   const rows = policies
     .map((policy) => {
       const approved = policy.productionApprovedAt !== null;
@@ -684,7 +834,7 @@ function renderSourcePolicies(policies: readonly SourcePolicyRecord[], message: 
     .join('');
   return page(
     'Source policies',
-    `${appHeader('/projects')}
+    `${appHeader('/projects', hosted)}
     <main class="dashboard">
       <section class="dashboard-heading"><div><p class="eyebrow">Collection gate</p><h1>Source policies</h1><p class="muted">Record what a person actually reviewed. Prohibited sources can never be approved.</p></div></section>
       ${message.length === 0 ? '' : `<div class="flash">${escapeHtml(message)}</div>`}
@@ -708,7 +858,7 @@ function renderSourcePolicies(policies: readonly SourcePolicyRecord[], message: 
         </form>
       </section>
       <section class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Audit trail</p><h2>Recorded decisions</h2></div><span class="summary-chip">${policies.length}</span></div><div class="table-scroll"><table><thead><tr><th>Source</th><th>Collection</th><th>Automation</th><th>Reviewed</th><th>Production approval</th></tr></thead><tbody>${rows.length > 0 ? rows : '<tr><td class="empty" colspan="5">No source policies have been reviewed.</td></tr>'}</tbody></table></div></section>
-    </main>${appFooter()}`,
+    </main>${appFooter(hosted)}`,
     'dashboard-page',
   );
 }
@@ -721,6 +871,7 @@ function renderNewProject(
   templates: readonly CollectionProjectTemplate[],
   catalog: ProjectBuilderCatalog,
   error = '',
+  hosted = false,
 ): string {
   const options = templates
     .map(
@@ -761,7 +912,7 @@ function renderNewProject(
     .join('');
   return page(
     'Create collection project',
-    `${appHeader('/projects')}
+    `${appHeader('/projects', hosted)}
     <main class="dashboard project-builder-dashboard">
       <section class="dashboard-heading"><div><p class="eyebrow">National collection planner</p><h1>Build a collection project</h1><p class="muted">Choose from the shared jurisdiction and taxonomy spine. Creating a project prepares scope only; it never contacts a website.</p></div></section>
       ${error.length > 0 ? `<div class="error" role="alert">${escapeHtml(error)}</div>` : ''}
@@ -775,7 +926,7 @@ function renderNewProject(
         <div class="form-section data-coverage"><p class="eyebrow">Organization profile</p><h2>What the spine can retain</h2><div class="data-coverage-grid"><div><strong>Identity and location</strong><span>Official name, external IDs, jurisdiction, website, office address, city, county, and state.</span></div><div><strong>Sector aggregates</strong><span>Enrollment, service span, organization type, and published status. Never protected individual information.</span></div><div><strong>Workforce progress</strong><span>Directories found, public staff records observed, roles collected, coverage percentage, and remaining organizations.</span></div><div><strong>Estimates kept honest</strong><span>Derived workforce estimates must carry their method, date, confidence, and source separately from observed counts.</span></div></div></div>
         <div class="form-actions"><a class="secondary-link" href="/projects">Cancel</a><button type="submit" data-create-project ${templates.length === 0 ? 'disabled' : ''}>Create draft project</button></div>
       </form>
-    </main>${appFooter()}<script src="/assets/project-builder.js" defer></script>`,
+    </main>${appFooter(hosted)}<script src="/assets/project-builder.js" defer></script>`,
     'dashboard-page',
   );
 }
@@ -785,6 +936,7 @@ function renderProjectDetail(
   batches: readonly CollectionBatchSummary[],
   template: CollectionProjectTemplate | undefined,
   message: string,
+  hosted: boolean,
 ): string {
   const sourceRows = (template?.officialSources ?? [])
     .map(
@@ -801,7 +953,7 @@ function renderProjectDetail(
   const canRelease = project.status !== 'completed' && project.status !== 'cancelled';
   return page(
     project.name,
-    `${appHeader('/projects')}
+    `${appHeader('/projects', hosted)}
     <main class="dashboard">
       <section class="dashboard-heading"><div><p class="eyebrow">${escapeHtml(project.stateCode ?? 'National')} · ${escapeHtml(project.sectorCodes.map(label).join(', '))}</p><h1>${escapeHtml(project.name)}</h1><p class="muted">${project.estimatedOrganizationCount === null ? 'No published nationwide estimate has been recorded. The selected count below is actual database membership.' : `${project.estimatedOrganizationCount.toLocaleString()} organizations estimated from a published source.`}</p></div><span class="project-status large ${escapeHtml(project.status)}">${escapeHtml(label(project.status))}</span></section>
       ${message.length > 0 ? `<div class="flash" role="status">${escapeHtml(message)}</div>` : ''}
@@ -818,17 +970,17 @@ function renderProjectDetail(
       <section class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Readiness</p><h2>Official sources</h2></div><span class="summary-chip">${(template?.officialSources ?? []).filter((source) => source.verified).length} verified</span></div><div class="table-scroll"><table><thead><tr><th>Source</th><th>Verification</th><th>What remains</th></tr></thead><tbody>${sourceRows.length > 0 ? sourceRows : '<tr><td class="empty" colspan="3">The configuration is not available in this running console.</td></tr>'}</tbody></table></div></section>
       <section class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Durable queue</p><h2>Approved batches</h2></div></div><div class="table-scroll"><table><thead><tr><th>Batch</th><th>Stage</th><th>Status</th><th>Jobs</th><th>Pages</th><th>Issues</th><th>Approval</th></tr></thead><tbody>${batchRows.length > 0 ? batchRows : '<tr><td class="empty" colspan="7">No work has been released. Preparation alone never starts collection.</td></tr>'}</tbody></table></div></section>
       <section class="project-controls"><form method="post" action="/projects/${escapeAttribute(project.id)}/status"><input type="hidden" name="status" value="${project.status === 'paused' ? 'active' : 'paused'}"><button class="secondary-button" type="submit">${project.status === 'paused' ? 'Resume approved work' : 'Pause project'}</button></form><form method="post" action="/projects/${escapeAttribute(project.id)}/status"><input type="hidden" name="status" value="completed"><button class="quiet-button" type="submit">Mark complete</button></form></section>
-    </main>${appFooter()}`,
+    </main>${appFooter(hosted)}`,
     'dashboard-page',
   );
 }
 
-function appHeader(backTo: string): string {
-  return `<header class="topbar"><a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a><div class="topbar-actions"><a class="nav-link" href="${escapeAttribute(backTo)}">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>Local workspace</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div></header>`;
+function appHeader(backTo: string, hosted: boolean): string {
+  return `<header class="topbar"><a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a><div class="topbar-actions"><a class="nav-link" href="${escapeAttribute(backTo)}">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div></header>`;
 }
 
-function appFooter(): string {
-  return '<footer><span>Local review surface</span><span>Public professional data only</span></footer>';
+function appFooter(hosted: boolean): string {
+  return `<footer><span>${hosted ? 'Hosted' : 'Local'} review surface</span><span>Public professional data only</span></footer>`;
 }
 
 function metric(title: string, value: number, detail: string): string {
@@ -1032,14 +1184,35 @@ const PROJECT_BUILDER_SCRIPT = `
 
 async function main(): Promise<void> {
   if (existsSync('.env.local')) process.loadEnvFile('.env.local');
-  const email = process.env['LOCAL_ADMIN_EMAIL'];
-  const password = process.env['LOCAL_ADMIN_PASSWORD'];
-  const sessionSecret = process.env['LOCAL_ADMIN_SESSION_SECRET'];
-  if (email === undefined || password === undefined || sessionSecret === undefined) {
+  const hosted = process.env['RENDER'] === 'true';
+  const email = hosted ? process.env['ADMIN_EMAIL'] : process.env['LOCAL_ADMIN_EMAIL'];
+  const password = hosted ? undefined : process.env['LOCAL_ADMIN_PASSWORD'];
+  const passwordHash = hosted ? process.env['ADMIN_PASSWORD_HASH'] : undefined;
+  const sessionSecret = hosted
+    ? process.env['ADMIN_SESSION_SECRET']
+    : process.env['LOCAL_ADMIN_SESSION_SECRET'];
+  if (email === undefined || sessionSecret === undefined) {
+    throw new Error('Admin email or session secret is missing.');
+  }
+  if (hosted && passwordHash === undefined) {
+    throw new Error('Hosted admin password hash is missing.');
+  }
+  if (!hosted && password === undefined) {
     throw new Error('Local admin credentials are missing. Run the local setup instructions.');
+  }
+  if (hosted && sessionSecret.length < 32) {
+    throw new Error('Hosted admin session secret must contain at least 32 characters.');
   }
 
   const databaseUrl = process.env['DATABASE_URL'];
+  if (hosted && (databaseUrl === undefined || databaseUrl.trim().length === 0)) {
+    throw new Error('Hosted admin requires DATABASE_URL and never uses the embedded database.');
+  }
+  const publicOrigin = hosted
+    ? normalizeHostedOrigin(
+        process.env['ADMIN_PUBLIC_ORIGIN'] ?? process.env['RENDER_EXTERNAL_URL'],
+      )
+    : undefined;
   const databasePath = resolve(process.env['LOCAL_DATABASE_PATH'] ?? DEFAULT_DATABASE_PATH);
   const database =
     databaseUrl === undefined || databaseUrl.trim().length === 0
@@ -1064,7 +1237,10 @@ async function main(): Promise<void> {
     database,
     email,
     password,
+    passwordHash,
     sessionSecret,
+    hosted,
+    publicOrigin,
     projectTemplates,
     projectBuilderCatalog: {
       governmentLevels: taxonomy.governmentLevels,
@@ -1073,17 +1249,18 @@ async function main(): Promise<void> {
     },
   });
   const port = numberFromEnvironment(
-    process.env['ADMIN_PORT'] ?? process.env['CONDUCTOR_PORT'],
+    process.env['PORT'] ?? process.env['ADMIN_PORT'] ?? process.env['CONDUCTOR_PORT'],
     4173,
   );
-  const logger = createLogger({ name: 'local-admin' });
-  server.listen(port, '127.0.0.1', () => {
+  const host = process.env['ADMIN_HOST'] ?? (hosted ? '0.0.0.0' : '127.0.0.1');
+  const logger = createLogger({ name: hosted ? 'hosted-admin' : 'local-admin' });
+  server.listen(port, host, () => {
     logger.info(
       {
-        url: `http://127.0.0.1:${port}`,
+        url: publicOrigin ?? `http://${host}:${port}`,
         database: databaseUrl === undefined ? databasePath : 'remote PostgreSQL',
       },
-      'local operator console ready',
+      'operator console ready',
     );
   });
 
@@ -1094,6 +1271,13 @@ async function main(): Promise<void> {
   };
   process.once('SIGINT', close);
   process.once('SIGTERM', close);
+}
+
+function normalizeHostedOrigin(value: string | undefined): string {
+  if (value === undefined) throw new Error('Hosted admin public origin is missing.');
+  const origin = new URL(value).origin;
+  if (!origin.startsWith('https://')) throw new Error('Hosted admin public origin must use HTTPS.');
+  return origin;
 }
 
 function numberFromEnvironment(value: string | undefined, fallback: number): number {

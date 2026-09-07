@@ -2,7 +2,7 @@ import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { TestDatabase } from '@public-workforce/database';
-import { createAdminServer } from './server.js';
+import { createAdminServer, hashAdminPassword, type AdminServerOptions } from './server.js';
 
 const servers: Server[] = [];
 const databases: TestDatabase[] = [];
@@ -105,7 +105,7 @@ describe('local admin server', () => {
     const html = await dashboard.text();
     expect(dashboard.status).toBe(200);
     expect(html).toContain('Operator console');
-    expect(html).toContain('No records yet');
+    expect(html).toContain('No records have been collected yet');
     expect(dashboard.headers.get('content-security-policy')).toContain("default-src 'none'");
   });
 
@@ -232,9 +232,89 @@ describe('local admin server', () => {
     expect(html).toContain('operator@example.test');
     expect(html).toContain('Source policies');
   });
+
+  it('uses a hashed password and secure cookie in hosted mode', async () => {
+    const publicOrigin = 'https://console.example.test';
+    const { origin } = await start({
+      password: undefined,
+      passwordHash: hashAdminPassword('hosted-password', 'fixed-test-salt'),
+      hosted: true,
+      publicOrigin,
+    });
+    const response = await fetch(`${origin}/login`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: {
+        origin: publicOrigin,
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        email: 'operator@example.test',
+        password: 'hosted-password',
+      }),
+    });
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('set-cookie')).toContain('__Host-public_workforce_admin=');
+    expect(response.headers.get('set-cookie')).toContain('Secure');
+    expect(response.headers.get('strict-transport-security')).toContain('max-age=31536000');
+  });
+
+  it('blocks cross-origin hosted form submissions', async () => {
+    const { origin } = await start({
+      hosted: true,
+      publicOrigin: 'https://console.example.test',
+      password: undefined,
+      passwordHash: hashAdminPassword('hosted-password', 'cross-origin-test-salt'),
+    });
+    const response = await fetch(`${origin}/login`, {
+      method: 'POST',
+      headers: {
+        origin: 'https://attacker.example.test',
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+      body: new URLSearchParams({
+        email: 'operator@example.test',
+        password: 'local-password',
+      }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.text()).toContain('Request blocked');
+  });
+
+  it('throttles repeated login failures', async () => {
+    const { origin } = await start();
+    const attempt = () =>
+      fetch(`${origin}/login`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          email: 'operator@example.test',
+          password: 'wrong',
+        }),
+      });
+
+    for (let count = 0; count < 5; count += 1) expect((await attempt()).status).toBe(401);
+    const blocked = await attempt();
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('retry-after')).toBe('900');
+  });
+
+  it('reports database readiness through the health endpoint', async () => {
+    const { origin } = await start();
+    const response = await fetch(`${origin}/health`);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: 'ok', database: 'ready' });
+  });
 });
 
-async function start(): Promise<{ origin: string }> {
+async function start(
+  overrides: Partial<
+    Pick<AdminServerOptions, 'password' | 'passwordHash' | 'hosted' | 'publicOrigin'>
+  > = {},
+): Promise<{ origin: string }> {
   const database = await TestDatabase.create();
   databases.push(database);
   const server = createAdminServer({
@@ -244,6 +324,7 @@ async function start(): Promise<{ origin: string }> {
     sessionSecret: 'test-secret-with-enough-entropy-for-the-test-suite',
     projectTemplates: [template],
     projectBuilderCatalog,
+    ...overrides,
   });
   servers.push(server);
   await new Promise<void>((resolve, reject) => {

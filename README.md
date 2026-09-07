@@ -71,17 +71,17 @@ operator-set job count or continue until one specifically approved batch is
 empty. Continue-until-complete does not cross into another batch or remove the
 safety circuit breakers.
 
-The schema and migrations target PostgreSQL 15+ and Supabase, but the local
-browser console uses the gitignored embedded database in `storage/`. A remote
-Supabase project is not connected merely because the repository contains a
-`supabase/` migration directory. A real connection exists only when a remote
-`DATABASE_URL` is deliberately configured and its migrations are applied with
-separate human approval.
+The schema and migrations target PostgreSQL 15+ and Supabase. The browser
+console can use the gitignored embedded database in `storage/` for local fixture
+work, or run as a private hosted service with a deliberately configured remote
+`DATABASE_URL`. A remote Supabase project is not connected merely because the
+repository contains a `supabase/` migration directory. Remote credentials and
+migrations always require separate human approval.
 
 ## Layout
 
 ```
-apps/        local operator console, admin inspection CLI, read-only API
+apps/        local or hosted operator console, admin inspection CLI, read-only API
 services/    crawler, discovery and validation workers
 packages/    shared types, taxonomy, core domain logic, extraction, database,
              directory adapters, sector packs, jurisdiction configuration,
