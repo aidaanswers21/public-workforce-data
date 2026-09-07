@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { Readable } from 'node:stream';
 import { parseDelimitedObjects } from '@public-workforce/jurisdiction-kit';
 import {
+  nationalOrganizationSpineInventory,
+  nationalSpineJurisdictions,
   ncesLeaRecord,
   ncesSchoolRecord,
   publishedWebsite,
@@ -11,6 +13,30 @@ import {
 } from './index.js';
 
 describe('national spine source normalization', () => {
+  it('keeps the checked inventory internally consistent', () => {
+    expect(
+      nationalOrganizationSpineInventory.sources.reduce((sum, source) => sum + source.records, 0),
+    ).toBe(nationalOrganizationSpineInventory.sourceRows);
+    expect(
+      nationalOrganizationSpineInventory.sources.reduce(
+        (sum, source) => sum + source.publishedWebsites,
+        0,
+      ),
+    ).toBe(nationalOrganizationSpineInventory.publishedWebsiteValues);
+    expect(
+      nationalOrganizationSpineInventory.geographies.reduce(
+        (sum, geography) => sum + geography.records,
+        0,
+      ),
+    ).toBe(nationalOrganizationSpineInventory.geographicAreas);
+    expect(nationalOrganizationSpineInventory.states).toHaveLength(51);
+  });
+
+  it('registers a unique collection scope for each source-supported classification', () => {
+    expect(nationalSpineJurisdictions).toHaveLength(8);
+    expect(new Set(nationalSpineJurisdictions.map((config) => config.key))).toHaveLength(8);
+  });
+
   it('streams quoted records across chunk boundaries', async () => {
     const rows: Record<string, string>[] = [];
     for await (const row of parseDelimitedObjects(

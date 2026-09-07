@@ -1,0 +1,2 @@
+drop table organization_spine_records;
+drop type organization_spine_record_status;

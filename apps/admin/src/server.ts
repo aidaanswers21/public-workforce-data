@@ -9,8 +9,10 @@ import {
   PostgresClient,
   CollectionProjectRepository,
   SourcePolicyRepository,
+  WebsiteResolutionRepository,
   type CollectionBatchSummary,
   type CollectionProjectSummary,
+  type MissingWebsiteOrganization,
   loadMigrations,
   migrate,
   type CoverageSummary,
@@ -18,8 +20,17 @@ import {
 } from '@public-workforce/database';
 import { createLogger } from '@public-workforce/observability';
 import type { SourcePolicyRecord } from '@public-workforce/shared-types';
-import { buildJurisdictionRegistry, buildTaxonomy } from '@public-workforce/crawler-worker';
-import { AdminReports, type DataQualitySample, type RunSummaryRow } from './reports.js';
+import {
+  buildJurisdictionRegistry,
+  buildOrganizationSpineInventory,
+  buildTaxonomy,
+} from '@public-workforce/crawler-worker';
+import {
+  AdminReports,
+  type DataQualitySample,
+  type OrganizationSpineSummary,
+  type RunSummaryRow,
+} from './reports.js';
 
 const COOKIE_NAME = 'public_workforce_admin';
 const HOSTED_COOKIE_NAME = '__Host-public_workforce_admin';
@@ -46,6 +57,30 @@ export interface AdminServerOptions {
   now?: () => Date;
   projectTemplates?: readonly CollectionProjectTemplate[];
   projectBuilderCatalog?: ProjectBuilderCatalog;
+  organizationSpineInventory?: OrganizationSpineInventory;
+}
+
+export interface OrganizationSpineInventory {
+  generatedAt: string;
+  sourceRows: number;
+  geographicAreas: number;
+  relationships: number;
+  publishedWebsiteValues: number;
+  missingWebsiteQueue: number;
+  exactWebsiteOverlays: number;
+  classificationWork: number;
+  reconciliationRequired: number;
+  sources: readonly {
+    key: string;
+    name: string;
+    catalogUrl: string;
+    records: number;
+    publishedWebsites: number;
+    missingWebsites: number;
+  }[];
+  geographies: readonly { code: string; name: string; records: number }[];
+  states: readonly { code: string; name: string }[];
+  notes: readonly string[];
 }
 
 export interface ProjectBuilderOption {
@@ -63,6 +98,7 @@ export interface ProjectBuilderCatalog {
   governmentLevels: readonly ProjectBuilderOption[];
   sectors: readonly ProjectBuilderOption[];
   organizationTypes: readonly ProjectBuilderOrganizationType[];
+  states?: readonly ProjectBuilderOption[];
 }
 
 export interface CollectionProjectTemplate {
@@ -91,12 +127,21 @@ interface DashboardData {
   organizations: Awaited<ReturnType<AdminReports['organizationBreakdown']>>;
 }
 
+interface SpineFilters {
+  governmentLevelCode: string;
+  sectorCode: string;
+  stateCode: string;
+  organizationTypeCode: string;
+}
+
 export function createAdminServer(options: AdminServerOptions): Server {
   const reports = new AdminReports(options.database);
   const projects = new CollectionProjectRepository(options.database);
   const sourcePolicies = new SourcePolicyRepository(options.database);
+  const websites = new WebsiteResolutionRepository(options.database);
   const projectTemplates = options.projectTemplates ?? [];
   const projectBuilderCatalog = options.projectBuilderCatalog ?? EMPTY_PROJECT_BUILDER_CATALOG;
+  const organizationSpineInventory = options.organizationSpineInventory;
   const now = options.now ?? (() => new Date());
   const hosted = options.hosted ?? false;
   if (
@@ -254,6 +299,33 @@ export function createAdminServer(options: AdminServerOptions): Server {
         return;
       }
 
+      if (request.method === 'GET' && url.pathname === '/spine') {
+        const filters = spineFilters(url, projectBuilderCatalog, organizationSpineInventory);
+        const [summary, queue] = await Promise.all([
+          reports.organizationSpineSummary(),
+          websites.missingWebsiteQueue({
+            limit: 100,
+            governmentLevelCodes: selected(filters.governmentLevelCode),
+            sectorCodes: selected(filters.sectorCode),
+            stateCodes: selected(filters.stateCode),
+            organizationTypeCodes: selected(filters.organizationTypeCode),
+          }),
+        ]);
+        sendHtml(
+          response,
+          200,
+          renderOrganizationSpine(
+            summary,
+            queue,
+            organizationSpineInventory,
+            projectBuilderCatalog,
+            filters,
+            hosted,
+          ),
+        );
+        return;
+      }
+
       if (request.method === 'GET' && url.pathname === '/policies') {
         sendHtml(
           response,
@@ -345,8 +417,15 @@ export function createAdminServer(options: AdminServerOptions): Server {
           const selectedGovernmentLevel =
             form.get('governmentLevelCode') ?? template.governmentLevelCode;
           const selectedSector = form.get('sectorCode') ?? template.sectorCodes[0];
+          const stateMatches =
+            template.stateCode === null
+              ? selectedStateCode === 'National' ||
+                (projectBuilderCatalog.states ?? []).some(
+                  (state) => state.code === selectedStateCode,
+                )
+              : selectedStateCode === template.stateCode;
           if (
-            selectedStateCode !== (template.stateCode ?? 'National') ||
+            !stateMatches ||
             selectedGovernmentLevel !== template.governmentLevelCode ||
             selectedSector === undefined ||
             !template.sectorCodes.includes(selectedSector)
@@ -375,7 +454,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
             name: form.get('name') ?? template.name,
             jurisdictionConfigKey: template.key,
             jurisdictionCode: template.jurisdictionCode,
-            stateCode: template.stateCode,
+            stateCode: selectedStateCode === 'National' ? null : selectedStateCode,
             sectorCodes: [selectedSector],
             governmentLevelCodes: [selectedGovernmentLevel],
             filters: {
@@ -758,7 +837,7 @@ function renderDashboard(data: DashboardData, query: string, hosted: boolean): s
     `<div class="app-shell">
       <header class="topbar">
         <a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a>
-        <div class="topbar-actions"><a class="nav-link" href="/projects">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div>
+        <div class="topbar-actions"><a class="nav-link" href="/spine">Organization spine</a><a class="nav-link" href="/projects">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div>
       </header>
       <main class="dashboard">
         <section class="dashboard-heading">
@@ -795,6 +874,113 @@ function renderDashboard(data: DashboardData, query: string, hosted: boolean): s
       </main>
       <footer><span>${hosted ? 'Hosted' : 'Local'} review surface</span><span>Public professional data only</span></footer>
     </div>`,
+    'dashboard-page',
+  );
+}
+
+function renderOrganizationSpine(
+  summary: OrganizationSpineSummary,
+  queue: readonly MissingWebsiteOrganization[],
+  inventory: OrganizationSpineInventory | undefined,
+  catalog: ProjectBuilderCatalog,
+  filters: SpineFilters,
+  hosted: boolean,
+): string {
+  const sourceRows = (inventory?.sources ?? [])
+    .map(
+      (source) => `<tr>
+        <td><a class="table-link" href="${escapeAttribute(source.catalogUrl)}" target="_blank" rel="noreferrer"><strong>${escapeHtml(source.name)}</strong></a><span>${escapeHtml(source.key)}</span></td>
+        <td>${source.records.toLocaleString()}</td>
+        <td>${source.publishedWebsites.toLocaleString()}</td>
+        <td>${source.missingWebsites.toLocaleString()}</td>
+        <td><span class="project-status active">Organized locally</span></td>
+      </tr>`,
+    )
+    .join('');
+  const geographyRows = (inventory?.geographies ?? [])
+    .map(
+      (item) =>
+        `<li><span>${escapeHtml(item.name)}<small>${escapeHtml(item.code)}</small></span><strong>${item.records.toLocaleString()}</strong></li>`,
+    )
+    .join('');
+  const queueRows = queue
+    .map(
+      (item) => `<tr>
+        <td><strong>${escapeHtml(item.name)}</strong><span>${escapeHtml(item.id)}</span></td>
+        <td>${escapeHtml(label(item.organizationTypeCode))}<span>${escapeHtml(label(item.governmentLevelCode))} · ${escapeHtml(label(item.sectorCode))}</span></td>
+        <td>${escapeHtml([item.city, item.stateCode, item.postalCode].filter(Boolean).join(', ') || 'Not published')}</td>
+        <td>${item.identifiers.length === 0 ? 'No official identifier loaded' : item.identifiers.map((identifier) => `${escapeHtml(label(identifier.systemCode))}: ${escapeHtml(identifier.value)}`).join('<br>')}</td>
+        <td>${item.proposedCandidates.toLocaleString()}<span>${item.bestCandidateConfidence === null ? 'No candidate yet' : `${Math.round(item.bestCandidateConfidence * 100)}% best confidence`}</span></td>
+      </tr>`,
+    )
+    .join('');
+  const stagingLoaded = summary.stagedSourceRows > 0;
+  const importStarted = summary.organizations > 0;
+  const states = inventory?.states ?? [];
+  const notes = (inventory?.notes ?? []).map((note) => `<li>${escapeHtml(note)}</li>`).join('');
+
+  return page(
+    'Organization spine',
+    `${appHeader('/projects', hosted)}
+    <main class="dashboard">
+      <section class="dashboard-heading">
+        <div><p class="eyebrow">National source inventory</p><h1>Organization spine</h1><p class="muted">See what has been organized, what is actually loaded here, and what is ready for public professional directory collection.</p></div>
+        <div class="freshness"><span>Staging manifest</span><strong>${inventory === undefined ? 'Not registered' : formatDate(inventory.generatedAt)}</strong></div>
+      </section>
+
+      <section class="status-track" aria-label="Organization pipeline status">
+        ${pipelineStage('1', 'Official source files', inventory === undefined ? 'No manifest registered' : `${inventory.sourceRows.toLocaleString()} rows organized`, inventory !== undefined)}
+        ${pipelineStage('2', 'Hosted database staging', stagingLoaded ? `${summary.stagedSourceRows.toLocaleString()} source rows staged` : 'Not loaded', stagingLoaded)}
+        ${pipelineStage('3', 'Website resolution', summary.missingWebsites === 0 && !importStarted ? 'Waiting for import' : `${summary.missingWebsites.toLocaleString()} missing · ${summary.proposedWebsiteCandidates.toLocaleString()} proposed`, summary.proposedWebsiteCandidates > 0)}
+        ${pipelineStage('4', 'Directory collection', summary.publishedWebsites === 0 ? 'Waiting for websites' : `${summary.publishedWebsites.toLocaleString()} organizations have a website`, summary.publishedWebsites > 0)}
+      </section>
+
+      <section class="metrics" aria-label="Staged source coverage">
+        ${metric('Source rows organized', inventory?.sourceRows ?? 0, 'Source records, overlays, and held rows')}
+        ${metric('Published website values', inventory?.publishedWebsiteValues ?? 0, 'Values present in source rows')}
+        ${metric('Post-overlay website queue', inventory?.missingWebsiteQueue ?? 0, `${inventory?.exactWebsiteOverlays.toLocaleString() ?? '0'} exact identifier overlays found`)}
+        ${metric('Geographic areas', inventory?.geographicAreas ?? 0, `${inventory?.relationships.toLocaleString() ?? '0'} organization relationships staged`)}
+      </section>
+
+      <section class="notice"><span class="shield" aria-hidden="true">i</span><div><strong>Staged is not loaded</strong><p>The source inventory above describes the preserved organizer output. The database cards below count only canonical records in the database this console is currently using.</p></div></section>
+
+      <section class="metrics" aria-label="Hosted database coverage">
+        ${metric('Source rows staged', summary.stagedSourceRows, `${summary.readyToImport.toLocaleString()} ready · ${summary.importedSourceRows.toLocaleString()} imported`)}
+        ${metric('Organizations loaded', summary.organizations, `${summary.governmentLevels} levels · ${summary.sectors} sectors`)}
+        ${metric('Websites ready', summary.publishedWebsites, 'Available for governed directory discovery')}
+        ${metric('Websites missing', summary.missingWebsites, `${summary.proposedWebsiteCandidates} candidates awaiting review`)}
+      </section>
+
+      <div class="content-grid spine-grid">
+        <section class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">Provenance inventory</p><h2>Organized sources</h2></div><span class="summary-chip">${inventory?.sources.length ?? 0} source slices</span></div>
+          <div class="table-scroll"><table><thead><tr><th>Source</th><th>Rows</th><th>Websites</th><th>Missing</th><th>State</th></tr></thead><tbody>${sourceRows.length > 0 ? sourceRows : '<tr><td class="empty" colspan="5">No staging manifest is registered in this build.</td></tr>'}</tbody></table></div>
+        </section>
+        <aside class="panel breakdown-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Geographic spine</p><h2>Area coverage</h2></div></div>
+          <ul class="breakdown">${geographyRows.length > 0 ? geographyRows : '<li class="empty">No staged geographies.</li>'}</ul>
+        </aside>
+      </div>
+
+      <section class="panel project-section">
+        <div class="panel-heading"><div><p class="eyebrow">Durable work queue</p><h2>Organizations missing a website</h2></div><span class="summary-chip">Showing ${queue.length.toLocaleString()} of ${summary.missingWebsites.toLocaleString()}</span></div>
+        <form class="spine-filters" method="get" action="/spine">
+          ${filterSelect('governmentLevelCode', 'Government level', filters.governmentLevelCode, catalog.governmentLevels)}
+          ${filterSelect('sectorCode', 'Sector', filters.sectorCode, catalog.sectors)}
+          ${filterSelect('stateCode', 'State', filters.stateCode, states)}
+          ${filterSelect('organizationTypeCode', 'Organization type', filters.organizationTypeCode, catalog.organizationTypes)}
+          <button type="submit">Apply filters</button><a class="secondary-link" href="/spine">Clear</a>
+        </form>
+        <div class="table-scroll"><table><thead><tr><th>Organization</th><th>Classification</th><th>Location</th><th>Official identifiers</th><th>Candidates</th></tr></thead><tbody>${queueRows.length > 0 ? queueRows : `<tr><td class="empty" colspan="5">${importStarted ? 'No organizations match these filters.' : 'The staged organization files have not been imported into this database yet.'}</td></tr>`}</tbody></table></div>
+        <p class="table-note">A proposed search result never becomes the canonical website automatically. Exact identifiers may attach official overlays; every other candidate remains reviewable evidence.</p>
+      </section>
+
+      <section class="work-summary">
+        <article class="warning-card"><strong>${stagingLoaded ? summary.classificationHolds.toLocaleString() : (inventory?.classificationWork.toLocaleString() ?? '0')} classification actions remain</strong><p>Controlled mappings, authoritative crosswalks, and parent inheritance are tracked instead of guessed.</p></article>
+        <article class="warning-card"><strong>${stagingLoaded ? summary.reconciliationHolds.toLocaleString() : (inventory?.reconciliationRequired.toLocaleString() ?? '0')} records require reconciliation</strong><p>${summary.overlayHolds.toLocaleString()} staged overlays also wait for exact identifier attachment.</p></article>
+      </section>
+      ${notes.length === 0 ? '' : `<section class="panel project-section panel-body"><p class="eyebrow">Staging rules</p><ul class="inventory-notes">${notes}</ul></section>`}
+    </main>${appFooter(hosted)}`,
     'dashboard-page',
   );
 }
@@ -898,14 +1084,19 @@ function renderNewProject(
   const options = templates
     .map(
       (template) =>
-        `<option value="${escapeAttribute(template.key)}" data-state="${escapeAttribute(template.stateCode ?? 'National')}" data-levels="${escapeAttribute(template.governmentLevelCode)}" data-sectors="${escapeAttribute(template.sectorCodes.join(','))}">${escapeHtml(template.name)} · ${escapeHtml(template.stateCode ?? 'National')} · ${escapeHtml(template.sectorCodes.map(label).join(', '))}</option>`,
+        `<option value="${escapeAttribute(template.key)}" data-state="${escapeAttribute(template.stateCode ?? 'National')}" data-national="${template.stateCode === null ? 'true' : 'false'}" data-levels="${escapeAttribute(template.governmentLevelCode)}" data-sectors="${escapeAttribute(template.sectorCodes.join(','))}">${escapeHtml(template.name)} · ${escapeHtml(template.stateCode ?? 'National')} · ${escapeHtml(template.sectorCodes.map(label).join(', '))}</option>`,
     )
     .join('');
+  const stateNames = new Map((catalog.states ?? []).map((state) => [state.code, state.name]));
   const configuredStates = unique([
     'National',
-    ...templates.map((template) => template.stateCode ?? 'National'),
+    ...(catalog.states ?? []).map((state) => state.code),
+    ...templates.flatMap((template) => (template.stateCode === null ? [] : [template.stateCode])),
   ])
-    .map((state) => `<option value="${escapeAttribute(state)}">${escapeHtml(state)}</option>`)
+    .map(
+      (state) =>
+        `<option value="${escapeAttribute(state)}">${escapeHtml(stateNames.get(state) ?? state)}</option>`,
+    )
     .join('');
   const governmentLevels = catalog.governmentLevels
     .map(
@@ -998,7 +1189,7 @@ function renderProjectDetail(
 }
 
 function appHeader(backTo: string, hosted: boolean): string {
-  return `<header class="topbar"><a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a><div class="topbar-actions"><a class="nav-link" href="${escapeAttribute(backTo)}">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div></header>`;
+  return `<header class="topbar"><a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a><div class="topbar-actions"><a class="nav-link" href="/spine">Organization spine</a><a class="nav-link" href="${escapeAttribute(backTo)}">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div></header>`;
 }
 
 function appFooter(hosted: boolean): string {
@@ -1007,6 +1198,46 @@ function appFooter(hosted: boolean): string {
 
 function metric(title: string, value: number, detail: string): string {
   return `<article class="metric-card"><p>${escapeHtml(title)}</p><strong>${value.toLocaleString()}</strong><span>${escapeHtml(detail)}</span></article>`;
+}
+
+function pipelineStage(number: string, title: string, detail: string, complete: boolean): string {
+  return `<article class="pipeline-stage${complete ? ' complete' : ''}"><span>${escapeHtml(number)}</span><div><strong>${escapeHtml(title)}</strong><small>${escapeHtml(detail)}</small></div></article>`;
+}
+
+function filterSelect(
+  name: string,
+  title: string,
+  selectedValue: string,
+  options: readonly { code: string; name: string }[],
+): string {
+  return `<label>${escapeHtml(title)}<select name="${escapeAttribute(name)}"><option value="">All</option>${options.map((option) => `<option value="${escapeAttribute(option.code)}"${option.code === selectedValue ? ' selected' : ''}>${escapeHtml(option.name)}</option>`).join('')}</select></label>`;
+}
+
+function spineFilters(
+  url: URL,
+  catalog: ProjectBuilderCatalog,
+  inventory: OrganizationSpineInventory | undefined,
+): SpineFilters {
+  return {
+    governmentLevelCode: allowedSelection(
+      url.searchParams.get('governmentLevelCode'),
+      catalog.governmentLevels,
+    ),
+    sectorCode: allowedSelection(url.searchParams.get('sectorCode'), catalog.sectors),
+    stateCode: allowedSelection(url.searchParams.get('stateCode'), inventory?.states ?? []),
+    organizationTypeCode: allowedSelection(
+      url.searchParams.get('organizationTypeCode'),
+      catalog.organizationTypes,
+    ),
+  };
+}
+
+function allowedSelection(value: string | null, options: readonly { code: string }[]): string {
+  return value !== null && options.some((option) => option.code === value) ? value : '';
+}
+
+function selected(value: string): string[] {
+  return value.length === 0 ? [] : [value];
 }
 
 function slug(value: string): string {
@@ -1100,8 +1331,10 @@ const STYLES = `
 .login-shell{display:grid;min-height:100vh;grid-template-columns:minmax(380px,1fr) minmax(440px,1fr)}.login-brand{display:flex;flex-direction:column;justify-content:center;padding:clamp(48px,8vw,120px);background:var(--ink);color:white;position:relative;overflow:hidden}.login-brand:after{content:"";position:absolute;width:420px;height:420px;right:-190px;bottom:-180px;border:1px solid rgba(255,255,255,.14);border-radius:50%;box-shadow:0 0 0 68px rgba(255,255,255,.035),0 0 0 136px rgba(255,255,255,.025)}.login-brand .eyebrow{margin-top:42px;color:#9dcfc1}.login-brand h1{max-width:600px;margin:0;font-family:ui-serif,serif;font-size:clamp(3rem,6vw,5.7rem);font-weight:500;line-height:.96;letter-spacing:-.045em}.brand-copy{max-width:520px;margin:28px 0;color:#c6d1d2;font-size:1.08rem;line-height:1.7}.boundary-note{display:flex;align-items:center;gap:12px;margin-top:42px;color:#d7e1df;font-size:.9rem}.login-panel{display:grid;place-items:center;padding:48px;background:radial-gradient(circle at 85% 10%,#e5eee8 0,transparent 32%),var(--paper)}.login-card{width:min(100%,450px);padding:46px;border:1px solid var(--line);border-radius:22px;background:rgba(255,254,250,.94);box-shadow:var(--shadow)}.login-card h2{margin:0;font-family:ui-serif,serif;font-size:2.4rem;font-weight:500;letter-spacing:-.025em}.login-card form{display:grid;gap:10px;margin-top:30px}.login-card label{margin-top:8px;font-size:.82rem;font-weight:750}.login-card input,.search input{width:100%;border:1px solid #b9c1bc;border-radius:10px;background:white;color:var(--ink);outline:none}.login-card input{height:50px;padding:0 14px}.login-card input:focus,.search input:focus{border-color:var(--teal);box-shadow:0 0 0 3px rgba(23,107,104,.12)}.login-card button,.button-link{display:grid;height:50px;margin-top:14px;place-items:center;border:0;border-radius:10px;background:var(--teal);color:white;font-weight:750;text-decoration:none}.login-card button:hover,.button-link:hover{background:#105956}.fine-print{margin:24px 0 0;color:#7a8589;font-size:.78rem;line-height:1.55}.error{margin:20px 0 0;padding:12px 14px;border:1px solid #ddb1a9;border-radius:9px;background:#fbebe7;color:#8f3528;font-size:.88rem}
 .topbar{display:flex;height:76px;align-items:center;justify-content:space-between;padding:0 clamp(24px,5vw,72px);border-bottom:1px solid var(--line);background:rgba(255,254,250,.92)}.wordmark{display:flex;align-items:center;gap:12px;color:var(--ink);font-family:ui-serif,serif;font-size:1.02rem;font-weight:700;text-decoration:none}.wordmark small{display:block;margin-top:2px;color:var(--muted);font-family:Inter,sans-serif;font-size:.66rem;font-weight:650;letter-spacing:.08em;text-transform:uppercase}.topbar-actions{display:flex;align-items:center;gap:18px}.local-badge{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:.82rem}.quiet-button{border:1px solid var(--line);border-radius:8px;padding:9px 14px;background:transparent;color:var(--ink);font-size:.82rem;font-weight:700}.quiet-button:hover{background:#eeece5}.dashboard{width:min(1480px,calc(100% - 48px));margin:0 auto;padding:52px 0 68px}.dashboard-heading{display:flex;align-items:end;justify-content:space-between;gap:32px;margin-bottom:28px}.dashboard-heading h1{margin:0;font-family:ui-serif,serif;font-size:clamp(2.5rem,5vw,4.4rem);font-weight:500;letter-spacing:-.045em}.dashboard-heading .muted{margin:12px 0 0}.freshness{min-width:200px;padding-left:20px;border-left:2px solid var(--gold)}.freshness span{display:block;color:var(--muted);font-size:.75rem;text-transform:uppercase;letter-spacing:.08em}.freshness strong{display:block;margin-top:7px;font-family:ui-serif,serif;font-size:1.02rem}.notice{display:flex;align-items:center;gap:16px;margin-bottom:20px;padding:16px 20px;border:1px solid #b8d8ce;border-radius:12px;background:var(--teal-soft)}.notice .shield{display:grid;width:34px;height:34px;place-items:center;border-radius:50%;background:var(--teal);color:white;font-weight:900}.notice p{margin:3px 0 0;color:#456760;font-size:.84rem}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:20px}.metric-card,.panel{border:1px solid var(--line);background:var(--panel);box-shadow:0 8px 24px rgba(23,44,53,.04)}.metric-card{padding:24px;border-radius:14px}.metric-card p{margin:0;color:var(--muted);font-size:.8rem;font-weight:700}.metric-card strong{display:block;margin:10px 0 7px;font-family:ui-serif,serif;font-size:2.5rem;font-weight:500}.metric-card span{color:#7a8589;font-size:.76rem}.content-grid{display:grid;grid-template-columns:minmax(0,3fr) minmax(240px,1fr);gap:20px}.panel{border-radius:14px;overflow:hidden}.panel-heading{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:24px 26px;border-bottom:1px solid var(--line)}.panel-heading .eyebrow{margin-bottom:5px}.panel h2{margin:0;font-family:ui-serif,serif;font-size:1.6rem;font-weight:500}.search{display:flex;width:min(430px,50%)}.search input{height:40px;padding:0 12px;border-radius:8px 0 0 8px}.search button{border:0;border-radius:0 8px 8px 0;padding:0 16px;background:var(--ink);color:white;font-size:.78rem;font-weight:750}.table-scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;text-align:left}th{padding:13px 18px;border-bottom:1px solid var(--line);background:#f0eee7;color:#66757a;font-size:.69rem;letter-spacing:.06em;text-transform:uppercase}td{padding:17px 18px;border-bottom:1px solid #e8e5dd;color:#43565d;font-size:.82rem;vertical-align:middle}tbody tr:last-child td{border-bottom:0}td strong{display:block;color:var(--ink);font-size:.86rem}td span:not(.pill):not(.run-status){display:block;margin-top:4px;color:#788489;font-size:.76rem}.pill{display:inline-block;padding:5px 8px;border-radius:20px;background:#edf1ed;color:#53645f;font-size:.68rem;font-weight:750;white-space:nowrap}.confidence{display:inline-block;width:54px;height:5px;margin-right:8px;border-radius:10px;background:#e0e3df;overflow:hidden;vertical-align:middle}.confidence span{display:block;height:100%;background:var(--teal)}td small{color:var(--muted)}.table-note{margin:0;padding:14px 20px;border-top:1px solid var(--line);background:#faf9f4;color:#738085;font-size:.73rem}.empty{padding:32px!important;color:var(--muted);text-align:center}.breakdown{margin:0;padding:8px 24px 18px;list-style:none}.breakdown li{display:flex;align-items:center;justify-content:space-between;padding:17px 2px;border-bottom:1px solid #e8e5dd;color:var(--ink);font-size:.84rem}.breakdown li:last-child{border:0}.breakdown small{display:block;margin-top:4px;color:var(--muted);font-size:.7rem;font-weight:500}.breakdown strong{font-family:ui-serif,serif;font-size:1.3rem}.runs-panel{margin-top:20px}.summary-chip{padding:7px 10px;border-radius:20px;background:var(--teal-soft);color:#2f655d;font-size:.72rem;font-weight:750}.run-status{display:inline-block;width:8px;height:8px;margin-right:9px;border-radius:50%;background:#879398}.run-status.completed{background:#59a686}.run-status.failed{background:#b95746}footer{display:flex;justify-content:space-between;padding:24px clamp(24px,5vw,72px);border-top:1px solid var(--line);color:#7c878a;font-size:.72rem}.message-shell{display:grid;min-height:100vh;place-items:center;padding:30px}.message-shell h1{font-family:ui-serif,serif;font-weight:500}.button-link{margin-top:25px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 .nav-link,.table-link{color:var(--teal);font-size:.82rem;font-weight:750;text-decoration:none}.table-link strong{color:var(--teal)}.primary-link,.secondary-link{display:inline-flex;align-items:center;justify-content:center;border-radius:9px;padding:12px 17px;font-size:.82rem;font-weight:750;text-decoration:none}.primary-link{background:var(--teal);color:white}.primary-link.disabled{opacity:.45;pointer-events:none}.secondary-link{border:1px solid var(--line);color:var(--ink)}.narrow-dashboard{max-width:980px}.project-builder-dashboard{max-width:1180px}.project-form{overflow:visible}.form-section{padding:28px;border-bottom:1px solid var(--line)}.form-section h2{margin:0 0 18px}.section-copy{margin:-8px 0 20px;color:var(--muted);font-size:.82rem;line-height:1.55}.project-form label,.release-form label{display:block;margin:16px 0 7px;font-size:.8rem;font-weight:750}.project-form input,.project-form select,.project-form textarea,.release-form input,.release-form select,.release-form textarea{width:100%;border:1px solid #b9c1bc;border-radius:9px;padding:11px 13px;background:white;color:var(--ink)}.project-form select:disabled{background:#f2f1ec;color:#52636a;opacity:1}.field-help{margin:10px 0 0;color:var(--muted);font-size:.75rem;line-height:1.5}.scope-resolution{min-height:20px;margin:12px 0 0;color:var(--teal);font-size:.78rem;font-weight:750}.scope-resolution.unavailable{color:#8f3d31}.form-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:4px 18px}.form-grid.three-columns{grid-template-columns:repeat(3,1fr)}.wide-field{grid-column:span 2}.form-actions{display:flex;justify-content:flex-end;gap:12px;padding:22px 28px}.form-actions button,.release-form button{border:0;border-radius:9px;padding:12px 17px;background:var(--teal);color:white;font-weight:750}.form-actions button:disabled,.release-form button:disabled{opacity:.45}.coverage-spine{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}.coverage-spine div{min-height:84px;padding:16px;border:1px solid var(--line);border-radius:11px;background:#fffefa}.coverage-spine strong,.coverage-spine span{display:block}.coverage-spine strong{font-size:.82rem}.coverage-spine span{margin-top:7px;color:var(--muted);font-size:.67rem;line-height:1.4}.choice-builder{display:grid;grid-template-columns:1fr 1fr;gap:16px}.choice-bin{min-height:250px;padding:17px;border:1px dashed #aebbb6;border-radius:12px;background:#f8f7f2}.choice-bin.drag-over{border-color:var(--teal);background:var(--teal-soft)}.choice-bin h3{margin:0 0 13px;font-size:.78rem;text-transform:uppercase;letter-spacing:.06em}.choice-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.scope-option{padding:12px;border:1px solid var(--line);border-radius:9px;background:white;color:var(--ink);text-align:left}.scope-option:hover,.scope-option:focus{border-color:var(--teal);box-shadow:0 0 0 2px rgba(23,107,104,.1)}.scope-option strong,.scope-option small{display:block}.scope-option strong{font-size:.77rem}.scope-option small{margin-top:5px;color:var(--muted);font-size:.65rem;line-height:1.35}.scope-option[hidden]{display:none}.selected-bin .scope-option{border-color:#a8cfc3;background:#eef8f4}.choice-empty{margin:45px auto;color:var(--muted);font-size:.8rem;text-align:center}.advanced-filters{margin-top:20px;border-top:1px solid var(--line);padding-top:17px}.advanced-filters summary{cursor:pointer;color:var(--teal);font-size:.8rem;font-weight:750}.scale-note{display:flex;align-items:flex-start;gap:16px;margin-bottom:16px;padding:16px;border-left:3px solid var(--gold);background:#faf4e7}.scale-note strong{min-width:240px;font-size:.82rem}.scale-note span{color:var(--muted);font-size:.78rem;line-height:1.5}.work-mode{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 18px;padding:0;border:0}.work-mode legend{margin-bottom:8px;font-size:.75rem;font-weight:800;text-transform:uppercase;letter-spacing:.06em}.work-mode label{display:flex;gap:10px;margin:0;padding:15px;border:1px solid var(--line);border-radius:10px;background:#f8f7f2}.work-mode input{width:auto;margin:2px 0 0}.work-mode span,.work-mode strong,.work-mode small{display:block}.work-mode strong{font-size:.79rem}.work-mode small{margin-top:5px;color:var(--muted);font-size:.68rem;line-height:1.4}.data-coverage-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}.data-coverage-grid div{padding:16px;border:1px solid var(--line);border-radius:10px;background:#f8f7f2}.data-coverage-grid strong,.data-coverage-grid span{display:block}.data-coverage-grid strong{font-size:.8rem}.data-coverage-grid span{margin-top:6px;color:var(--muted);font-size:.72rem;line-height:1.5}.project-status{display:inline-block;padding:6px 9px;border-radius:20px;background:#e5e8e5;color:#55645f;font-size:.7rem;font-weight:800}.project-status.active,.project-status.completed{background:var(--teal-soft);color:#28675d}.project-status.paused,.project-status.awaiting_approval,.project-status.policy_hold{background:#f5e8c9;color:#8a5f19}.project-status.cancelled,.project-status.failed,.project-status.completed_with_errors{background:#f5ded9;color:#8f3d31}.project-status.large{padding:9px 13px;font-size:.76rem}.project-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}.panel-body{padding:25px}.panel-body>p{margin-top:0;color:var(--muted);font-size:.83rem;line-height:1.6}.button-row,.project-controls{display:flex;flex-wrap:wrap;gap:10px}.secondary-button{border:1px solid #aebbb6;border-radius:8px;padding:10px 13px;background:white;color:var(--ink);font-size:.78rem;font-weight:750}.limits{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:26px 0 0}.limits div{padding-top:13px;border-top:1px solid var(--line)}.limits dt{color:var(--muted);font-size:.7rem;text-transform:uppercase}.limits dd{margin:6px 0 0;font-size:.82rem;font-weight:700}.check-label{display:flex!important;align-items:flex-start;gap:10px;margin-top:17px!important}.check-label input{width:auto!important;margin-top:3px}.release-form button{width:100%;margin-top:18px}.project-section{margin-top:20px}.project-controls{justify-content:flex-end;margin-top:20px}.flash{margin-bottom:20px;padding:13px 16px;border:1px solid #b8d8ce;border-radius:9px;background:var(--teal-soft);color:#315e57;font-size:.82rem}.warning-card{margin-top:20px;padding:20px;border:1px solid #dbbd84;border-radius:12px;background:#fff4dc}.warning-card p{margin-bottom:0;color:var(--muted)}
-@media(max-width:960px){.login-shell{grid-template-columns:1fr}.login-brand{min-height:46vh;padding:52px}.login-panel{padding:36px 20px}.metrics{grid-template-columns:repeat(2,1fr)}.content-grid,.project-grid{grid-template-columns:1fr}.coverage-spine{grid-template-columns:repeat(2,1fr)}.form-grid.three-columns{grid-template-columns:repeat(2,1fr)}.choice-builder{grid-template-columns:1fr}.breakdown-panel{order:-1}.breakdown{display:grid;grid-template-columns:repeat(2,1fr);gap:0 24px}.dashboard-heading{align-items:start}.freshness{margin-top:8px}}
-@media(max-width:640px){.login-brand{padding:38px 24px}.login-brand h1{font-size:3rem}.login-card{padding:30px 24px}.topbar{height:auto;padding:14px 18px}.local-badge{display:none}.dashboard{width:calc(100% - 28px);padding-top:34px}.dashboard-heading{display:block}.dashboard-heading .project-status{margin-top:18px}.freshness{margin-top:22px}.metrics{grid-template-columns:1fr 1fr;gap:10px}.metric-card{padding:18px}.panel-heading{align-items:stretch;flex-direction:column;padding:20px}.search{width:100%}.breakdown{grid-template-columns:1fr}.notice{align-items:flex-start}.coverage-spine,.form-grid,.form-grid.three-columns,.limits,.data-coverage-grid,.work-mode{grid-template-columns:1fr}.wide-field{grid-column:auto}.choice-list{grid-template-columns:1fr}.scale-note{display:block}.scale-note strong{display:block;margin-bottom:8px}.form-section{padding:22px 18px}footer{padding:20px;flex-direction:column;gap:8px}}
+.status-track{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px}.pipeline-stage{display:flex;align-items:center;gap:12px;padding:15px;border:1px solid var(--line);border-radius:11px;background:#ebe9e3}.pipeline-stage>span{display:grid;width:30px;height:30px;flex:0 0 30px;place-items:center;border-radius:50%;background:#9aa3a0;color:white;font-size:.75rem;font-weight:850}.pipeline-stage.complete{border-color:#b8d8ce;background:#eef7f3}.pipeline-stage.complete>span{background:var(--teal)}.pipeline-stage strong,.pipeline-stage small{display:block}.pipeline-stage strong{font-size:.78rem}.pipeline-stage small{margin-top:4px;color:var(--muted);font-size:.67rem;line-height:1.35}.spine-grid{grid-template-columns:minmax(0,2.4fr) minmax(280px,1fr)}.spine-filters{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr)) auto auto;align-items:end;gap:12px;padding:18px 22px;border-bottom:1px solid var(--line);background:#faf9f4}.spine-filters label{color:var(--muted);font-size:.7rem;font-weight:750}.spine-filters select{display:block;width:100%;height:40px;margin-top:6px;border:1px solid #b9c1bc;border-radius:8px;padding:0 10px;background:white;color:var(--ink)}.spine-filters button{height:40px;border:0;border-radius:8px;padding:0 16px;background:var(--teal);color:white;font-size:.78rem;font-weight:750}.spine-filters .secondary-link{height:40px}.work-summary{display:grid;grid-template-columns:1fr 1fr;gap:20px}.inventory-notes{margin:0;padding-left:20px;color:var(--muted);font-size:.8rem;line-height:1.7}
+@media(max-width:1100px){.spine-filters{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:960px){.login-shell{grid-template-columns:1fr}.login-brand{min-height:46vh;padding:52px}.login-panel{padding:36px 20px}.metrics{grid-template-columns:repeat(2,1fr)}.content-grid,.project-grid,.spine-grid{grid-template-columns:1fr}.status-track{grid-template-columns:repeat(2,1fr)}.coverage-spine{grid-template-columns:repeat(2,1fr)}.form-grid.three-columns{grid-template-columns:repeat(2,1fr)}.choice-builder{grid-template-columns:1fr}.breakdown-panel{order:-1}.breakdown{display:grid;grid-template-columns:repeat(2,1fr);gap:0 24px}.dashboard-heading{align-items:start}.freshness{margin-top:8px}}
+@media(max-width:640px){.login-brand{padding:38px 24px}.login-brand h1{font-size:3rem}.login-card{padding:30px 24px}.topbar{height:auto;padding:14px 18px}.topbar-actions{gap:10px;flex-wrap:wrap;justify-content:flex-end}.local-badge{display:none}.dashboard{width:calc(100% - 28px);padding-top:34px}.dashboard-heading{display:block}.dashboard-heading .project-status{margin-top:18px}.freshness{margin-top:22px}.metrics{grid-template-columns:1fr 1fr;gap:10px}.metric-card{padding:18px}.panel-heading{align-items:stretch;flex-direction:column;padding:20px}.search{width:100%}.breakdown{grid-template-columns:1fr}.notice{align-items:flex-start}.status-track,.spine-filters,.work-summary,.coverage-spine,.form-grid,.form-grid.three-columns,.limits,.data-coverage-grid,.work-mode{grid-template-columns:1fr}.wide-field{grid-column:auto}.choice-list{grid-template-columns:1fr}.scale-note{display:block}.scale-note strong{display:block;margin-bottom:8px}.form-section{padding:22px 18px}footer{padding:20px;flex-direction:column;gap:8px}}
 `;
 
 const PROJECT_BUILDER_SCRIPT = `
@@ -1163,7 +1396,7 @@ const PROJECT_BUILDER_SCRIPT = `
   const resolveTemplate = () => {
     const match = [...template.options].find((option) => {
       const sectors = (option.dataset.sectors || '').split(',').filter(Boolean);
-      return (option.dataset.state || '') === state.value
+      return ((option.dataset.national === 'true') || (option.dataset.state || '') === state.value)
         && (option.dataset.levels || '') === level.value
         && sectors.includes(sector.value);
     });
@@ -1268,7 +1501,12 @@ async function main(): Promise<void> {
       governmentLevels: taxonomy.governmentLevels,
       sectors: taxonomy.sectors,
       organizationTypes: taxonomy.organizationTypes,
+      states: buildOrganizationSpineInventory().states.map((state) => ({
+        ...state,
+        description: 'State or District of Columbia location filter.',
+      })),
     },
+    organizationSpineInventory: buildOrganizationSpineInventory(),
   });
   const port = numberFromEnvironment(
     process.env['PORT'] ?? process.env['ADMIN_PORT'] ?? process.env['CONDUCTOR_PORT'],

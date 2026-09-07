@@ -238,7 +238,7 @@ export class CollectionProjectRepository {
 
   private async refreshOrganizationsWith(tx: SqlClient, projectId: Uuid): Promise<number> {
     const project = await tx.query<Record<string, unknown>>(
-      `select jurisdiction_id, sector_codes, government_level_codes, filters
+      `select jurisdiction_id, state_code, sector_codes, government_level_codes, filters
        from collection_projects where id = $1 for update`,
       [projectId],
     );
@@ -249,10 +249,18 @@ export class CollectionProjectRepository {
       `insert into collection_project_organizations (project_id, organization_id, selection_reason)
        select $1, o.id, 'project scope'
        from organizations o
-       where (($2::uuid is not null and o.jurisdiction_id = $2)
+       where (($2::uuid is null or o.jurisdiction_id = $2
+               or ($8::text is not null and exists (
+                 select 1 from organization_locations location
+                 where location.organization_id = o.id and location.state_code = $8
+               )))
               or (cardinality($6::uuid[]) > 0 and o.id = any($6::uuid[])))
          and o.sector_code = any($3::text[])
          and o.government_level_code = any($4::text[])
+         and ($8::text is null or exists (
+           select 1 from organization_locations location
+           where location.organization_id = o.id and location.state_code = $8
+         ))
          and (cardinality($5::text[]) = 0 or o.organization_type_code = any($5::text[]))
          and (cardinality($6::uuid[]) = 0 or o.id = any($6::uuid[]))
          and not (o.id = any($7::uuid[]))
@@ -266,6 +274,7 @@ export class CollectionProjectRepository {
         filters.organizationTypeCodes,
         filters.includedOrganizationIds,
         filters.excludedOrganizationIds,
+        row['state_code'] ?? null,
       ],
     );
     return inserted.rows.length;

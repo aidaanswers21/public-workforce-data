@@ -38,6 +38,25 @@ export interface DataQualitySample {
   confidence: number;
 }
 
+export interface OrganizationSpineSummary {
+  stagedSourceRows: number;
+  readyToImport: number;
+  importedSourceRows: number;
+  classificationHolds: number;
+  overlayHolds: number;
+  reconciliationHolds: number;
+  organizations: number;
+  publishedWebsites: number;
+  missingWebsites: number;
+  geographicAreas: number;
+  governmentLevels: number;
+  sectors: number;
+  states: number;
+  proposedWebsiteCandidates: number;
+  verifiedWebsiteCandidates: number;
+  identityReviews: number;
+}
+
 /**
  * Read-only views for the internal admin surface.
  *
@@ -116,6 +135,61 @@ export class AdminReports {
       organizationTypeCode: String(row['organization_type_code']),
       count: Number(row['count']),
     }));
+  }
+
+  /** Canonical coverage already loaded into the database used by this console. */
+  async organizationSpineSummary(): Promise<OrganizationSpineSummary> {
+    const result = await this.client.query<Record<string, unknown>>(
+      `select
+         count(*) filter (where o.status = 'active')::int as organizations,
+         count(*) filter (where o.status = 'active' and o.website_url is not null)::int
+           as published_websites,
+         count(*) filter (where o.status = 'active' and o.website_url is null)::int
+           as missing_websites,
+         count(distinct o.government_level_code) filter (where o.status = 'active')::int
+           as government_levels,
+         count(distinct o.sector_code) filter (where o.status = 'active')::int as sectors,
+         count(*) filter (where o.status = 'active' and o.needs_identity_review)::int
+           as identity_reviews,
+         (select count(*)::int from geographic_areas) as geographic_areas,
+         (select count(distinct state_code)::int from organization_locations
+            where state_code is not null) as states,
+         (select count(*) filter (where status = 'proposed')::int
+            from organization_website_candidates) as proposed_website_candidates,
+         (select count(*) filter (where status = 'verified')::int
+            from organization_website_candidates) as verified_website_candidates,
+         (select count(*)::int from organization_spine_records) as staged_source_rows,
+         (select count(*) filter (where status = 'ready_to_import')::int
+            from organization_spine_records) as ready_to_import,
+         (select count(*) filter (where status = 'imported')::int
+            from organization_spine_records) as imported_source_rows,
+         (select count(*) filter (where status = 'classification_hold')::int
+            from organization_spine_records) as classification_holds,
+         (select count(*) filter (where status = 'overlay_hold')::int
+            from organization_spine_records) as overlay_holds,
+         (select count(*) filter (where status = 'reconciliation_hold')::int
+            from organization_spine_records) as reconciliation_holds
+       from organizations o`,
+    );
+    const row = result.rows[0] ?? {};
+    return {
+      stagedSourceRows: Number(row['staged_source_rows'] ?? 0),
+      readyToImport: Number(row['ready_to_import'] ?? 0),
+      importedSourceRows: Number(row['imported_source_rows'] ?? 0),
+      classificationHolds: Number(row['classification_holds'] ?? 0),
+      overlayHolds: Number(row['overlay_holds'] ?? 0),
+      reconciliationHolds: Number(row['reconciliation_holds'] ?? 0),
+      organizations: Number(row['organizations'] ?? 0),
+      publishedWebsites: Number(row['published_websites'] ?? 0),
+      missingWebsites: Number(row['missing_websites'] ?? 0),
+      geographicAreas: Number(row['geographic_areas'] ?? 0),
+      governmentLevels: Number(row['government_levels'] ?? 0),
+      sectors: Number(row['sectors'] ?? 0),
+      states: Number(row['states'] ?? 0),
+      proposedWebsiteCandidates: Number(row['proposed_website_candidates'] ?? 0),
+      verifiedWebsiteCandidates: Number(row['verified_website_candidates'] ?? 0),
+      identityReviews: Number(row['identity_reviews'] ?? 0),
+    };
   }
 
   /** Sources a person still has to review before production collection. */

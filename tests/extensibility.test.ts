@@ -770,7 +770,9 @@ describe('a non-HTML official data source', () => {
 
   it('registers alongside the shipped jurisdiction', () => {
     const registry = buildJurisdictionRegistry().register(config);
-    expect(registry.keys()).toEqual(['texas-education', 'us-federal-sample']);
+    expect(registry.keys()).toContain('texas-education');
+    expect(registry.keys()).toContain('us-federal-sample');
+    expect(registry.keys()).toHaveLength(10);
     expect(registry.atLevel('federal')).toHaveLength(1);
   });
 

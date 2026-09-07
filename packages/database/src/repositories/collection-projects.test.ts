@@ -25,6 +25,18 @@ describe('collection project control plane', () => {
     expect(await database?.count('crawl_targets')).toBe(1);
   });
 
+  it('uses a location state to scope a national configuration without a jurisdiction row', async () => {
+    const setup = await fixture();
+    const projectId = await setup.projects.create({
+      ...projectInput(),
+      jurisdictionConfigKey: 'fixture-national',
+      jurisdictionCode: 'fixture-national',
+      stateCode: 'TX',
+    });
+
+    expect(await setup.projects.get(projectId)).toMatchObject({ organizationsSelected: 1 });
+  });
+
   it('requires a specific approval and leases one finite job once', async () => {
     const setup = await fixture({ policy: 'permitted' });
     const projectId = await setup.projects.create(projectInput());
@@ -110,6 +122,17 @@ describe('collection project control plane', () => {
        from organizations where id = $1 returning id`,
       [setup.organizationId],
     );
+    const source = await database?.query<{ source_document_id: string }>(
+      'select source_document_id from organizations where id = $1',
+      [setup.organizationId],
+    );
+    await database?.query(
+      `insert into organization_locations (
+         organization_id, state_code, is_primary, source_document_id,
+         extraction_method_code, confidence
+       ) values ($1,'TX',true,$2,'manual',1)`,
+      [second?.rows[0]?.id, source?.rows[0]?.source_document_id],
+    );
     const projectId = await setup.projects.create(projectInput());
     expect(await setup.projects.get(projectId)).toMatchObject({ organizationsSelected: 2 });
     await setup.projects.generateDiscoveryTargets(projectId, 'owner@example.test');
@@ -188,6 +211,13 @@ async function fixture(options: { policy?: 'permitted' } = {}) {
        'https://district.example.test','official_identifier','fixture-school',$2,'manual',1
      ) returning id`,
     [jurisdiction.rows[0]?.id, source.rows[0]?.id],
+  );
+  await database.query(
+    `insert into organization_locations (
+       organization_id, state_code, is_primary, source_document_id,
+       extraction_method_code, confidence
+     ) values ($1,'TX',true,$2,'manual',1)`,
+    [organization.rows[0]?.id, source.rows[0]?.id],
   );
   if (options.policy === 'permitted') {
     await database.query(

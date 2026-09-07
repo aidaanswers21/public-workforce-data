@@ -41,6 +41,9 @@
       "path": "../../packages/jurisdiction-config/texas-education"
     },
     {
+      "path": "../../packages/jurisdiction-config/us-national-spine"
+    },
+    {
       "path": "../../packages/sectors/education"
     },
     {
