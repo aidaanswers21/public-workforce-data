@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "@public-workforce/core": "workspace:*",
+    "@public-workforce/database": "workspace:*",
+    "@public-workforce/shared-types": "workspace:*",
     "@public-workforce/jurisdiction-kit": "workspace:*"
   },
   "devDependencies": {}

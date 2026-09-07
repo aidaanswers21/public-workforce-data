@@ -34,6 +34,49 @@ pnpm spine:organize
 This command reads local files only. It does not contact a source and it does
 not write to a database.
 
+## Operator console
+
+The authenticated console exposes an **Organization spine** page. It keeps two
+sets of counts visibly separate:
+
+- The checked organizer manifest reports the locally preserved artifacts by
+  source, geography, website coverage and unresolved work.
+- The hosted database summary reports only source rows and canonical
+  organizations that have actually been loaded into the database used by that
+  console.
+
+The missing-website queue can be filtered by government level, sector, state
+and organization type. The same state list is available to national collection
+project configurations, so a national bulk source can be narrowed to one state
+without pretending it is a different source.
+
+## Durable import
+
+Migration `0017_organization_spine_staging.sql` adds a default-deny staging
+table. Each row references both a source document and its immutable version.
+Incomplete classifications, overlays and reconciliation work have distinct
+statuses and do not silently become canonical organizations.
+
+Preview an import without connecting to a database:
+
+```bash
+pnpm spine:import
+```
+
+After the target database has migrations 0016 and 0017, a specifically
+approved import uses explicit flags and an explicit connection string:
+
+```bash
+DATABASE_URL=... pnpm spine:import -- --apply --canonicalize
+```
+
+The importer streams batches of 2,000 staged rows and canonicalizes at most
+5,000 ready rows per transaction. `--apply` is never inferred. Omitting
+`--canonicalize` loads the reviewable staging rows without creating canonical
+organizations. Every catalog URL must also resolve to a source-policy row that
+permits collection or carries a recorded production approval. Missing,
+prohibited and unapproved policy decisions stop the import.
+
 ## Merge rule
 
 Automatic merging requires an exact identifier in the same identifier system.
@@ -56,8 +99,9 @@ employee records.
 ## Database load order
 
 1. Record each source document and immutable source version.
-2. Load geographic areas and their identifiers.
-3. Load organization records with a complete classification.
+2. Load every organization source row into provenance-bearing staging.
+3. Canonicalize only organization records with a complete classification and
+   an official identifier.
 4. Load exact external identifiers and source observations.
 5. Load parent organizations before children and add effective-dated
    relationships.

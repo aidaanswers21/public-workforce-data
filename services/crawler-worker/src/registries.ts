@@ -3,6 +3,10 @@ import { genericHtmlAdapter } from '@public-workforce/adapter-generic-html';
 import { genericJsonAdapter } from '@public-workforce/adapter-generic-json';
 import { JurisdictionRegistry } from '@public-workforce/jurisdiction-kit';
 import { texasEducationJurisdiction } from '@public-workforce/jurisdiction-texas-education';
+import {
+  nationalOrganizationSpineInventory,
+  nationalSpineJurisdictions,
+} from '@public-workforce/jurisdiction-us-national-spine';
 import { educationSectorPack } from '@public-workforce/sector-education';
 import { federalGovernmentSectorPack } from '@public-workforce/sector-federal';
 import { stateLocalGovernmentSectorPack } from '@public-workforce/sector-state-local';
@@ -117,7 +121,13 @@ export function buildAdapterRegistry(): AdapterRegistry {
 }
 
 export function buildJurisdictionRegistry(): JurisdictionRegistry {
-  return new JurisdictionRegistry().register(texasEducationJurisdiction);
+  const registry = new JurisdictionRegistry().register(texasEducationJurisdiction);
+  for (const config of nationalSpineJurisdictions) registry.register(config);
+  return registry;
+}
+
+export function buildOrganizationSpineInventory() {
+  return nationalOrganizationSpineInventory;
 }
 
 /**

@@ -382,7 +382,7 @@ async function organizeGeographies(): Promise<void> {
     if (member === undefined) throw new Error(`empty geography archive: ${path}`);
     const rows = zipText(path, member).trim().split(/\r?\n/);
     const header = rows.shift()?.split('|') ?? [];
-    let count = 0;
+    const counts = new Map<string, number>();
     for (const line of rows) {
       const row = objectFromRow(header, line.split('|'));
       const effectiveAreaType =
@@ -403,9 +403,11 @@ async function organizeGeographies(): Promise<void> {
         latitude: numeric(row['INTPTLAT']),
         longitude: numeric(row['INTPTLONG']),
       });
-      count += 1;
+      counts.set(effectiveAreaType, (counts.get(effectiveAreaType) ?? 0) + 1);
     }
-    summary.geographies[areaTypeCode] = count;
+    for (const [code, count] of counts) {
+      summary.geographies[code] = (summary.geographies[code] ?? 0) + count;
+    }
   }
 }
 

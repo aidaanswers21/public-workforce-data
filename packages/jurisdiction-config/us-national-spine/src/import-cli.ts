@@ -1,0 +1,198 @@
+#!/usr/bin/env node
+import { createHash } from 'node:crypto';
+import { createReadStream, existsSync, readFileSync } from 'node:fs';
+import { basename, join, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
+import { SourcePolicyRegistry, canonicalizeUrl, domainOf, urlHash } from '@public-workforce/core';
+import {
+  IngestionRepository,
+  OrganizationSpineImportRepository,
+  PostgresClient,
+  SourcePolicyRepository,
+  type SourceDocumentVersionRef,
+  type StageOrganizationSpineRecord,
+} from '@public-workforce/database';
+import type { OrganizationSpineRecordStatus } from '@public-workforce/shared-types';
+import {
+  nationalOrganizationSpineInventory,
+  type OrganizationSpineInventorySource,
+} from './inventory.js';
+import type { SpineSourceRecord } from './index.js';
+
+const argumentsSet = new Set(process.argv.slice(2));
+const apply = argumentsSet.has('--apply');
+const canonicalize = argumentsSet.has('--canonicalize');
+const positional = process.argv.slice(2).filter((value) => !value.startsWith('--'));
+const directory = resolve(positional[0] ?? '.context/national-spine/organized');
+const summaryPath = join(directory, 'summary.json');
+
+if (!existsSync(summaryPath))
+  throw new Error(`organization spine summary is missing: ${summaryPath}`);
+const localSummary = JSON.parse(readFileSync(summaryPath, 'utf8')) as { generatedAt: string };
+
+if (!apply) {
+  process.stdout.write(
+    `${JSON.stringify(
+      {
+        mode: 'plan_only',
+        directory,
+        generatedAt: localSummary.generatedAt,
+        sourceRows: nationalOrganizationSpineInventory.sourceRows,
+        canonicalizeRequested: canonicalize,
+        nextCommand: 'pnpm spine:import -- --apply --canonicalize',
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  process.exit(0);
+}
+
+const databaseUrl = process.env['DATABASE_URL'];
+if (databaseUrl === undefined || databaseUrl.trim().length === 0) {
+  throw new Error(
+    '--apply requires DATABASE_URL; the importer never selects a database implicitly',
+  );
+}
+
+const database = new PostgresClient({
+  connectionString: databaseUrl,
+  max: 2,
+  statementTimeoutMs: 120_000,
+});
+try {
+  await database.query('select 1 from organization_spine_records limit 1');
+  const ingestion = new IngestionRepository(database);
+  const repository = new OrganizationSpineImportRepository(database);
+  const sourcePolicies = new SourcePolicyRegistry(
+    await new SourcePolicyRepository(database).list(),
+  );
+  const versionCache = new Map<string, SourceDocumentVersionRef>();
+  let staged = 0;
+
+  staged += await stageFile('organization-source-records.ndjson', (record) =>
+    record.classificationReviewReason === null &&
+    record.organizationTypeCode !== null &&
+    record.governmentLevelCode !== null &&
+    record.sectorCode !== null &&
+    record.identifiers.length > 0
+      ? 'ready_to_import'
+      : 'classification_hold',
+  );
+  staged += await stageFile('organization-overlays.ndjson', () => 'overlay_hold');
+  staged += await stageFile('reconciliation-required.ndjson', () => 'reconciliation_hold');
+
+  let imported = 0;
+  if (canonicalize) {
+    for (;;) {
+      const count = await repository.canonicalizeReady(5_000);
+      imported += count;
+      if (count === 0) break;
+      process.stdout.write(`canonicalized ${imported.toLocaleString()} ready rows\n`);
+    }
+  }
+  process.stdout.write(
+    `${JSON.stringify({ mode: 'applied', staged, imported, database: await repository.summary() }, null, 2)}\n`,
+  );
+
+  async function stageFile(
+    filename: string,
+    statusFor: (record: SpineSourceRecord) => OrganizationSpineRecordStatus,
+  ): Promise<number> {
+    const path = join(directory, filename);
+    if (!existsSync(path)) throw new Error(`organization spine artifact is missing: ${path}`);
+    const contentHash = await sha256File(path);
+    const input = createInterface({ input: createReadStream(path), crlfDelay: Infinity });
+    let batch: StageOrganizationSpineRecord[] = [];
+    let count = 0;
+    for await (const line of input) {
+      if (line.trim().length === 0) continue;
+      const record = JSON.parse(line) as SpineSourceRecord;
+      const version = await sourceVersion(record.sourceKey, filename, contentHash);
+      batch.push({
+        sourceKey: record.sourceKey,
+        sourceRecordKey: record.sourceRecordKey,
+        name: record.name,
+        nameNormalized: record.nameNormalized,
+        organizationTypeCode: record.organizationTypeCode,
+        governmentLevelCode: record.governmentLevelCode,
+        sectorCode: record.sectorCode,
+        classificationReviewReason: record.classificationReviewReason,
+        websiteUrl: record.website?.canonicalUrl ?? null,
+        primaryDomain: record.website?.primaryDomain ?? null,
+        identifiers: record.identifiers,
+        parentIdentifiers: record.parentIdentifiers,
+        location: { ...record.location },
+        attributes: record.attributes,
+        status: statusFor(record),
+        sourceDocumentId: version.documentId,
+        sourceDocumentVersionId: version.versionId,
+        sourceEffectiveDate: record.sourceEffectiveDate,
+        observedAt: localSummary.generatedAt,
+      });
+      if (batch.length === 2_000) {
+        count += await repository.stage(batch);
+        batch = [];
+        if (count % 10_000 === 0)
+          process.stdout.write(`${filename}: staged ${count.toLocaleString()}\n`);
+      }
+    }
+    count += await repository.stage(batch);
+    process.stdout.write(`${filename}: staged ${count.toLocaleString()}\n`);
+    return count;
+  }
+
+  async function sourceVersion(
+    sourceKey: string,
+    filename: string,
+    contentHash: string,
+  ): Promise<SourceDocumentVersionRef> {
+    const cached = versionCache.get(`${sourceKey}:${filename}`);
+    if (cached !== undefined) return cached;
+    const source = sourceInventory(sourceKey);
+    const canonicalUrl = canonicalizeUrl(source.catalogUrl);
+    const domain = canonicalUrl === null ? null : domainOf(canonicalUrl);
+    if (canonicalUrl === null || domain === null) {
+      throw new Error(`source inventory has an unusable catalog URL: ${source.key}`);
+    }
+    const policy = sourcePolicies.assertCollectable(canonicalUrl, 'production');
+    const version = await ingestion.recordSourceDocument({
+      url: source.catalogUrl,
+      urlCanonical: canonicalUrl,
+      urlHash: urlHash(canonicalUrl),
+      domain,
+      sourceTypeCode: 'bulk_dataset',
+      httpStatus: 200,
+      contentHash,
+      contentType: 'application/x-ndjson',
+      storageKey: `national-spine/${basename(filename)}`,
+      robotsAllowed: null,
+      robotsPolicyNote: 'Imported from a locally preserved official bulk release.',
+      sourcePolicyId: policy.policyId,
+      crawlRunId: null,
+      retrievedAt: localSummary.generatedAt,
+    });
+    versionCache.set(`${sourceKey}:${filename}`, version);
+    return version;
+  }
+} finally {
+  await database.close();
+}
+
+function sourceInventory(sourceKey: string): OrganizationSpineInventorySource {
+  const exact = nationalOrganizationSpineInventory.sources.find(
+    (source) => source.key === sourceKey,
+  );
+  if (exact !== undefined) return exact;
+  const prefix = nationalOrganizationSpineInventory.sources.find((source) =>
+    sourceKey.startsWith(source.key.split(':')[0] as string),
+  );
+  if (prefix !== undefined) return prefix;
+  throw new Error(`source key is absent from the reviewed inventory: ${sourceKey}`);
+}
+
+async function sha256File(path: string): Promise<string> {
+  const hash = createHash('sha256');
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest('hex');
+}

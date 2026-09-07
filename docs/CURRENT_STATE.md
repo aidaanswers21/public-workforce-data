@@ -9,7 +9,7 @@ production crawl run.
 | Capability                                                                                                  | Status                                |
 | ----------------------------------------------------------------------------------------------------------- | ------------------------------------- |
 | Monorepo, strict TypeScript, lint, typecheck (sources and tests), build, tests                              | Working                               |
-| Schema: 50 tables in the local harness, 14 reference tables, enums, constraints, triggers                   | Working, tested against real Postgres |
+| Schema: 52 tables in the local harness, 14 reference tables, enums, constraints, triggers                   | Working, tested against real Postgres |
 | Migrations up and down, checksum guard                                                                      | Working                               |
 | Controlled reference data seeded from the composed taxonomy                                                 | Working                               |
 | Sector packs: education, state and local government, federal government                                     | Working                               |
@@ -35,9 +35,9 @@ production crawl run.
 | CSV export with 33 fields and independent channel suppression accounting                                    | Working                               |
 | Texas education jurisdiction configuration                                                                  | Written, sources not yet verified     |
 | Discovery worker                                                                                            | Working, not run against real sites   |
-| National bulk-file organizer and exact-identifier website overlays                                          | Working locally, no production import |
+| National bulk-file organizer, durable staging importer and exact-identifier website overlays                | Working locally, no production import |
 | Missing-website queue and evidence-backed candidate review                                                  | Working locally, no live search run   |
-| Private local/hosted operator console, admin inspection CLI and read-only API                               | Working, hosted runtime configured    |
+| Private local/hosted operator console with separate staged and hosted organization-spine coverage           | Working locally, deploy pending       |
 | Collection projects, active scope controls, approved-batch completion, durable leased scheduler jobs        | Working, no live batch run            |
 | Long-lived approved-job daemon and Render web/worker Blueprint                                              | Working, manual deploys configured    |
 | Cross-worker one-active-job-per-domain guard, page and error batch stops                                    | Working                               |
@@ -68,15 +68,12 @@ production crawl run.
 - **Only the education sector has an extension table.** State, local and federal
   packs contribute types, roles, titles and vocabulary, and none of them needs
   attributes the neutral core does not already carry.
-- **Only one executable collection jurisdiction is configured.** Texas
-  education. National bulk sources are represented by a separate organization
-  spine organizer because one source spans several government levels and is not
-  itself a crawl jurisdiction. The project builder
-  shows the full government-level spine and uses taxonomy-backed dropdowns and
-  organization-type choices, but it does not claim an unconfigured scope is
-  executable. State, county,
-  municipal, special-district and federal jurisdictions are proven by
-  constructions in `tests/extensibility.test.ts`, not by shipped configurations.
+- **National Census collection scopes are configured but not loaded in
+  production.** Eight configurations cover the source-supported county,
+  municipal, township and education combinations in the organized release.
+  The project builder can narrow a national configuration by state. Federal and
+  state general-government rows remain held until their authoritative hierarchy
+  or source is reconciled; the console does not present those as ready.
 - **No browser rendering.** `requiresBrowser` is the seam; no adapter sets it.
 - **No AI extraction.** The contract for it is in `BACKLOG.md`, unimplemented.
 - **No raw response archiving.** `source_documents.storage_key` exists; the R2
@@ -116,7 +113,8 @@ The tests that carry the generalization and persistence guarantees:
 
 1. Review the organized national-spine summary and unresolved classifications.
 2. Confirm the exact official artifacts intended for a production import.
-3. Approve and run a controlled production organization import.
+3. Apply migrations 0016 and 0017, then approve and run the controlled
+   production organization import.
 4. Review and approve policies for any source that will receive live requests.
 5. Resolve missing organization websites in bulk-first order.
 6. Run directory discovery over a small approved sample of organization sites.

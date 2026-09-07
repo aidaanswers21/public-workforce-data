@@ -25,9 +25,18 @@ const template = {
   ],
   notes: [],
 };
+const nationalTemplate = {
+  ...template,
+  key: 'fixture-national-scope',
+  name: 'Fixture national scope',
+  governmentLevelCode: 'county',
+  jurisdictionCode: 'fixture-national-scope',
+  stateCode: null,
+};
 const projectBuilderCatalog = {
   governmentLevels: [
     { code: 'state', name: 'State', description: 'State or territorial government.' },
+    { code: 'county', name: 'County', description: 'County or equivalent government.' },
   ],
   sectors: [
     {
@@ -45,6 +54,37 @@ const projectBuilderCatalog = {
       defaultSectorCode: 'general_government',
     },
   ],
+  states: [
+    { code: 'CO', name: 'Colorado', description: 'State location filter.' },
+    { code: 'TX', name: 'Texas', description: 'State location filter.' },
+  ],
+};
+const organizationSpineInventory = {
+  generatedAt: '2026-09-07T18:31:42.955Z',
+  sourceRows: 231_016,
+  geographicAreas: 85_415,
+  relationships: 107_981,
+  publishedWebsiteValues: 138_205,
+  missingWebsiteQueue: 90_003,
+  exactWebsiteOverlays: 394,
+  classificationWork: 167_561,
+  reconciliationRequired: 472,
+  sources: [
+    {
+      key: 'fixture-national-directory',
+      name: 'Fixture national directory',
+      catalogUrl: 'https://example.test/catalog',
+      records: 231_016,
+      publishedWebsites: 138_205,
+      missingWebsites: 92_811,
+    },
+  ],
+  geographies: [{ code: 'state', name: 'States', records: 52 }],
+  states: [
+    { code: 'CO', name: 'Colorado' },
+    { code: 'TX', name: 'Texas' },
+  ],
+  notes: ['Fixture source rows remain separate until exact identifiers match.'],
 };
 
 afterEach(async () => {
@@ -169,6 +209,27 @@ describe('local admin server', () => {
     expect(await asset.text()).toContain("addEventListener('drop'");
   });
 
+  it('shows staged inventory separately from hosted records and exposes queue filters', async () => {
+    const { origin } = await start();
+    const cookie = await login(origin);
+    const page = await fetch(`${origin}/spine?stateCode=TX`, { headers: { cookie } });
+    const html = await page.text();
+
+    expect(page.status).toBe(200);
+    expect(html).toContain('Organization spine');
+    expect(html).toContain('231,016');
+    expect(html).toContain('Staged is not loaded');
+    expect(html).toContain('Hosted database staging');
+    expect(html).toContain('Not loaded');
+    expect(html).toContain('Fixture national directory');
+    expect(html).toContain('name="governmentLevelCode"');
+    expect(html).toContain('name="sectorCode"');
+    expect(html).toContain('name="stateCode"');
+    expect(html).toContain('<option value="TX" selected>Texas</option>');
+    expect(html).toContain('name="organizationTypeCode"');
+    expect(html).toContain('have not been imported into this database yet');
+  });
+
   it('rejects a scope combination without a matching reviewed configuration', async () => {
     const { origin } = await start();
     const cookie = await login(origin);
@@ -190,6 +251,35 @@ describe('local admin server', () => {
 
     expect(response.status).toBe(400);
     expect(await response.text()).toContain('need a matching reviewed jurisdiction configuration');
+  });
+
+  it('creates a state-filtered project from a national source configuration', async () => {
+    const { origin } = await start();
+    const cookie = await login(origin);
+    const response = await fetch(`${origin}/projects`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        template: 'fixture-national-scope',
+        stateCode: 'CO',
+        governmentLevelCode: 'county',
+        sectorCode: 'general_government',
+        name: 'Colorado county collection',
+        workMode: 'approved_batch_complete',
+        batchSize: '100',
+        maxPagesPerTarget: '10',
+        maxPagesPerBatch: '1000',
+        maxErrorsPerBatch: '10',
+      }),
+    });
+
+    expect(response.status).toBe(303);
+    const project = await databases[0]?.query<{ state_code: string }>(
+      'select state_code from collection_projects where name = $1',
+      ['Colorado county collection'],
+    );
+    expect(project?.rows[0]?.state_code).toBe('CO');
   });
 
   it('records and separately approves a reviewed source policy', async () => {
@@ -347,8 +437,9 @@ async function start(
     email: 'operator@example.test',
     password: 'local-password',
     sessionSecret: 'test-secret-with-enough-entropy-for-the-test-suite',
-    projectTemplates: [template],
+    projectTemplates: [template, nationalTemplate],
     projectBuilderCatalog,
+    organizationSpineInventory,
     ...overrides,
   });
   servers.push(server);

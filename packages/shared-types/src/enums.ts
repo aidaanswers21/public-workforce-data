@@ -179,6 +179,16 @@ export const WEBSITE_RESOLUTION_METHODS = [
 ] as const;
 export type WebsiteResolutionMethod = (typeof WEBSITE_RESOLUTION_METHODS)[number];
 
+export const ORGANIZATION_SPINE_RECORD_STATUSES = [
+  'ready_to_import',
+  'imported',
+  'classification_hold',
+  'overlay_hold',
+  'reconciliation_hold',
+  'failed',
+] as const;
+export type OrganizationSpineRecordStatus = (typeof ORGANIZATION_SPINE_RECORD_STATUSES)[number];
+
 export const ASSIGNMENT_STATUSES = ['active', 'inactive', 'historical', 'unknown'] as const;
 export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number];
 

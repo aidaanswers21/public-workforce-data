@@ -26,6 +26,7 @@
     "@public-workforce/adapter-generic-json": "workspace:*",
     "@public-workforce/jurisdiction-kit": "workspace:*",
     "@public-workforce/jurisdiction-texas-education": "workspace:*",
+    "@public-workforce/jurisdiction-us-national-spine": "workspace:*",
     "@public-workforce/taxonomy": "workspace:*",
     "@public-workforce/sector-education": "workspace:*",
     "@public-workforce/sector-state-local": "workspace:*",
