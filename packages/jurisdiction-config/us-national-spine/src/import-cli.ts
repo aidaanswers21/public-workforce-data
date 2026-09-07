@@ -17,7 +17,7 @@ import {
   nationalOrganizationSpineInventory,
   type OrganizationSpineInventorySource,
 } from './inventory.js';
-import type { SpineSourceRecord } from './index.js';
+import { durableSpineSourceRecordKey, type SpineSourceRecord } from './index.js';
 
 const argumentsSet = new Set(process.argv.slice(2));
 const apply = argumentsSet.has('--apply');
@@ -111,7 +111,7 @@ try {
       const version = await sourceVersion(record.sourceKey, filename, contentHash);
       batch.push({
         sourceKey: record.sourceKey,
-        sourceRecordKey: record.sourceRecordKey,
+        sourceRecordKey: durableSpineSourceRecordKey(record),
         name: record.name,
         nameNormalized: record.nameNormalized,
         organizationTypeCode: record.organizationTypeCode,

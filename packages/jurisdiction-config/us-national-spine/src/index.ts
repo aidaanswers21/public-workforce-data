@@ -41,6 +41,17 @@ export interface SpineSourceRecord {
   attributes: Record<string, string | number | boolean | null>;
 }
 
+/** Preserve each published USA.gov alias while retaining its official node ID. */
+export function durableSpineSourceRecordKey(
+  record: Pick<SpineSourceRecord, 'sourceKey' | 'sourceRecordKey' | 'nameNormalized'>,
+): string {
+  if (record.sourceKey !== 'usagov-agency-index-2026') return record.sourceRecordKey;
+  const aliasSuffix = `:${record.nameNormalized}`;
+  return record.sourceRecordKey.endsWith(aliasSuffix)
+    ? record.sourceRecordKey
+    : `${record.sourceRecordKey}${aliasSuffix}`;
+}
+
 export interface WebsiteResolutionQueueRecord {
   sourceKey: string;
   sourceRecordKey: string;

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { Readable } from 'node:stream';
 import { parseDelimitedObjects } from '@public-workforce/jurisdiction-kit';
 import {
+  durableSpineSourceRecordKey,
   nationalOrganizationSpineInventory,
   nationalSpineJurisdictions,
   ncesLeaRecord,
@@ -54,6 +55,21 @@ describe('national spine source normalization', () => {
       primaryDomain: 'example.gov',
     });
     expect(publishedWebsite('')).toBeNull();
+  });
+
+  it('keeps distinct USA.gov aliases for the same official agency node', () => {
+    const alias = {
+      sourceKey: 'usagov-agency-index-2026',
+      sourceRecordKey: '1507',
+      nameNormalized: 'department-of-agriculture-usda',
+    };
+    expect(durableSpineSourceRecordKey(alias)).toBe('1507:department-of-agriculture-usda');
+    expect(
+      durableSpineSourceRecordKey({
+        ...alias,
+        sourceRecordKey: '1507:department-of-agriculture-usda',
+      }),
+    ).toBe('1507:department-of-agriculture-usda');
   });
 
   it('keeps NCES hierarchy, addresses and published aggregate metrics organization-scoped', () => {

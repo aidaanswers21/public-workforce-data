@@ -425,13 +425,14 @@ async function organizeUsaGov(): Promise<void> {
       if (nodeId === undefined || button === undefined) continue;
       const name = textContent(button);
       if (name.length === 0) continue;
+      const nameNormalized = normalizeSimpleName(name);
       const record: SpineSourceRecord = {
         schemaVersion: 1,
         sourceKey: 'usagov-agency-index-2026',
-        sourceRecordKey: nodeId,
+        sourceRecordKey: `${nodeId}:${nameNormalized}`,
         sourceEffectiveDate: null,
         name,
-        nameNormalized: normalizeSimpleName(name),
+        nameNormalized,
         organizationTypeCode: 'federal_agency',
         governmentLevelCode: 'federal',
         sectorCode: 'general_government',
