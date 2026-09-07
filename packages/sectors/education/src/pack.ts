@@ -27,6 +27,41 @@ export const educationSectorPack: SectorPack = {
    */
   appliesTo: { sectorCodes: ['education'], governmentLevelCodes: null },
 
+  explorerPresets: [
+    {
+      key: 'schools',
+      name: 'Schools',
+      singularName: 'School',
+      description:
+        'Explore official school directory records, enrollment, staffing, locations, websites, and provenance.',
+      organizationTypeCodes: ['school'],
+      sectorCodes: ['education'],
+      attributeColumns: [
+        { key: 'enrollment', label: 'Students enrolled', format: 'integer' },
+        { key: 'teacherFte', label: 'Teacher FTE', format: 'decimal' },
+        { key: 'totalStaffFte', label: 'Total staff FTE', format: 'decimal' },
+        { key: 'lowGrade', label: 'Low grade', format: 'text' },
+        { key: 'highGrade', label: 'High grade', format: 'text' },
+        { key: 'schoolYear', label: 'School year', format: 'text' },
+      ],
+    },
+    {
+      key: 'school-districts',
+      name: 'School districts',
+      singularName: 'School district',
+      description:
+        'Explore official district directory records, enrollment, staffing, locations, websites, and provenance.',
+      organizationTypeCodes: ['school_district'],
+      sectorCodes: ['education'],
+      attributeColumns: [
+        { key: 'enrollment', label: 'Students enrolled', format: 'integer' },
+        { key: 'teacherFte', label: 'Teacher FTE', format: 'decimal' },
+        { key: 'totalStaffFte', label: 'Total staff FTE', format: 'decimal' },
+        { key: 'schoolYear', label: 'School year', format: 'text' },
+      ],
+    },
+  ],
+
   /**
    * Education organization types.
    *

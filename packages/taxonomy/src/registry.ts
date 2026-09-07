@@ -55,6 +55,23 @@ export interface TaxonomyScope {
   governmentLevelCode: string | null;
 }
 
+export interface ExplorerAttributeColumn {
+  key: string;
+  label: string;
+  format: 'integer' | 'decimal' | 'text';
+}
+
+/** A sector-owned view over neutral, provenance-bearing organization source records. */
+export interface OrganizationExplorerPreset {
+  key: string;
+  name: string;
+  singularName: string;
+  description: string;
+  organizationTypeCodes: readonly string[];
+  sectorCodes: readonly string[];
+  attributeColumns: readonly ExplorerAttributeColumn[];
+}
+
 /**
  * What one public-sector vertical contributes to the shared vocabulary.
  *
@@ -92,6 +109,7 @@ export interface SectorPack {
   titleAbbreviations?: readonly TitleAbbreviation[];
   specialtyPatterns?: readonly RegExp[];
   vocabulary?: Partial<DirectoryVocabulary>;
+  explorerPresets?: readonly OrganizationExplorerPreset[];
 }
 
 /** Raised when two packs, or a pack and the base, define the same code. */
@@ -128,6 +146,7 @@ export class Taxonomy {
   readonly specialtyPatterns: readonly RegExp[];
   readonly vocabulary: DirectoryVocabulary;
   readonly packs: readonly SectorPack[];
+  readonly explorerPresets: readonly OrganizationExplorerPreset[];
 
   private readonly scopedTitleRules: readonly ScopedRuleSource[];
   private readonly scopedCache = new Map<string, ScopedTaxonomy>();
@@ -137,6 +156,12 @@ export class Taxonomy {
 
   constructor(packs: readonly SectorPack[] = []) {
     this.packs = packs;
+    this.explorerPresets = packs.flatMap((pack) => pack.explorerPresets ?? []);
+
+    const presetKeys = this.explorerPresets.map((preset) => preset.key);
+    if (new Set(presetKeys).size !== presetKeys.length) {
+      throw new ReferenceCollisionError(['organization explorer preset keys must be unique']);
+    }
 
     const collisions: string[] = [];
     const merge = <T extends ReferenceRow>(

@@ -54,6 +54,19 @@ const projectBuilderCatalog = {
       defaultSectorCode: 'general_government',
     },
   ],
+  explorerPresets: [
+    {
+      key: 'fixture-organizations',
+      name: 'Fixture organizations',
+      singularName: 'Fixture organization',
+      description: 'Official fixture organization records and published attributes.',
+      organizationTypeCodes: ['state_department'],
+      sectorCodes: ['general_government'],
+      attributeColumns: [
+        { key: 'populationServed', label: 'Population served', format: 'integer' as const },
+      ],
+    },
+  ],
   states: [
     { code: 'CO', name: 'Colorado', description: 'State location filter.' },
     { code: 'TX', name: 'Texas', description: 'State location filter.' },
@@ -228,6 +241,94 @@ describe('local admin server', () => {
     expect(html).toContain('<option value="TX" selected>Texas</option>');
     expect(html).toContain('name="organizationTypeCode"');
     expect(html).toContain('have not been imported into this database yet');
+  });
+
+  it('browses source-record profiles and adds bulk selections without releasing work', async () => {
+    const { origin } = await start();
+    const cookie = await login(origin);
+    const database = databases[0];
+    const source = await database?.query<{ id: string }>(
+      `insert into source_documents (
+         url, url_canonical, url_hash, domain, source_type_code
+       ) values (
+         'https://example.test/release', 'https://example.test/release',
+         'admin-explorer-release', 'example.test', 'bulk_dataset'
+       ) returning id`,
+    );
+    const version = await database?.query<{ id: string }>(
+      `insert into source_document_versions (
+         source_document_id, version, content_hash, http_status, content_type
+       ) values ($1,1,'admin-explorer-content',200,'application/json') returning id`,
+      [source?.rows[0]?.id],
+    );
+    const record = await database?.query<{ id: string }>(
+      `insert into organization_spine_records (
+         source_key, source_record_key, name, name_normalized,
+         organization_type_code, sector_code, classification_review_reason,
+         website_url, identifiers, location, attributes, status,
+         source_document_id, source_document_version_id, source_effective_date
+       ) values (
+         'fixture-release','official-001','Fixture Public Body','fixture public body',
+         'state_department','general_government','Level requires authoritative review.',
+         'https://body.example.test','[{"systemCode":"fixture_id","value":"official-001"}]',
+         '{"addressLine1":"100 Public Way","city":"Example","stateCode":"TX","postalCode":"70000"}',
+         '{"populationServed":12345}','classification_hold',$1,$2,'2026-09-01'
+       ) returning id`,
+      [source?.rows[0]?.id, version?.rows[0]?.id],
+    );
+
+    const list = await fetch(`${origin}/organization-records?preset=fixture-organizations`, {
+      headers: { cookie },
+    });
+    const listHtml = await list.text();
+    expect(list.status).toBe(200);
+    expect(listHtml).toContain('Fixture organizations explorer');
+    expect(listHtml).toContain('12,345');
+    expect(listHtml).toContain('Awaiting classification');
+    expect(listHtml).toContain(`/organization-records/${record?.rows[0]?.id}`);
+
+    const profile = await fetch(`${origin}/organization-records/${record?.rows[0]?.id}`, {
+      headers: { cookie },
+    });
+    const profileHtml = await profile.text();
+    expect(profile.status).toBe(200);
+    expect(profileHtml).toContain('100 Public Way');
+    expect(profileHtml).toContain('Where this came from');
+
+    const projectCreated = await fetch(`${origin}/projects`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        template: 'fixture-scope',
+        stateCode: 'TX',
+        governmentLevelCode: 'state',
+        sectorCode: 'general_government',
+        name: 'Source record selection',
+        batchSize: '5',
+        maxPagesPerTarget: '5',
+        maxPagesPerBatch: '20',
+        maxErrorsPerBatch: '2',
+      }),
+    });
+    const projectId = projectCreated.headers.get('location')?.split('/')[2]?.split('?')[0] ?? '';
+    const selected = await fetch(`${origin}/organization-records/projects`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        projectId,
+        recordIds: record?.rows[0]?.id ?? '',
+        preset: 'fixture-organizations',
+      }),
+    });
+    expect(selected.status).toBe(303);
+    expect(decodeURIComponent(selected.headers.get('location') ?? '')).toContain(
+      '1 awaiting classification',
+    );
+    expect(await database?.count('collection_project_source_records')).toBe(1);
+    expect(await database?.count('collection_batches')).toBe(0);
+    expect(await database?.count('collection_jobs')).toBe(0);
   });
 
   it('rejects a scope combination without a matching reviewed configuration', async () => {

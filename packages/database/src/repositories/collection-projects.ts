@@ -60,6 +60,9 @@ export interface CollectionProjectSummary {
   maxErrorsPerBatch: number;
   status: CollectionProjectStatus;
   organizationsSelected: number;
+  sourceRecordsSelected: number;
+  sourceRecordsReady: number;
+  sourceRecordsHeld: number;
   websitesAvailable: number;
   directoriesReady: number;
   targetsCrawled: number;
@@ -686,6 +689,14 @@ const PROJECT_SUMMARY_SQL = `
 select p.*,
        (select count(*)::int from collection_project_organizations po
         where po.project_id = p.id) as organizations_selected,
+       (select count(*)::int from collection_project_source_records ps
+        where ps.project_id = p.id) as source_records_selected,
+       (select count(*)::int from collection_project_source_records ps
+        join organization_spine_records r on r.id = ps.source_record_id
+        where ps.project_id = p.id and r.organization_id is not null) as source_records_ready,
+       (select count(*)::int from collection_project_source_records ps
+        join organization_spine_records r on r.id = ps.source_record_id
+        where ps.project_id = p.id and r.organization_id is null) as source_records_held,
        (select count(*)::int from collection_project_organizations po
         join organizations o on o.id = po.organization_id
         where po.project_id = p.id and o.website_url is not null) as websites_available,
@@ -899,6 +910,9 @@ function mapProject(row: Record<string, unknown>): CollectionProjectSummary {
     maxErrorsPerBatch: Number(row['max_errors_per_batch']),
     status: String(row['status']) as CollectionProjectStatus,
     organizationsSelected: Number(row['organizations_selected'] ?? 0),
+    sourceRecordsSelected: Number(row['source_records_selected'] ?? 0),
+    sourceRecordsReady: Number(row['source_records_ready'] ?? 0),
+    sourceRecordsHeld: Number(row['source_records_held'] ?? 0),
     websitesAvailable: Number(row['websites_available'] ?? 0),
     directoriesReady: Number(row['directories_ready'] ?? 0),
     targetsCrawled: Number(row['targets_crawled'] ?? 0),

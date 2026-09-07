@@ -13,6 +13,7 @@ export * from './repositories/exports.js';
 export * from './repositories/export-purposes.js';
 export * from './repositories/website-resolution.js';
 export * from './repositories/spine-import.js';
+export * from './repositories/organization-records.js';
 export * from './pg.js';
 export * from './pglite.js';
 export * from './testing.js';

@@ -54,6 +54,21 @@ and organization type. The same state list is available to national collection
 project configurations, so a national bulk source can be narrowed to one state
 without pretending it is a different source.
 
+The **Explore organizations** page reads the provenance-bearing source records
+directly, including records that are correctly held from canonical import. Its
+views are supplied by sector packs. The education pack contributes school and
+district views with enrollment, teacher FTE, total staff FTE, grade span and
+school year columns. Each row opens a profile with its location, website,
+identifiers, complete published attributes and immutable source version.
+
+An operator may select up to 250 visible records at once and add them to a
+collection project. Migration `0018_collection_project_source_records.sql`
+stores that selection separately from canonical project organizations. If a
+selected source record already has a canonical organization ID, it is also
+added to the project's crawl-ready organization scope. If it is still on a
+classification hold, the project reports it as held. Selection never creates a
+target, approves a batch or contacts a website.
+
 ## Durable import
 
 Migration `0017_organization_spine_staging.sql` adds a default-deny staging

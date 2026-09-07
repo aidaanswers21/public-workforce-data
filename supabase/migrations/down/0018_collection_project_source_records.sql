@@ -1,0 +1,2 @@
+drop table collection_project_source_records;
+drop index organization_spine_records_explorer_idx;
