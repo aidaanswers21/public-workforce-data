@@ -24,6 +24,10 @@ The generated files are operational staging data under `.context/` and are not
 committed. Source files are also not committed. The code, mappings, tests and
 documentation are the reproducible asset.
 
+USA.gov A-Z aliases use the stable official node ID plus the published normalized
+name as the source-record key. This preserves each published alias without changing
+the official agency identifier.
+
 Run the local organizer after placing the verified downloads under
 `.context/national-spine/`:
 
