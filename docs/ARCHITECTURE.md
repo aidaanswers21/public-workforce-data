@@ -11,7 +11,7 @@ this repository that sends an email.
 ## Shape
 
 ```
-apps/admin           local console for inspection and collection-project control
+apps/admin           private local or hosted console for inspection and project control
 apps/api             authenticated, read-only HTTP API over coverage and records
 
 services/

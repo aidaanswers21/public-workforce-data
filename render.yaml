@@ -1,4 +1,30 @@
 services:
+  - type: web
+    name: public-workforce-console
+    runtime: node
+    region: oregon
+    plan: starter
+    branch: main
+    autoDeployTrigger: off
+    buildCommand: corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm build
+    startCommand: pnpm admin:serve
+    healthCheckPath: /health
+    maxShutdownDelaySeconds: 30
+    envVars:
+      - key: NODE_VERSION
+        value: '22.23.2'
+      - key: NODE_EXTRA_CA_CERTS
+        value: /opt/render/project/src/config/certificates/supabase-prod-ca-2021.crt
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: ADMIN_SESSION_SECRET
+        sync: false
+      - key: LOG_LEVEL
+        value: info
   - type: worker
     name: public-workforce-collector
     runtime: node
@@ -12,6 +38,8 @@ services:
     envVars:
       - key: NODE_VERSION
         value: '22.23.2'
+      - key: NODE_EXTRA_CA_CERTS
+        value: /opt/render/project/src/config/certificates/supabase-prod-ca-2021.crt
       - key: DATABASE_URL
         sync: false
       - key: CRAWLER_USER_AGENT

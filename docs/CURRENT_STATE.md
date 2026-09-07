@@ -1,6 +1,6 @@
 # Current state
 
-Last updated: 2026-09-04. Phase: foundation generalized across six levels of
+Last updated: 2026-09-07. Phase: foundation generalized across six levels of
 government, then corrected against an independent architecture review. No
 production crawl run.
 
@@ -35,9 +35,9 @@ production crawl run.
 | CSV export with 33 fields and independent channel suppression accounting                                    | Working                               |
 | Texas education jurisdiction configuration                                                                  | Written, sources not yet verified     |
 | Discovery worker                                                                                            | Working, not run against real sites   |
-| Local authenticated operator console, admin inspection CLI and read-only API                                | Working locally                       |
+| Private local/hosted operator console, admin inspection CLI and read-only API                               | Working, hosted runtime configured    |
 | Collection projects, active scope controls, approved-batch completion, durable leased scheduler jobs        | Working, no live batch run            |
-| Long-lived approved-job daemon and Render worker Blueprint                                                  | Written locally, not deployed         |
+| Long-lived approved-job daemon and Render web/worker Blueprint                                              | Working, manual deploys configured    |
 | Cross-worker one-active-job-per-domain guard, page and error batch stops                                    | Working                               |
 | Persistent embedded fixture database                                                                        | Working: `pnpm local:setup`           |
 | Fixture crawl end to end                                                                                    | Working: `pnpm crawl:fixture`         |
@@ -76,10 +76,11 @@ production crawl run.
 - **No AI extraction.** The contract for it is in `BACKLOG.md`, unimplemented.
 - **No raw response archiving.** `source_documents.storage_key` exists; the R2
   uploader does not.
-- **No production admin application.** The browser console is a local-only
-  fixture review surface. It can define collection projects and approve finite
-  batches, but it does not authenticate `apps/api`, approve source policies, or
-  host a continuously running production worker.
+- **No public or multi-user admin application.** The browser console is a
+  private single-operator service with its own hashed-password login. It can
+  define collection projects, record source-policy decisions, and approve
+  finite batches. It does not authenticate `apps/api`, grant approval without a
+  human, or run the continuously operating worker inside the web process.
 - **No n8n wiring.**
 
 ## Test coverage

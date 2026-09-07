@@ -83,11 +83,17 @@ batches, but it cannot create or approve a batch and it still evaluates source
 policy before claiming each target. `WORKER_POLL_INTERVAL_MS` controls the idle
 poll interval from 1 to 60,000 milliseconds.
 
-The Render Blueprint runs one daemon in Oregon, disables automatic deploys, and
-uses a 300-second graceful shutdown window. `DATABASE_URL`,
-`CRAWLER_USER_AGENT`, and `CRAWLER_CONTACT_URL` remain dashboard-managed
-secrets. A `SIGINT` or `SIGTERM` stops new claims; the active job completes and
-the database pool closes before the process exits.
+The Render Blueprint runs a private operator web service and one daemon in
+Oregon on Starter instances, with automatic deploys disabled. The web service
+has a 30-second shutdown window and `/health` returns success only when its
+database connection is ready. The worker uses a 300-second graceful shutdown
+window. `DATABASE_URL`, admin credentials, `CRAWLER_USER_AGENT`, and
+`CRAWLER_CONTACT_URL` remain dashboard-managed secrets. Both services use
+Supabase's published production root certificate from
+`config/certificates/supabase-prod-ca-2021.crt` so the session-pool connections
+retain full certificate and hostname verification. A worker `SIGINT` or
+`SIGTERM` stops new claims; the active job completes and the database pool
+closes before the process exits.
 
 The worker database pool defaults to 10 connections. The dedicated Supabase
 project's session pool admitted 12 simultaneous worker connections and refused
@@ -100,9 +106,33 @@ human approval for that exact batch every time, in addition to cleared source
 policies and all remaining production blockers. Do not use it for local fixture
 testing.
 
-The browser console remains a local review surface, not production
-authentication. It is separate from the read API authentication callback and
-does not make the local console a public service.
+### Hosted operator console
+
+The hosted console runs the same neutral project and policy workflows against
+managed PostgreSQL. It is a private single-operator application, not the read
+API's authentication system. Render terminates HTTPS and the application:
+
+- refuses to start without `DATABASE_URL`, `ADMIN_EMAIL`,
+  `ADMIN_PASSWORD_HASH`, `ADMIN_SESSION_SECRET`, and an HTTPS public origin;
+- accepts a scrypt password hash, never a plaintext hosted password;
+- signs an eight-hour `HttpOnly`, `Secure`, `SameSite=Strict` session cookie;
+- checks the browser `Origin` on every state-changing request;
+- throttles repeated failed logins and sends HSTS and restrictive browser
+  security headers; and
+- exposes only database readiness at `/health`, with no records or credentials.
+
+`RENDER_EXTERNAL_URL` supplies the expected origin by default.
+`ADMIN_PUBLIC_ORIGIN` is only needed for a later custom domain. Use a dedicated
+database login for the console and grant only the reads and project/source-policy
+writes its repositories require. Do not reuse the worker login: the worker and
+console credentials must be independently revocable.
+
+The Starter plan prevents free-tier idle suspension. Render health checks and
+process supervision recover a failed process, but they do not repair a bad
+release or an unavailable database. Keep deploys manual, verify `/health` after
+each release, and use Render's previous deployment rollback if a new release
+fails. Rotating a database password requires updating every service that uses
+that login before redeploying it.
 
 ## See it work
 

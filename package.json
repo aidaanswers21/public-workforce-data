@@ -28,6 +28,7 @@
     "admin": "tsx apps/admin/src/cli.ts",
     "local:setup": "tsx services/crawler-worker/src/cli/fixture-crawl.ts --persistent",
     "local:start": "tsx apps/admin/src/server.ts",
+    "admin:serve": "node apps/admin/dist/server.js",
     "collection:work": "tsx services/crawler-worker/src/cli/collection-worker.ts",
     "collection:daemon": "node services/crawler-worker/dist/cli/collection-worker.js --daemon"
   },
