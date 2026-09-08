@@ -71,6 +71,11 @@ operator-set job count or continue until one specifically approved batch is
 empty. Continue-until-complete does not cross into another batch or remove the
 safety circuit breakers.
 
+The private console also has an **Exports** area. A signed-in operator records a
+specific approved purpose and downloads a CSV for one collection project. The
+download goes through both suppression checks and records its checksum and
+audit event. It does not send outreach.
+
 The schema and migrations target PostgreSQL 15+ and Supabase. The browser
 console can use the gitignored embedded database in `storage/` for local fixture
 work, or run as a private hosted service with a deliberately configured remote
@@ -115,16 +120,18 @@ docs/        the documentation set below
 ## Status
 
 Foundation complete and generalized across six levels of government, then
-corrected against an independent architecture review. **No production crawl has
-been run**, and no official source has been verified yet: every source in the
-Texas education configuration is marked `verified: false`, the importer refuses
-to run against an unverified source, and the crawler refuses production
-collection from any source a person has not approved.
+corrected against an independent architecture review. The preserved AskTED
+release is materialized in the hosted organization spine, but **no production
+directory crawl has been run**. Every source in the Texas education
+configuration remains `verified: false`, and the crawler refuses production
+collection from any source a person has not reviewed and approved.
 
-**Ten production blockers are open** and are listed with their risk, required
-resolution and required tests at the top of [BACKLOG](docs/BACKLOG.md). No live
-source may be fetched and no real outreach export may be used until the
-applicable ones are resolved. See [CURRENT_STATE](docs/CURRENT_STATE.md).
+Production-readiness findings and their evidence are tracked at the top of
+[BACKLOG](docs/BACKLOG.md). The executable worker now requires private raw
+response archiving, but the first live batch still requires verified source
+configuration, domain-by-domain policy approval, deployed storage credentials
+and an explicit approval for that exact finite batch. See
+[CURRENT_STATE](docs/CURRENT_STATE.md).
 
 ## Stack
 

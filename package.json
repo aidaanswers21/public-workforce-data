@@ -32,7 +32,8 @@
     "collection:work": "tsx services/crawler-worker/src/cli/collection-worker.ts",
     "collection:daemon": "node services/crawler-worker/dist/cli/collection-worker.js --daemon",
     "spine:organize": "tsx packages/jurisdiction-config/us-national-spine/src/cli.ts",
-    "spine:import": "tsx packages/jurisdiction-config/us-national-spine/src/import-cli.ts"
+    "spine:import": "tsx packages/jurisdiction-config/us-national-spine/src/import-cli.ts",
+    "rls:verify": "tsx scripts/verify-supabase-rls.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.15.0",

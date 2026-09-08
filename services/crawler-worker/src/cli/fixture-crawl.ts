@@ -13,6 +13,7 @@ import {
   ComplianceRepository,
   CrawlRepository,
   ExportRepository,
+  ExportPurposeRepository,
   IngestionRepository,
   OrganizationRepository,
   PGliteClient,
@@ -76,6 +77,15 @@ async function main(): Promise<void> {
     const compliance = new ComplianceRepository(database);
     const queries = new QueryRepository(database);
     const pipeline = new IngestionPipeline({ ingestion, crawl, organizations, logger });
+    const purposes = new ExportPurposeRepository(database);
+    if ((await purposes.findActive(EXPORT_PURPOSE)) === null) {
+      await purposes.approve({
+        code: EXPORT_PURPOSE,
+        description: 'Fixture-only internal review export.',
+        owner: 'fixture-crawl-cli',
+        approvedBy: 'fixture-crawl-cli',
+      });
+    }
 
     const now = new Date().toISOString();
     const bootstrap = await ingestion.recordSourceDocument({

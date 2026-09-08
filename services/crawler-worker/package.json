@@ -16,22 +16,22 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@public-workforce/shared-types": "workspace:*",
-    "@public-workforce/core": "workspace:*",
-    "@public-workforce/database": "workspace:*",
-    "@public-workforce/extraction": "workspace:*",
-    "@public-workforce/observability": "workspace:*",
-    "@public-workforce/adapter-kit": "workspace:*",
+    "@aws-sdk/client-s3": "3.1128.0",
     "@public-workforce/adapter-generic-html": "workspace:*",
     "@public-workforce/adapter-generic-json": "workspace:*",
+    "@public-workforce/adapter-kit": "workspace:*",
+    "@public-workforce/core": "workspace:*",
+    "@public-workforce/database": "workspace:*",
+    "@public-workforce/discovery-worker": "workspace:*",
+    "@public-workforce/extraction": "workspace:*",
     "@public-workforce/jurisdiction-kit": "workspace:*",
     "@public-workforce/jurisdiction-texas-education": "workspace:*",
     "@public-workforce/jurisdiction-us-national-spine": "workspace:*",
-    "@public-workforce/taxonomy": "workspace:*",
+    "@public-workforce/observability": "workspace:*",
     "@public-workforce/sector-education": "workspace:*",
-    "@public-workforce/sector-state-local": "workspace:*",
     "@public-workforce/sector-federal": "workspace:*",
-    "@public-workforce/discovery-worker": "workspace:*"
-  },
-  "devDependencies": {}
+    "@public-workforce/sector-state-local": "workspace:*",
+    "@public-workforce/shared-types": "workspace:*",
+    "@public-workforce/taxonomy": "workspace:*"
+  }
 }

@@ -30,11 +30,11 @@ with no policy row blocks unless the deployment has explicitly opted into
 collecting from unreviewed sources. A refusal raises `SourcePolicyViolation` and
 records the target as `policy_hold`.
 
-**Not yet wired for production.** The gate is enforced inside `CrawlEngine`, and
-nothing loads real `source_policies` rows into the registry at run time, and no
-operator command records a review or an approval. See production blocker C12 in
-`BACKLOG.md`; it blocks a live crawl. The **discovery worker** does not go
-through the gate at all, which is blocker C13.
+The approved-batch worker loads `source_policies` rows before claiming work. The
+operator console records the review evidence and a separate production
+approval. Discovery and collection both evaluate that registry before robots
+and before a source request. A target without an applicable approval moves to
+`policy_hold`.
 
 A vendor's assurance that data is compliant is not a review, is not an approval,
 and never overrides the suppression list. See `SOURCE_POLICY_REVIEW.md`.
@@ -177,14 +177,17 @@ behaves like an ordinary two-label resolver.
 
 ## Storage of raw responses
 
-`source_document_versions.storage_key` is where an archived raw response
-belongs, in S3-compatible object storage such as Cloudflare R2. The column and
-the plumbing exist; the uploader is in `BACKLOG.md`. Nothing is archived today.
+Every successful production source response is gzip-compressed and written to
+private S3-compatible object storage before parsing. The key is content
+addressed by the source URL hash and exact response-body hash. If the archive
+write fails, the fetch does not succeed and no record from that response can be
+ingested. Every fetched response receives a `source_document_versions` row,
+including an empty page or a challenge page, with its storage key, source policy,
+HTTP status, content type and actual robots decision.
 
-The pipeline also records `http_status`, `content_type` and `robots_allowed` as
-literals rather than reading them from the response, so those three fields on a
-stored version look observed and are not. That is production blocker C20, and it
-blocks a live crawl.
+Fixture fetchers use non-network fixture keys and never contact object storage.
+The archive is evidence and may contain page material that the normalized data
+boundary rejects, so the bucket must remain private with worker-only access.
 
 ## Running a real crawl
 
@@ -197,5 +200,7 @@ against saved fixtures with no network access. Before any live run:
    production approval, and none is prohibited (`pnpm admin policies`).
 3. Set a real `CRAWLER_USER_AGENT` and `CRAWLER_CONTACT_URL` with a reachable
    policy page.
-4. Start with a small approved sample of targets, not a jurisdiction.
-5. Read the failure breakdown (`pnpm admin failures`) before widening.
+4. Configure the five `STORAGE_*` values for a private S3-compatible bucket and
+   verify the worker can write and recover an archived response.
+5. Start with a small approved sample of targets, not a jurisdiction.
+6. Read the failure breakdown (`pnpm admin failures`) before widening.

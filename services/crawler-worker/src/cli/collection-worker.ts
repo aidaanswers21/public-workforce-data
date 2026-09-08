@@ -9,6 +9,7 @@ import { HttpRobotsProvider } from '@public-workforce/core';
 import { createLogger } from '@public-workforce/observability';
 import { DiscoveryWorker } from '@public-workforce/discovery-worker';
 import { CollectionWorker, ProductionCollectionExecutor } from '../collection-worker.js';
+import { ArchivingFetcher, S3ResponseArchive } from '../fetchers/archiving-fetcher.js';
 import { HttpFetcher } from '../fetchers/http-fetcher.js';
 import {
   buildAdapterRegistry,
@@ -34,7 +35,16 @@ async function main(): Promise<void> {
   const database = new PostgresClient({ connectionString: databaseUrl, max: 4 });
   const taxonomy = buildTaxonomy();
   const adapters = buildAdapterRegistry();
-  const fetcher = new HttpFetcher({ userAgent });
+  const fetcher = new ArchivingFetcher(
+    new HttpFetcher({ userAgent }),
+    new S3ResponseArchive({
+      endpoint: requiredEnvironment('STORAGE_ENDPOINT'),
+      region: requiredEnvironment('STORAGE_REGION'),
+      bucket: requiredEnvironment('STORAGE_BUCKET'),
+      accessKeyId: requiredEnvironment('STORAGE_ACCESS_KEY_ID'),
+      secretAccessKey: requiredEnvironment('STORAGE_SECRET_ACCESS_KEY'),
+    }),
+  );
   const robots = new HttpRobotsProvider(
     async (url) => {
       try {

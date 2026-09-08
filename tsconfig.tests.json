@@ -43,6 +43,6 @@
       "@public-workforce/validation-worker": ["services/validation-worker/src/index.ts"]
     }
   },
-  "include": ["**/*.test.ts", "tests/**/*.ts"],
+  "include": ["**/*.test.ts", "scripts/**/*.ts", "tests/**/*.ts"],
   "exclude": ["node_modules", "**/dist/**"]
 }

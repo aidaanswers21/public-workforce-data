@@ -14,6 +14,8 @@ import { OrganizationRepository } from './organizations.js';
 import { ComplianceRepository } from './compliance.js';
 import { QueryRepository } from './queries.js';
 import { ExportRepository } from './exports.js';
+import { ExportPurposeRepository } from './export-purposes.js';
+import { CollectionProjectRepository } from './collection-projects.js';
 
 const AT = '2026-06-01T00:00:00.000Z';
 /** Before AT, so a suppression added in a test is in force when queried at AT. */
@@ -116,6 +118,14 @@ async function harness(): Promise<Harness> {
     );
     return result.personId;
   };
+
+  await new ExportPurposeRepository(database).approve({
+    code: PURPOSE,
+    description: 'Fixture-only internal review export.',
+    owner: 'test',
+    approvedBy: 'test',
+    approvedAt: AT,
+  });
 
   return {
     database,
@@ -2245,6 +2255,21 @@ describe('ComplianceRepository', () => {
 });
 
 describe('QueryRepository and ExportRepository', () => {
+  it('refuses an export whose purpose has not been approved', async () => {
+    const database = await TestDatabase.create({ sectors: SECTORS });
+    open = database;
+
+    await expect(
+      new ExportRepository(database).buildPeopleExport({
+        name: 'unapproved-purpose',
+        requestedBy: 'ops',
+        purpose: 'not-approved',
+        filters: {},
+      }),
+    ).rejects.toThrow(/not active and approved/);
+    expect(await database.count('exports')).toBe(0);
+  });
+
   it.each([
     [
       'suppressed published and permitted inferred',
@@ -2429,6 +2454,49 @@ describe('QueryRepository and ExportRepository', () => {
     const rows = await h.queries.queryExportableRows(AT, PURPOSE);
     expect(rows).toHaveLength(1);
     expect(rows[0]?.publishedEmail).toBe('jane.smith@agency.example.gov');
+  });
+
+  it('limits an export query to organizations materialized in one collection project', async () => {
+    const h = await harness();
+    const included = await h.makeOrganization({
+      name: 'Included Bureau',
+      typeCode: 'federal_bureau',
+      levelCode: 'federal',
+    });
+    const excluded = await h.makeOrganization({
+      name: 'Excluded Bureau',
+      typeCode: 'federal_bureau',
+      levelCode: 'federal',
+    });
+    await h.addPerson(included, 'Jane Smith', 'Program Analyst', 'jane.smith@agency.example.gov');
+    await h.addPerson(excluded, 'Wei Chen', 'Program Analyst', 'wei.chen@agency.example.gov');
+
+    const projectId = await new CollectionProjectRepository(h.database).create({
+      key: 'included-only',
+      name: 'Included organizations only',
+      jurisdictionConfigKey: 'fixture',
+      jurisdictionCode: 'us-federal',
+      stateCode: null,
+      sectorCodes: ['general_government'],
+      governmentLevelCodes: ['federal'],
+      filters: {
+        includedOrganizationIds: [included],
+        organizationTypeCodes: [],
+        excludedOrganizationIds: [],
+        workMode: 'approved_batch_complete',
+      },
+      batchSize: 1,
+      maxPagesPerTarget: 1,
+      maxPagesPerBatch: 1,
+      maxErrorsPerBatch: 1,
+      createdBy: 'ops',
+    });
+
+    const rows = await h.queries.queryExportableRows(AT, PURPOSE, {
+      collectionProjectId: projectId,
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.organizationId).toBe(included);
   });
 
   it('applies an organization-subtree opt-out down the whole tree, in SQL', async () => {
