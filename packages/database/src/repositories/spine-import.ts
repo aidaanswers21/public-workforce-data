@@ -10,6 +10,8 @@ export interface StageOrganizationSpineRecord {
   governmentLevelCode: string | null;
   sectorCode: string | null;
   classificationReviewReason: string | null;
+  jurisdictionId: Uuid | null;
+  websiteValueRaw: string | null;
   websiteUrl: string | null;
   primaryDomain: string | null;
   identifiers: readonly {
@@ -41,6 +43,11 @@ export interface OrganizationSpineDatabaseSummary {
   failed: number;
 }
 
+export interface OrganizationSpineRelationshipSummary {
+  materialized: number;
+  unresolved: number;
+}
+
 /** Durable, provenance-bearing handoff from bulk source files to canonical rows. */
 export class OrganizationSpineImportRepository {
   constructor(private readonly client: SqlClient) {}
@@ -52,14 +59,16 @@ export class OrganizationSpineImportRepository {
       `insert into organization_spine_records (
          source_key, source_record_key, name, name_normalized,
          organization_type_code, government_level_code, sector_code,
-         classification_review_reason, website_url, primary_domain,
+         classification_review_reason, jurisdiction_id, website_value_raw,
+         website_url, primary_domain,
          identifiers, parent_identifiers, location, attributes, status,
          source_document_id, source_document_version_id, source_effective_date,
          first_seen_at, last_seen_at
        )
        select input."sourceKey", input."sourceRecordKey", input.name, input."nameNormalized",
               input."organizationTypeCode", input."governmentLevelCode", input."sectorCode",
-              input."classificationReviewReason", input."websiteUrl", input."primaryDomain",
+              input."classificationReviewReason", input."jurisdictionId", input."websiteValueRaw",
+              input."websiteUrl", input."primaryDomain",
               input.identifiers, input."parentIdentifiers", input.location, input.attributes,
               input.status::organization_spine_record_status,
               input."sourceDocumentId", input."sourceDocumentVersionId",
@@ -67,12 +76,31 @@ export class OrganizationSpineImportRepository {
        from jsonb_to_recordset($1::jsonb) as input(
          "sourceKey" text, "sourceRecordKey" text, name text, "nameNormalized" text,
          "organizationTypeCode" text, "governmentLevelCode" text, "sectorCode" text,
-         "classificationReviewReason" text, "websiteUrl" text, "primaryDomain" text,
+         "classificationReviewReason" text, "jurisdictionId" uuid, "websiteValueRaw" text,
+         "websiteUrl" text, "primaryDomain" text,
          identifiers jsonb, "parentIdentifiers" jsonb, location jsonb, attributes jsonb,
          status text, "sourceDocumentId" uuid, "sourceDocumentVersionId" uuid,
          "sourceEffectiveDate" date, "observedAt" timestamptz
        )
        on conflict (source_key, source_record_key, source_document_version_id) do update set
+         name = excluded.name,
+         name_normalized = excluded.name_normalized,
+         organization_type_code = excluded.organization_type_code,
+         government_level_code = excluded.government_level_code,
+         sector_code = excluded.sector_code,
+         classification_review_reason = excluded.classification_review_reason,
+         jurisdiction_id = excluded.jurisdiction_id,
+         website_value_raw = excluded.website_value_raw,
+         website_url = excluded.website_url,
+         primary_domain = excluded.primary_domain,
+         identifiers = excluded.identifiers,
+         parent_identifiers = excluded.parent_identifiers,
+         location = excluded.location,
+         attributes = excluded.attributes,
+         status = case
+           when organization_spine_records.status = 'imported' then 'imported'
+           else excluded.status
+         end,
          last_seen_at = greatest(
            organization_spine_records.last_seen_at, excluded.last_seen_at
          )
@@ -97,25 +125,90 @@ export class OrganizationSpineImportRepository {
       const ids = selected.rows.map((row) => row.id);
       if (ids.length === 0) return 0;
 
+      const ambiguous = await tx.query<{ id: Uuid }>(
+        `select r.id
+         from organization_spine_records r
+         cross join lateral jsonb_array_elements(r.identifiers) identifier(item)
+         join external_identifiers existing
+           on existing.entity_type = 'organization'
+          and existing.identifier_system_code = identifier.item ->> 'systemCode'
+          and existing.issuing_state_code is not distinct from
+            nullif(identifier.item ->> 'issuingStateCode', '')
+          and existing.identifier_value = identifier.item ->> 'value'
+         where r.id = any($1::uuid[])
+         group by r.id having count(distinct existing.entity_id) > 1
+         limit 1`,
+        [ids],
+      );
+      if (ambiguous.rows[0] !== undefined) {
+        throw new Error('organization spine identifiers resolve to conflicting organizations');
+      }
+
+      await tx.query(
+        `update organization_spine_records r set organization_id = matched.entity_id
+         from (
+           select r.id, (array_agg(distinct existing.entity_id))[1] as entity_id
+           from organization_spine_records r
+           cross join lateral jsonb_array_elements(r.identifiers) identifier(item)
+           join external_identifiers existing
+             on existing.entity_type = 'organization'
+            and existing.identifier_system_code = identifier.item ->> 'systemCode'
+            and existing.issuing_state_code is not distinct from
+              nullif(identifier.item ->> 'issuingStateCode', '')
+            and existing.identifier_value = identifier.item ->> 'value'
+           where r.id = any($1::uuid[])
+           group by r.id
+         ) matched
+         where r.id = matched.id`,
+        [ids],
+      );
+
+      const classificationConflict = await tx.query<{ id: Uuid }>(
+        `select r.id
+         from organization_spine_records r
+         join organizations organization on organization.id = r.organization_id
+         where r.id = any($1::uuid[])
+           and (
+             organization.organization_type_code <> r.organization_type_code
+             or organization.government_level_code <> r.government_level_code
+             or organization.sector_code <> r.sector_code
+             or (
+               organization.jurisdiction_id is not null
+               and r.jurisdiction_id is not null
+               and organization.jurisdiction_id <> r.jurisdiction_id
+             )
+           )
+         limit 1`,
+        [ids],
+      );
+      if (classificationConflict.rows[0] !== undefined) {
+        throw new Error('organization spine exact match has conflicting classification');
+      }
+
       await tx.query(
         `insert into organizations (
            organization_type_code, government_level_code, sector_code,
-           name, name_normalized, name_source_value, website_url, primary_domain,
+           jurisdiction_id, name, name_normalized, name_source_value, website_url, primary_domain,
            identity_tier, identity_fingerprint, needs_identity_review,
            source_document_id, extraction_method_code, confidence,
            first_seen_at, last_seen_at
          )
          select r.organization_type_code, r.government_level_code, r.sector_code,
-                r.name, r.name_normalized, r.name, r.website_url, r.primary_domain,
+                r.jurisdiction_id, r.name, r.name_normalized, r.name, r.website_url, r.primary_domain,
                 'official_identifier',
                 'oid:' || (r.identifiers -> 0 ->> 'systemCode') || ':' ||
-                  (r.identifiers -> 0 ->> 'value'),
+                  case
+                    when nullif(r.identifiers -> 0 ->> 'issuingStateCode', '') is null then ''
+                    else (r.identifiers -> 0 ->> 'issuingStateCode') || ':'
+                  end || (r.identifiers -> 0 ->> 'value'),
                 false, r.source_document_id, 'bulk_import', 1,
                 r.first_seen_at, r.last_seen_at
-         from organization_spine_records r where r.id = any($1::uuid[])
+         from organization_spine_records r
+         where r.id = any($1::uuid[]) and r.organization_id is null
          on conflict (identity_fingerprint) do update set
            website_url = coalesce(organizations.website_url, excluded.website_url),
            primary_domain = coalesce(organizations.primary_domain, excluded.primary_domain),
+           jurisdiction_id = coalesce(organizations.jurisdiction_id, excluded.jurisdiction_id),
            confidence = greatest(organizations.confidence, excluded.confidence),
            last_seen_at = greatest(organizations.last_seen_at, excluded.last_seen_at)`,
         [ids],
@@ -126,9 +219,43 @@ export class OrganizationSpineImportRepository {
          where r.id = any($1::uuid[])
            and o.identity_fingerprint =
              'oid:' || (r.identifiers -> 0 ->> 'systemCode') || ':' ||
-               (r.identifiers -> 0 ->> 'value')`,
+               case
+                 when nullif(r.identifiers -> 0 ->> 'issuingStateCode', '') is null then ''
+                 else (r.identifiers -> 0 ->> 'issuingStateCode') || ':'
+               end || (r.identifiers -> 0 ->> 'value')`,
         [ids],
       );
+
+      await tx.query(
+        `update organizations organization set
+           website_url = coalesce(organization.website_url, r.website_url),
+           primary_domain = coalesce(organization.primary_domain, r.primary_domain),
+           jurisdiction_id = coalesce(organization.jurisdiction_id, r.jurisdiction_id),
+           confidence = greatest(organization.confidence, 1),
+           last_seen_at = greatest(organization.last_seen_at, r.last_seen_at)
+         from organization_spine_records r
+         where r.id = any($1::uuid[]) and r.organization_id = organization.id`,
+        [ids],
+      );
+
+      const identifierConflict = await tx.query<{ id: Uuid }>(
+        `select r.id
+         from organization_spine_records r
+         cross join lateral jsonb_array_elements(r.identifiers) identifier(item)
+         join external_identifiers existing
+           on existing.identifier_system_code = identifier.item ->> 'systemCode'
+          and existing.issuing_state_code is not distinct from
+            nullif(identifier.item ->> 'issuingStateCode', '')
+          and existing.identifier_value = identifier.item ->> 'value'
+         where r.id = any($1::uuid[])
+           and (existing.entity_type <> 'organization' or existing.entity_id <> r.organization_id)
+         limit 1`,
+        [ids],
+      );
+      if (identifierConflict.rows[0] !== undefined) {
+        throw new Error('organization spine identifier is already claimed by another entity');
+      }
+
       await tx.query(
         `insert into external_identifiers (
            entity_type, entity_id, identifier_system_code, identifier_value,
@@ -138,16 +265,58 @@ export class OrganizationSpineImportRepository {
          select 'organization', r.organization_id,
                 identifier.item ->> 'systemCode', identifier.item ->> 'value',
                 nullif(identifier.item ->> 'issuingStateCode', ''),
-                identifier.ordinality = 1, r.source_document_id,
+                identifier.ordinality = 1 and not exists (
+                  select 1 from external_identifiers primary_identifier
+                  where primary_identifier.entity_type = 'organization'
+                    and primary_identifier.entity_id = r.organization_id
+                    and primary_identifier.is_primary
+                ), r.source_document_id,
                 'bulk_import', 1, r.first_seen_at, r.last_seen_at
          from organization_spine_records r
          cross join lateral jsonb_array_elements(r.identifiers)
            with ordinality as identifier(item, ordinality)
          where r.id = any($1::uuid[]) and r.organization_id is not null
-         on conflict (identifier_system_code, identifier_value) do update set
+         on conflict (identifier_system_code, issuing_state_code, identifier_value) do update set
            last_seen_at = greatest(external_identifiers.last_seen_at, excluded.last_seen_at)
          where external_identifiers.entity_type = excluded.entity_type
            and external_identifiers.entity_id = excluded.entity_id`,
+        [ids],
+      );
+      const postInsertConflict = await tx.query<{ id: Uuid }>(
+        `select r.id
+         from organization_spine_records r
+         cross join lateral jsonb_array_elements(r.identifiers) identifier(item)
+         join external_identifiers existing
+           on existing.identifier_system_code = identifier.item ->> 'systemCode'
+          and existing.issuing_state_code is not distinct from
+            nullif(identifier.item ->> 'issuingStateCode', '')
+          and existing.identifier_value = identifier.item ->> 'value'
+         where r.id = any($1::uuid[])
+           and (existing.entity_type <> 'organization' or existing.entity_id <> r.organization_id)
+         limit 1`,
+        [ids],
+      );
+      if (postInsertConflict.rows[0] !== undefined) {
+        throw new Error('organization spine batch contains a conflicting exact identifier');
+      }
+      await tx.query(
+        `insert into source_observations (
+           source_document_version_id, evidence_class, entity_type, entity_id,
+           record_key, field, value_raw, value_normalized,
+           extraction_method_code, confidence, observed_at
+         )
+         select r.source_document_version_id, 'organization', 'organization', r.organization_id,
+                r.source_key || ':' || r.source_record_key, observation.field,
+                observation.value_raw, observation.value_normalized,
+                'bulk_import', 1, r.last_seen_at
+         from organization_spine_records r
+         cross join lateral (values
+           ('name', r.name, r.name_normalized),
+           ('website_url', r.website_value_raw, r.website_url)
+         ) observation(field, value_raw, value_normalized)
+         where r.id = any($1::uuid[]) and r.organization_id is not null
+           and observation.value_raw is not null
+         on conflict (source_document_version_id, record_key, field) do nothing`,
         [ids],
       );
       await tx.query(
@@ -186,6 +355,92 @@ export class OrganizationSpineImportRepository {
         [ids],
       );
       return imported.rows.length;
+    });
+  }
+
+  async materializeRelationships(
+    sourceKey?: string,
+  ): Promise<OrganizationSpineRelationshipSummary> {
+    return runAtomically(this.client, async (tx) => {
+      const conflicts = await tx.query<{ id: Uuid }>(
+        `select r.id
+         from organization_spine_records r
+         cross join lateral jsonb_array_elements(r.parent_identifiers) parent(item)
+         join external_identifiers identifier
+           on identifier.entity_type = 'organization'
+          and identifier.identifier_system_code = parent.item ->> 'systemCode'
+          and identifier.issuing_state_code is not distinct from
+            nullif(parent.item ->> 'issuingStateCode', '')
+          and identifier.identifier_value = parent.item ->> 'value'
+         where r.status = 'imported' and r.organization_id is not null
+           and ($1::text is null or r.source_key = $1)
+         group by r.id having count(distinct identifier.entity_id) > 1
+         limit 1`,
+        [sourceKey ?? null],
+      );
+      if (conflicts.rows[0] !== undefined) {
+        throw new Error(
+          'organization spine parent identifiers resolve to conflicting organizations',
+        );
+      }
+
+      const materialized = await tx.query<{ id: Uuid }>(
+        `insert into organization_relationships (
+           parent_organization_id, child_organization_id, relationship_type_code,
+           effective_from, source_document_id, extraction_method_code, confidence,
+           first_seen_at, last_seen_at
+         )
+         select resolved.parent_id, r.organization_id, 'part_of',
+                coalesce(r.source_effective_date, r.first_seen_at::date),
+                r.source_document_id, 'bulk_import', 1, r.first_seen_at, r.last_seen_at
+         from organization_spine_records r
+         cross join lateral (
+           select (array_agg(distinct identifier.entity_id))[1] as parent_id
+           from jsonb_array_elements(r.parent_identifiers) parent(item)
+           join external_identifiers identifier
+             on identifier.entity_type = 'organization'
+            and identifier.identifier_system_code = parent.item ->> 'systemCode'
+            and identifier.issuing_state_code is not distinct from
+              nullif(parent.item ->> 'issuingStateCode', '')
+            and identifier.identifier_value = parent.item ->> 'value'
+         ) resolved
+         where r.status = 'imported' and r.organization_id is not null
+           and jsonb_array_length(r.parent_identifiers) > 0
+           and resolved.parent_id is not null
+           and resolved.parent_id <> r.organization_id
+           and ($1::text is null or r.source_key = $1)
+         on conflict (
+           parent_organization_id, child_organization_id,
+           relationship_type_code, effective_from
+         ) do update set
+           confidence = greatest(organization_relationships.confidence, excluded.confidence),
+           last_seen_at = greatest(organization_relationships.last_seen_at, excluded.last_seen_at)
+         returning id`,
+        [sourceKey ?? null],
+      );
+
+      const unresolved = await tx.query<{ count: number }>(
+        `select count(*)::int as count
+         from organization_spine_records r
+         where r.status = 'imported' and r.organization_id is not null
+           and jsonb_array_length(r.parent_identifiers) > 0
+           and ($1::text is null or r.source_key = $1)
+           and not exists (
+             select 1
+             from jsonb_array_elements(r.parent_identifiers) parent(item)
+             join external_identifiers identifier
+               on identifier.entity_type = 'organization'
+              and identifier.identifier_system_code = parent.item ->> 'systemCode'
+              and identifier.issuing_state_code is not distinct from
+                nullif(parent.item ->> 'issuingStateCode', '')
+              and identifier.identifier_value = parent.item ->> 'value'
+           )`,
+        [sourceKey ?? null],
+      );
+      return {
+        materialized: materialized.rows.length,
+        unresolved: Number(unresolved.rows[0]?.count ?? 0),
+      };
     });
   }
 

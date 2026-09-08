@@ -26,7 +26,7 @@ export interface MissingWebsiteOrganization {
   city: string | null;
   stateCode: string | null;
   postalCode: string | null;
-  identifiers: { systemCode: string; value: string }[];
+  identifiers: { systemCode: string; value: string; issuingStateCode: string | null }[];
   proposedCandidates: number;
   bestCandidateConfidence: number | null;
 }
@@ -102,8 +102,13 @@ export class WebsiteResolutionRepository {
        ) location on true
        left join lateral (
          select jsonb_agg(
-                  jsonb_build_object('systemCode', e.identifier_system_code, 'value', e.identifier_value)
-                  order by e.is_primary desc, e.identifier_system_code, e.identifier_value
+                  jsonb_build_object(
+                    'systemCode', e.identifier_system_code,
+                    'value', e.identifier_value,
+                    'issuingStateCode', e.issuing_state_code
+                  )
+                  order by e.is_primary desc, e.identifier_system_code,
+                           e.issuing_state_code, e.identifier_value
                 ) as items
          from external_identifiers e
          where e.entity_type = 'organization' and e.entity_id = o.id
@@ -290,10 +295,20 @@ function jsonObject(value: unknown): WebsiteMatchSignals {
   return (value ?? {}) as WebsiteMatchSignals;
 }
 
-function jsonArray(value: unknown): { systemCode: string; value: string }[] {
+function jsonArray(
+  value: unknown,
+): { systemCode: string; value: string; issuingStateCode: string | null }[] {
   if (typeof value === 'string')
-    return JSON.parse(value) as { systemCode: string; value: string }[];
-  return (value ?? []) as { systemCode: string; value: string }[];
+    return JSON.parse(value) as {
+      systemCode: string;
+      value: string;
+      issuingStateCode: string | null;
+    }[];
+  return (value ?? []) as {
+    systemCode: string;
+    value: string;
+    issuingStateCode: string | null;
+  }[];
 }
 
 function mapMissingWebsiteOrganization(row: Record<string, unknown>): MissingWebsiteOrganization {

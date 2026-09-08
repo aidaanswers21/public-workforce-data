@@ -169,9 +169,13 @@ export class OrganizationRepository {
     const name = input.nameNormalized;
 
     if (input.identifier != null) {
+      const stateScope = input.identifier.issuingStateCode;
       return {
         tier: 'official_identifier',
-        fingerprint: `oid:${input.identifier.systemCode}:${input.identifier.value}`,
+        fingerprint:
+          stateScope == null
+            ? `oid:${input.identifier.systemCode}:${input.identifier.value}`
+            : `oid:${input.identifier.systemCode}:${stateScope}:${input.identifier.value}`,
         needsReview: false,
         reviewReason: null,
       };
@@ -250,7 +254,13 @@ export class OrganizationRepository {
     };
 
     if (input.identifier != null) {
-      addOwner(await this.identifierOwner(input.identifier.systemCode, input.identifier.value));
+      addOwner(
+        await this.identifierOwner(
+          input.identifier.systemCode,
+          input.identifier.value,
+          input.identifier.issuingStateCode ?? null,
+        ),
+      );
     }
     if (input.sourceIdentifier != null) {
       addOwner(
@@ -385,9 +395,16 @@ export class OrganizationRepository {
       const different = await this.client.query<{ identifier_value: string }>(
         `select identifier_value from external_identifiers
          where entity_type = 'organization' and entity_id = $1
-           and identifier_system_code = $2 and identifier_value <> $3
+           and identifier_system_code = $2
+           and issuing_state_code is not distinct from $4
+           and identifier_value <> $3
          limit 1`,
-        [id, input.identifier.systemCode, input.identifier.value],
+        [
+          id,
+          input.identifier.systemCode,
+          input.identifier.value,
+          input.identifier.issuingStateCode ?? null,
+        ],
       );
       if (different.rows[0] !== undefined) {
         throw new OrganizationIdentityConflictError(
@@ -414,12 +431,17 @@ export class OrganizationRepository {
     return { id, created, identity: finalIdentity };
   }
 
-  private async identifierOwner(system: string, value: string): Promise<Uuid | null> {
+  private async identifierOwner(
+    system: string,
+    value: string,
+    issuingStateCode: string | null,
+  ): Promise<Uuid | null> {
     const result = await this.client.query<{ entity_id: Uuid }>(
       `select entity_id from external_identifiers
        where entity_type = 'organization' and identifier_system_code = $1
+         and issuing_state_code is not distinct from $3
          and identifier_value = $2`,
-      [system, value],
+      [system, value, issuingStateCode],
     );
     return result.rows[0]?.entity_id ?? null;
   }
@@ -769,7 +791,7 @@ export class OrganizationRepository {
          is_primary, source_document_id, crawl_run_id, extraction_method_code, confidence,
          first_seen_at, last_seen_at
        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11)
-       on conflict (identifier_system_code, identifier_value) do update set
+       on conflict (identifier_system_code, issuing_state_code, identifier_value) do update set
          is_primary = excluded.is_primary or external_identifiers.is_primary,
          last_seen_at = greatest(external_identifiers.last_seen_at, excluded.last_seen_at)
        where external_identifiers.entity_type = excluded.entity_type
@@ -792,7 +814,8 @@ export class OrganizationRepository {
     const row = result.rows[0];
     if (row === undefined) {
       throw new OrganizationIdentityConflictError(
-        `${input.identifierSystemCode}:${input.identifierValue} is already claimed by another entity`,
+        `${input.identifierSystemCode}:${input.issuingStateCode ?? '-'}:` +
+          `${input.identifierValue} is already claimed by another entity`,
       );
     }
     return row.id;

@@ -42,7 +42,7 @@ export interface OrganizationSpineInventory {
  * the handoff from organized files to canonical records cannot be ambiguous.
  */
 export const nationalOrganizationSpineInventory: OrganizationSpineInventory = {
-  generatedAt: '2026-09-07T20:15:23.692Z',
+  generatedAt: '2026-09-08T17:26:19.940Z',
   sourceRows: 231_016,
   geographicAreas: 85_415,
   relationships: 107_981,

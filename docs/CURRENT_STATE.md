@@ -1,49 +1,49 @@
 # Current state
 
-Last updated: 2026-09-07. Phase: foundation generalized across six levels of
+Last updated: 2026-09-08. Phase: foundation generalized across six levels of
 government, then corrected against an independent architecture review. No
 production crawl run.
 
 ## What works
 
-| Capability                                                                                                  | Status                                |
-| ----------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| Monorepo, strict TypeScript, lint, typecheck (sources and tests), build, tests                              | Working                               |
-| Schema: 53 tables in the local harness, 14 reference tables, enums, constraints, triggers                   | Working, tested against real Postgres |
-| Migrations up and down, checksum guard                                                                      | Working                               |
-| Controlled reference data seeded from the composed taxonomy                                                 | Working                               |
-| Sector packs: education, state and local government, federal government                                     | Working                               |
-| Neutral core guard, asserted by reading the source                                                          | Working                               |
-| Effective-dated organization relationships, ancestry in SQL and in memory                                   | Working                               |
-| Jurisdiction and duty location modelled separately                                                          | Working                               |
-| Federal organizations with no state parent                                                                  | Working                               |
-| Source policy gate plus operator review and separate approval workflow                                      | Working                               |
-| Public professional data boundary, applied on every ingested record                                         | Working                               |
-| Crawl engine: budgets, robots, retries, rate limiting, loop protection, boundary-safe checkpointing         | Working                               |
-| `generic-html` adapter: tables, cards, lists, definition lists, JSON-LD, microdata, mailto, data attributes | Working                               |
-| `generic-json` adapter: cursor, offset, page pagination                                                     | Working                               |
-| Obfuscated email decoding: entities, at/dot words, brackets, Cloudflare, data attributes                    | Working                               |
-| Name, title, area, organization, unit, phone normalization, all vocabulary-driven                           | Working                               |
-| Title normalization with recorded method, rule source, version and confidence                               | Working                               |
-| Deduplication and person resolution                                                                         | Working                               |
-| Email classification into six classes                                                                       | Working                               |
-| Pattern inference with evidence, confidence separate from validation                                        | Working                               |
-| Validation provider interface, no-op implementation                                                         | Working                               |
-| Suppression: 11 scopes, enforced in SQL and re-checked at export                                            | Working                               |
-| Organization-subtree suppression, both paths tested against each other                                      | Working                               |
-| Idempotent complaint intake, immutable suppression, serialized hash-chained audit trail                     | Working                               |
-| CSV export with 33 fields and independent channel suppression accounting                                    | Working                               |
-| Texas education jurisdiction configuration                                                                  | Written, sources not yet verified     |
-| Discovery worker                                                                                            | Working, not run against real sites   |
-| National bulk-file organizer, durable staging importer and exact-identifier website overlays                | Working; first hosted import complete |
-| Missing-website queue and evidence-backed candidate review                                                  | Working locally, no live search run   |
-| Private local/hosted operator console with separate staged and hosted organization-spine coverage           | Working and hosted                    |
-| Sector-configured organization explorer with profiles, official aggregates, provenance and bulk selection   | Working                               |
-| Collection projects, active scope controls, approved-batch completion, durable leased scheduler jobs        | Working, no live batch run            |
-| Long-lived approved-job daemon and Render web/worker Blueprint                                              | Working, manual deploys configured    |
-| Cross-worker one-active-job-per-domain guard, page and error batch stops                                    | Working                               |
-| Persistent embedded fixture database                                                                        | Working: `pnpm local:setup`           |
-| Fixture crawl end to end                                                                                    | Working: `pnpm crawl:fixture`         |
+| Capability                                                                                                        | Status                                                         |
+| ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Monorepo, strict TypeScript, lint, typecheck (sources and tests), build, tests                                    | Working                                                        |
+| Schema: 53 tables in the local harness, 14 reference tables, enums, constraints, triggers                         | Working, tested against real Postgres                          |
+| Migrations up and down, checksum guard                                                                            | Working                                                        |
+| Controlled reference data seeded from the composed taxonomy                                                       | Working                                                        |
+| Sector packs: education, state and local government, federal government                                           | Working                                                        |
+| Neutral core guard, asserted by reading the source                                                                | Working                                                        |
+| Effective-dated organization relationships, ancestry in SQL and in memory                                         | Working                                                        |
+| Jurisdiction and duty location modelled separately                                                                | Working                                                        |
+| Federal organizations with no state parent                                                                        | Working                                                        |
+| Source policy gate plus operator review and separate approval workflow                                            | Working                                                        |
+| Public professional data boundary, applied on every ingested record                                               | Working                                                        |
+| Crawl engine: budgets, robots, retries, rate limiting, loop protection, boundary-safe checkpointing               | Working                                                        |
+| `generic-html` adapter: tables, cards, lists, definition lists, JSON-LD, microdata, mailto, data attributes       | Working                                                        |
+| `generic-json` adapter: cursor, offset, page pagination                                                           | Working                                                        |
+| Obfuscated email decoding: entities, at/dot words, brackets, Cloudflare, data attributes                          | Working                                                        |
+| Name, title, area, organization, unit, phone normalization, all vocabulary-driven                                 | Working                                                        |
+| Title normalization with recorded method, rule source, version and confidence                                     | Working                                                        |
+| Deduplication and person resolution                                                                               | Working                                                        |
+| Email classification into six classes                                                                             | Working                                                        |
+| Pattern inference with evidence, confidence separate from validation                                              | Working                                                        |
+| Validation provider interface, no-op implementation                                                               | Working                                                        |
+| Suppression: 11 scopes, enforced in SQL and re-checked at export                                                  | Working                                                        |
+| Organization-subtree suppression, both paths tested against each other                                            | Working                                                        |
+| Idempotent complaint intake, immutable suppression, serialized hash-chained audit trail                           | Working                                                        |
+| CSV export with 33 fields and independent channel suppression accounting                                          | Working                                                        |
+| Texas education jurisdiction configuration                                                                        | Written, sources not yet verified                              |
+| Discovery worker                                                                                                  | Working, not run against real sites                            |
+| National bulk-file organizer, exact-ID canonicalizer, jurisdiction/relationship materializer and website overlays | Working locally; first hosted import predates the materializer |
+| Missing-website queue and evidence-backed candidate review                                                        | Working locally, no live search run                            |
+| Private local/hosted operator console with separate staged and hosted organization-spine coverage                 | Working and hosted                                             |
+| Sector-configured organization explorer with profiles, official aggregates, provenance and bulk selection         | Working                                                        |
+| Collection projects, active scope controls, approved-batch completion, durable leased scheduler jobs              | Working, no live batch run                                     |
+| Long-lived approved-job daemon and Render web/worker Blueprint                                                    | Working, manual deploys configured                             |
+| Cross-worker one-active-job-per-domain guard, page and error batch stops                                          | Working                                                        |
+| Persistent embedded fixture database                                                                              | Working: `pnpm local:setup`                                    |
+| Fixture crawl end to end                                                                                          | Working: `pnpm crawl:fixture`                                  |
 
 ## What is deliberately not done
 
@@ -52,7 +52,9 @@ production crawl run.
   crawl has run.** The hosted database contains 231,016 provenance-bearing
   source records and 52,557 exact-ID canonical organizations. The remaining
   source records stay in explicit classification, overlay or reconciliation
-  holds rather than receiving guessed values.
+  holds rather than receiving guessed values. Migration 0019 and the new
+  AskTED materialization path have not been applied to that hosted database;
+  doing so requires a new approval.
 - **Bulk-import approval does not approve live collection.** The scheduler
   loads policy rows from the database and moves unreviewed targets to
   `policy_hold`; discovery independently checks the same policy registry and

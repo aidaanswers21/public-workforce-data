@@ -201,6 +201,12 @@ importers:
       '@public-workforce/jurisdiction-kit':
         specifier: workspace:*
         version: link:../kit
+      '@public-workforce/jurisdiction-texas-education':
+        specifier: workspace:*
+        version: link:../texas-education
+      '@public-workforce/sector-education':
+        specifier: workspace:*
+        version: link:../../sectors/education
       '@public-workforce/shared-types':
         specifier: workspace:*
         version: link:../../shared-types

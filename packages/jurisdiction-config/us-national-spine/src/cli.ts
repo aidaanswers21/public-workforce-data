@@ -30,6 +30,14 @@ interface Summary {
   exactWebsiteOverlays: number;
   reconciliationRequired: number;
   classificationWork: number;
+  texas: {
+    districts: number;
+    campuses: number;
+    districtWebsites: number;
+    campusWebsites: number;
+    representedCounties: number;
+    missingCounties: string[];
+  };
   notes: string[];
 }
 
@@ -70,6 +78,14 @@ const summary: Summary = {
   exactWebsiteOverlays: 0,
   reconciliationRequired: 0,
   classificationWork: 0,
+  texas: {
+    districts: 0,
+    campuses: 0,
+    districtWebsites: 0,
+    campusWebsites: 0,
+    representedCounties: 0,
+    missingCounties: [],
+  },
   notes: [
     'Files contain source records, not guessed canonical merges.',
     'Exact shared identifiers are the only automatic merge keys.',
@@ -80,10 +96,15 @@ const summary: Summary = {
 };
 
 const texasWebsites = new Map<string, SpineSourceRecord['website']>();
+const texasPublishedCounties = new Set<string>();
+const texasCensusCounties = new Set<string>();
 await organizeTexas();
 await organizeNces();
 await organizeCensus();
 await organizeGeographies();
+summary.texas.missingCounties = [...texasCensusCounties]
+  .filter((county) => !texasPublishedCounties.has(county))
+  .sort();
 await organizeUsaGov();
 await organizeFederalRegister();
 
@@ -110,19 +131,39 @@ process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 async function organizeTexas(): Promise<void> {
   const path = join(downloads, 'texas', 'askted-school-district-site.csv');
   const seenDistricts = new Set<string>();
+  const districtRecords = new Map<string, string>();
+  const seenSchools = new Set<string>();
   for await (const row of parseDelimitedObjects(createReadStream(path))) {
     const district = texasDistrictOverlay(row);
-    if (district !== null && !seenDistricts.has(district.sourceRecordKey)) {
+    const school = texasSchoolOverlay(row);
+    if (district === null || school === null) {
+      throw new Error('AskTED row is missing a district, campus, or published identifier');
+    }
+    const county = clean(row['County Name']);
+    if (county !== null) texasPublishedCounties.add(county.toLowerCase());
+    const serializedDistrict = JSON.stringify(district);
+    const previousDistrict = districtRecords.get(district.sourceRecordKey);
+    if (previousDistrict !== undefined && previousDistrict !== serializedDistrict) {
+      throw new Error(`AskTED publishes inconsistent district values: ${district.sourceRecordKey}`);
+    }
+    districtRecords.set(district.sourceRecordKey, serializedDistrict);
+    if (!seenDistricts.has(district.sourceRecordKey)) {
       seenDistricts.add(district.sourceRecordKey);
       await emitSourceRecord(overlays, district, false);
       indexTexasWebsite(district);
+      if (district.website !== null) summary.texas.districtWebsites += 1;
     }
-    const school = texasSchoolOverlay(row);
-    if (school !== null) {
-      await emitSourceRecord(overlays, school, false);
-      indexTexasWebsite(school);
+    if (seenSchools.has(school.sourceRecordKey)) {
+      throw new Error(`AskTED publishes a duplicate campus identifier: ${school.sourceRecordKey}`);
     }
+    seenSchools.add(school.sourceRecordKey);
+    await emitSourceRecord(overlays, school, false);
+    indexTexasWebsite(school);
+    if (school.website !== null) summary.texas.campusWebsites += 1;
   }
+  summary.texas.districts = seenDistricts.size;
+  summary.texas.campuses = seenSchools.size;
+  summary.texas.representedCounties = texasPublishedCounties.size;
 }
 
 function indexTexasWebsite(record: SpineSourceRecord): void {
@@ -265,6 +306,7 @@ function censusRecord(row: Record<string, string>, kind: string): SpineSourceRec
     sourceKey: `census-government-units-2025:${kind}`,
     sourceRecordKey: id,
     sourceEffectiveDate: '2025-01-01',
+    jurisdictionCode: null,
     name,
     nameNormalized: normalizeSimpleName(name),
     organizationTypeCode: classification.organizationTypeCode,
@@ -403,6 +445,10 @@ async function organizeGeographies(): Promise<void> {
         latitude: numeric(row['INTPTLAT']),
         longitude: numeric(row['INTPTLONG']),
       });
+      if (effectiveAreaType === 'county' && clean(row['USPS']) === 'TX') {
+        const county = clean(row['NAME']);
+        if (county !== null) texasCensusCounties.add(county.toLowerCase());
+      }
       counts.set(effectiveAreaType, (counts.get(effectiveAreaType) ?? 0) + 1);
     }
     for (const [code, count] of counts) {
@@ -431,6 +477,7 @@ async function organizeUsaGov(): Promise<void> {
         sourceKey: 'usagov-agency-index-2026',
         sourceRecordKey: `${nodeId}:${nameNormalized}`,
         sourceEffectiveDate: null,
+        jurisdictionCode: null,
         name,
         nameNormalized,
         organizationTypeCode: 'federal_agency',
@@ -462,6 +509,7 @@ async function organizeFederalRegister(): Promise<void> {
       sourceKey: 'federal-register-agencies-api-2026',
       sourceRecordKey: id,
       sourceEffectiveDate: null,
+      jurisdictionCode: null,
       name,
       nameNormalized: normalizeSimpleName(name),
       organizationTypeCode: 'federal_agency',

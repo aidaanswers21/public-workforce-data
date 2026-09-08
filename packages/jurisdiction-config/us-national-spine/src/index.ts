@@ -2,6 +2,7 @@ import { canonicalizeUrl, domainOf, normalizeOrganizationName } from '@public-wo
 
 export * from './inventory.js';
 export * from './jurisdictions.js';
+export * from './materialize.js';
 
 export interface SpineIdentifier {
   systemCode: string;
@@ -24,6 +25,7 @@ export interface SpineSourceRecord {
   sourceKey: string;
   sourceRecordKey: string;
   sourceEffectiveDate: string | null;
+  jurisdictionCode: string | null;
   name: string;
   nameNormalized: string;
   organizationTypeCode: string | null;
@@ -90,6 +92,7 @@ export function ncesLeaRecord(row: Record<string, string>): SpineSourceRecord | 
     sourceKey: 'nces-ccd-lea-directory-2024-25',
     sourceRecordKey: id,
     sourceEffectiveDate: isoDate(row['EFFECTIVE_DATE']),
+    jurisdictionCode: null,
     name,
     nameNormalized: normalizeOrganizationName(name, []),
     organizationTypeCode: ncesLeaType(row['LEA_TYPE'], row['LEA_TYPE_TEXT']),
@@ -135,6 +138,7 @@ export function ncesSchoolRecord(row: Record<string, string>): SpineSourceRecord
     sourceKey: 'nces-ccd-school-directory-2024-25',
     sourceRecordKey: id,
     sourceEffectiveDate: isoDate(row['EFFECTIVE_DATE']),
+    jurisdictionCode: null,
     name,
     nameNormalized: normalizeOrganizationName(name, []),
     organizationTypeCode: 'school',
@@ -177,6 +181,7 @@ export function texasDistrictOverlay(row: Record<string, string>): SpineSourceRe
     sourceKey: 'texas-askted-site-2026',
     sourceRecordKey: `district:${id}`,
     sourceEffectiveDate: isoDate(row['Update Date']),
+    jurisdictionCode: 'us-tx-education',
     name,
     nameNormalized: normalizeOrganizationName(name, []),
     organizationTypeCode: 'school_district',
@@ -184,8 +189,8 @@ export function texasDistrictOverlay(row: Record<string, string>): SpineSourceRe
     sectorCode: 'education',
     classificationReviewReason: null,
     identifiers: compactIdentifiers([
-      identifier('state_education_org_id', id, 'TX'),
       identifier('nces_district_id', unquote(row['NCES District ID']), null),
+      identifier('state_education_org_id', id, 'TX'),
     ]),
     parentIdentifiers: [],
     location: {
@@ -216,6 +221,7 @@ export function texasSchoolOverlay(row: Record<string, string>): SpineSourceReco
     sourceKey: 'texas-askted-site-2026',
     sourceRecordKey: `school:${id}`,
     sourceEffectiveDate: isoDate(row['Update Date']),
+    jurisdictionCode: 'us-tx-education',
     name,
     nameNormalized: normalizeOrganizationName(name, []),
     organizationTypeCode: 'school',
@@ -223,12 +229,12 @@ export function texasSchoolOverlay(row: Record<string, string>): SpineSourceReco
     sectorCode: 'education',
     classificationReviewReason: null,
     identifiers: compactIdentifiers([
-      identifier('state_education_org_id', id, 'TX'),
       identifier('nces_school_id', unquote(row['NCES School ID']), null),
+      identifier('state_education_org_id', id, 'TX'),
     ]),
     parentIdentifiers: compactIdentifiers([
-      identifier('state_education_org_id', districtId, 'TX'),
       identifier('nces_district_id', unquote(row['NCES District ID']), null),
+      identifier('state_education_org_id', districtId, 'TX'),
     ]),
     location: {
       addressLine1: clean(row['School Site Street Address']),
@@ -246,6 +252,7 @@ export function texasSchoolOverlay(row: Record<string, string>): SpineSourceReco
       magnetStatus: clean(row['Magnet Status']),
       virtualStatus: clean(row['Virtual/Hybrid Campus']),
       gradeRange: clean(row['Grade Range']),
+      ...gradeRangeAttributes(row['Grade Range']),
       enrollment: numeric(row['School Enrollment as of Oct 2025']),
       enrollmentAsOf: '2025-10',
       status: clean(row['School Status']),
@@ -333,4 +340,12 @@ function compactAttributes(
   input: Record<string, string | number | boolean | null>,
 ): Record<string, string | number | boolean | null> {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== null));
+}
+
+function gradeRangeAttributes(value: string | null | undefined): Record<string, string> {
+  const published = unquote(value);
+  if (published === null) return {};
+  const match = /^([A-Z0-9]+)-([A-Z0-9]+)$/i.exec(published);
+  if (match === null) return {};
+  return { lowGrade: match[1] as string, highGrade: match[2] as string };
 }

@@ -89,13 +89,13 @@ every education organization to claim a level it does not factually have.
 `identity_fingerprint` is unique, and `resolveIdentity` computes it from the
 strongest evidence available:
 
-| Tier                  | Key                                                |
-| --------------------- | -------------------------------------------------- |
-| `official_identifier` | The issuing system and the value                   |
-| `source_identifier`   | A stable key the source itself assigns             |
-| `parent_scoped_name`  | Jurisdiction, parent, type and normalized name     |
-| `domain_scoped_name`  | Jurisdiction, domain, type and normalized name     |
-| `ambiguous`           | The source record itself, and flagged for a person |
+| Tier                  | Key                                                          |
+| --------------------- | ------------------------------------------------------------ |
+| `official_identifier` | The issuing system, issuing state when applicable, and value |
+| `source_identifier`   | A stable key the source itself assigns                       |
+| `parent_scoped_name`  | Jurisdiction, parent, type and normalized name               |
+| `domain_scoped_name`  | Jurisdiction, domain, type and normalized name               |
+| `ambiguous`           | The source record itself, and flagged for a person           |
 
 The parent is part of the key at tier 3, and that is the whole point of the
 tier: two "Lincoln Elementary" schools in two districts are two schools, and a
@@ -120,6 +120,12 @@ merging. An ambiguous record is kept, keyed on the source document so it is stil
 idempotent, and listed by
 `OrganizationRepository.identityReviewQueue()` for a person to confirm. It is
 never merged into a look-alike and never silently duplicated.
+
+State-issued identifiers are unique within their issuing state. Both
+`identity_fingerprint` and the `external_identifiers` uniqueness constraint
+therefore include `issuing_state_code` when it is present. A Texas identifier
+and a Colorado identifier with the same published value remain separate, while
+global identifier systems such as NCES retain their system-and-value identity.
 
 ## Collection control plane
 

@@ -87,7 +87,9 @@ describe('WebsiteResolutionRepository', () => {
         id: h.organizationId,
         name: 'Example City',
         stateCode: 'CO',
-        identifiers: [{ systemCode: 'state_assigned_id', value: 'example-001' }],
+        identifiers: [
+          { systemCode: 'state_assigned_id', value: 'example-001', issuingStateCode: null },
+        ],
         proposedCandidates: 0,
       }),
     ]);

@@ -190,8 +190,12 @@ independent review and the human owner; it is not approval.
 - **Review and approve source policies.** Every domain in scope needs a
   `source_policies` row with a recorded review and production approval. The
   crawler refuses production collection otherwise. See `SOURCE_POLICY_REVIEW.md`.
-- **Run the organization import and reconcile counts.** District and campus
-  totals against the published figures; distinct counties against 254.
+- **Apply the organization materializer and reconcile counts.** After a new
+  production approval, apply migration 0019 and rerun the spine import.
+  Reconcile 1,216 districts, 9,682 campuses, 1,213 district websites and 7,476
+  campus websites. The AskTED artifact represents 253 counties; Loving County
+  is absent and must remain an explained source-coverage difference rather than
+  an invented organization.
 - **Raw response archiving to R2.** `source_documents.storage_key` is plumbed but
   nothing writes it. Needed before a real crawl, so a disputed record can be
   checked against what the page actually said.

@@ -24,6 +24,13 @@ The generated files are operational staging data under `.context/` and are not
 committed. Source files are also not committed. The code, mappings, tests and
 documentation are the reproducible asset.
 
+The organizer rejects an AskTED row that cannot produce both its district and
+campus record, rejects duplicate campus identifiers and refuses inconsistent
+values repeated for one district. Its summary separates district and campus
+counts, website counts, represented counties and Census counties absent from
+the source. The importer compares every source count and website count to the
+checked inventory before it can connect to a database.
+
 USA.gov A-Z aliases use the stable official node ID plus the published normalized
 name as the source-record key. This preserves each published alias without changing
 the official agency identifier.
@@ -75,9 +82,12 @@ target, approves a batch or contacts a website.
 ## Durable import
 
 Migration `0017_organization_spine_staging.sql` adds a default-deny staging
-table. Each row references both a source document and its immutable version.
-Incomplete classifications, overlays and reconciliation work have distinct
-statuses and do not silently become canonical organizations.
+table. Migration `0019_spine_materialization.sql` adds jurisdiction linkage,
+the raw published website value and state-scoped identifier uniqueness. Each
+row references both a source document and its immutable version. Incomplete
+classifications and reconciliation work do not silently become canonical
+organizations. A fully classified state record may canonicalize or enrich an
+existing organization only when one of its identifiers matches exactly.
 
 Preview an import without connecting to a database:
 
@@ -93,11 +103,20 @@ DATABASE_URL=... pnpm spine:import -- --apply --canonicalize
 ```
 
 The importer streams batches of 2,000 staged rows and canonicalizes at most
-5,000 ready rows per transaction. `--apply` is never inferred. Omitting
-`--canonicalize` loads the reviewable staging rows without creating canonical
-organizations. Every catalog URL must also resolve to a source-policy row that
-permits collection or carries a recorded production approval. Missing,
-prohibited and unapproved policy decisions stop the import.
+5,000 ready rows per transaction. It resolves all published identifiers, not
+only the first one, and fails when exact identifiers point at conflicting
+organizations or classifications. After canonicalization it materializes
+published parent relationships and Texas education attributes. The AskTED
+month-only enrollment date remains a source attribute rather than being given
+an invented day in the date-valued extension column. Blank charter values and
+the distinct `Hybrid` status likewise remain null instead of becoming false or
+true guesses.
+
+`--apply` is never inferred. Omitting `--canonicalize` loads the reviewable
+staging rows without creating canonical organizations. Every catalog URL must
+also resolve to a source-policy row that permits collection or carries a
+recorded production approval. Missing, prohibited and unapproved policy
+decisions stop the import.
 
 ## Merge rule
 
@@ -130,6 +149,12 @@ employee records.
 6. Apply exact-identifier overlays.
 7. Keep incomplete classifications and non-exact crosswalks in review.
 8. Populate the missing-website queue from canonical organizations.
+
+For the current AskTED artifact, the reconciliation baseline is 1,216 distinct
+districts, 9,682 campuses, 1,213 district websites and 7,476 campus websites.
+The file represents 253 counties. Loving County is absent from the published
+rows, so the importer records that coverage difference rather than inventing an
+organization to force a count of 254.
 
 A production load is a database migration/import operation and requires a new,
 specific owner approval. Organizing the local files is not that approval.

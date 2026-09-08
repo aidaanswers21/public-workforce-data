@@ -19,7 +19,9 @@
     "@public-workforce/core": "workspace:*",
     "@public-workforce/database": "workspace:*",
     "@public-workforce/shared-types": "workspace:*",
-    "@public-workforce/jurisdiction-kit": "workspace:*"
+    "@public-workforce/jurisdiction-kit": "workspace:*",
+    "@public-workforce/jurisdiction-texas-education": "workspace:*",
+    "@public-workforce/sector-education": "workspace:*"
   },
   "devDependencies": {}
 }
