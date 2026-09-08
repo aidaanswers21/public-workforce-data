@@ -42,6 +42,7 @@ export async function materializeTexasEducationAttributes(client: SqlClient): Pr
             end,
             case
               when jsonb_typeof(r.attributes -> 'enrollment') = 'number'
+                and (r.attributes ->> 'enrollment')::numeric >= 0
                 then (r.attributes ->> 'enrollment')::integer
               else null
             end,

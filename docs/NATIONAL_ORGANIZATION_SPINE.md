@@ -110,7 +110,8 @@ published parent relationships and Texas education attributes. The AskTED
 month-only enrollment date remains a source attribute rather than being given
 an invented day in the date-valued extension column. Blank charter values and
 the distinct `Hybrid` status likewise remain null instead of becoming false or
-true guesses.
+true guesses. Negative enrollment sentinels also remain preserved in staging
+and materialize as null rather than as organization enrollment.
 
 `--apply` is never inferred. Omitting `--canonicalize` loads the reviewable
 staging rows without creating canonical organizations. Every catalog URL must

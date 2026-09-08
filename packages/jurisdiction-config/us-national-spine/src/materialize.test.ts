@@ -70,9 +70,37 @@ describe('Texas education spine materialization', () => {
         sourceEffectiveDate: '2026-09-01',
         observedAt: '2026-09-08T12:00:00.000Z',
       },
+      {
+        sourceKey: TEXAS_ASKTED_SOURCE_KEY,
+        sourceRecordKey: 'school:001234002',
+        name: 'Sentinel Enrollment School',
+        nameNormalized: 'sentinel-enrollment-school',
+        organizationTypeCode: 'school',
+        governmentLevelCode: 'special_district',
+        sectorCode: 'education',
+        classificationReviewReason: null,
+        jurisdictionId,
+        websiteValueRaw: null,
+        websiteUrl: null,
+        primaryDomain: null,
+        identifiers: [
+          { systemCode: 'nces_school_id', value: '481234500002', issuingStateCode: null },
+        ],
+        parentIdentifiers: [],
+        location: { stateCode: 'TX' },
+        attributes: {
+          enrollment: -1,
+          enrollmentAsOf: '2025-10',
+        },
+        status: 'ready_to_import',
+        sourceDocumentId,
+        sourceDocumentVersionId: version.rows[0]?.id ?? '',
+        sourceEffectiveDate: '2026-09-01',
+        observedAt: '2026-09-08T12:00:00.000Z',
+      },
     ]);
-    expect(await repository.canonicalizeReady()).toBe(1);
-    expect(await materializeTexasEducationAttributes(database)).toBe(1);
+    expect(await repository.canonicalizeReady()).toBe(2);
+    expect(await materializeTexasEducationAttributes(database)).toBe(2);
 
     const attributes = await database.query<Record<string, unknown>>(
       `select low_grade, high_grade, school_type, operational_status,
@@ -92,5 +120,13 @@ describe('Texas education spine materialization', () => {
       enrollment_as_of: null,
       source_document_id: sourceDocumentId,
     });
+
+    const sentinel = await database.query<Record<string, unknown>>(
+      `select attributes.enrollment, attributes.enrollment_as_of
+       from education_organization_attributes attributes
+       join organizations organization on organization.id = attributes.organization_id
+       where organization.name = 'Sentinel Enrollment School'`,
+    );
+    expect(sentinel.rows[0]).toEqual({ enrollment: null, enrollment_as_of: null });
   });
 });
