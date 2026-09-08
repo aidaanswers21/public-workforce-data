@@ -103,10 +103,13 @@ describe('Texas education spine materialization', () => {
     expect(await materializeTexasEducationAttributes(database)).toBe(2);
 
     const attributes = await database.query<Record<string, unknown>>(
-      `select low_grade, high_grade, school_type, operational_status,
-              is_charter, is_magnet, is_virtual, enrollment, enrollment_as_of,
-              source_document_id
-       from education_organization_attributes`,
+      `select attributes.low_grade, attributes.high_grade, attributes.school_type,
+              attributes.operational_status, attributes.is_charter,
+              attributes.is_magnet, attributes.is_virtual, attributes.enrollment,
+              attributes.enrollment_as_of, attributes.source_document_id
+       from education_organization_attributes attributes
+       join organizations organization on organization.id = attributes.organization_id
+       where organization.name = 'Fixture School'`,
     );
     expect(attributes.rows[0]).toEqual({
       low_grade: '09',
