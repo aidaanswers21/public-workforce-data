@@ -13,11 +13,16 @@ import {
   type StageOrganizationSpineRecord,
 } from '@public-workforce/database';
 import type { OrganizationSpineRecordStatus } from '@public-workforce/shared-types';
+import { texasEducationJurisdiction } from '@public-workforce/jurisdiction-texas-education';
 import {
   nationalOrganizationSpineInventory,
   type OrganizationSpineInventorySource,
 } from './inventory.js';
 import { durableSpineSourceRecordKey, type SpineSourceRecord } from './index.js';
+import {
+  ensureTexasEducationJurisdiction,
+  materializeTexasEducationAttributes,
+} from './materialize.js';
 
 const argumentsSet = new Set(process.argv.slice(2));
 const apply = argumentsSet.has('--apply');
@@ -28,7 +33,21 @@ const summaryPath = join(directory, 'summary.json');
 
 if (!existsSync(summaryPath))
   throw new Error(`organization spine summary is missing: ${summaryPath}`);
-const localSummary = JSON.parse(readFileSync(summaryPath, 'utf8')) as { generatedAt: string };
+interface LocalSummary {
+  generatedAt: string;
+  sources: Record<string, { records: number; websites: number; missingWebsites: number }>;
+  texas: {
+    districts: number;
+    campuses: number;
+    districtWebsites: number;
+    campusWebsites: number;
+    representedCounties: number;
+    missingCounties: string[];
+  };
+}
+
+const localSummary = JSON.parse(readFileSync(summaryPath, 'utf8')) as LocalSummary;
+validateLocalSummary(localSummary);
 
 if (!apply) {
   process.stdout.write(
@@ -67,6 +86,9 @@ try {
   const sourcePolicies = new SourcePolicyRegistry(
     await new SourcePolicyRepository(database).list(),
   );
+  const jurisdictionIds = new Map<string, string>([
+    ['us-tx-education', await ensureTexasEducationJurisdiction(database)],
+  ]);
   const versionCache = new Map<string, SourceDocumentVersionRef>();
   let staged = 0;
 
@@ -79,10 +101,20 @@ try {
       ? 'ready_to_import'
       : 'classification_hold',
   );
-  staged += await stageFile('organization-overlays.ndjson', () => 'overlay_hold');
+  staged += await stageFile('organization-overlays.ndjson', (record) =>
+    record.classificationReviewReason === null &&
+    record.organizationTypeCode !== null &&
+    record.governmentLevelCode !== null &&
+    record.sectorCode !== null &&
+    record.identifiers.length > 0
+      ? 'ready_to_import'
+      : 'overlay_hold',
+  );
   staged += await stageFile('reconciliation-required.ndjson', () => 'reconciliation_hold');
 
   let imported = 0;
+  let relationships = { materialized: 0, unresolved: 0 };
+  let educationAttributes = 0;
   if (canonicalize) {
     for (;;) {
       const count = await repository.canonicalizeReady(5_000);
@@ -90,9 +122,22 @@ try {
       if (count === 0) break;
       process.stdout.write(`canonicalized ${imported.toLocaleString()} ready rows\n`);
     }
+    relationships = await repository.materializeRelationships();
+    educationAttributes = await materializeTexasEducationAttributes(database);
   }
   process.stdout.write(
-    `${JSON.stringify({ mode: 'applied', staged, imported, database: await repository.summary() }, null, 2)}\n`,
+    `${JSON.stringify(
+      {
+        mode: 'applied',
+        staged,
+        imported,
+        relationships,
+        educationAttributes,
+        database: await repository.summary(),
+      },
+      null,
+      2,
+    )}\n`,
   );
 
   async function stageFile(
@@ -118,6 +163,9 @@ try {
         governmentLevelCode: record.governmentLevelCode,
         sectorCode: record.sectorCode,
         classificationReviewReason: record.classificationReviewReason,
+        jurisdictionId:
+          record.jurisdictionCode === null ? null : requireJurisdictionId(record.jurisdictionCode),
+        websiteValueRaw: record.website?.publishedValue ?? null,
         websiteUrl: record.website?.canonicalUrl ?? null,
         primaryDomain: record.website?.primaryDomain ?? null,
         identifiers: record.identifiers,
@@ -140,6 +188,12 @@ try {
     count += await repository.stage(batch);
     process.stdout.write(`${filename}: staged ${count.toLocaleString()}\n`);
     return count;
+  }
+
+  function requireJurisdictionId(code: string): string {
+    const id = jurisdictionIds.get(code);
+    if (id === undefined) throw new Error(`spine record names an unknown jurisdiction: ${code}`);
+    return id;
   }
 
   async function sourceVersion(
@@ -189,6 +243,33 @@ function sourceInventory(sourceKey: string): OrganizationSpineInventorySource {
   );
   if (prefix !== undefined) return prefix;
   throw new Error(`source key is absent from the reviewed inventory: ${sourceKey}`);
+}
+
+function validateLocalSummary(summary: LocalSummary): void {
+  for (const source of nationalOrganizationSpineInventory.sources) {
+    const actual = summary.sources[source.key];
+    if (
+      actual === undefined ||
+      actual.records !== source.records ||
+      actual.websites !== source.publishedWebsites ||
+      actual.missingWebsites !== source.missingWebsites
+    ) {
+      throw new Error(`organized counts differ from the reviewed inventory: ${source.key}`);
+    }
+  }
+
+  const texas = summary.texas;
+  if (texas == null) throw new Error('organized summary is missing Texas reconciliation counts');
+  const texasInventory = sourceInventory('texas-askted-site-2026');
+  const expectedAreaCount = texasEducationJurisdiction.expectedAreaCount;
+  if (
+    texas.districts + texas.campuses !== texasInventory.records ||
+    texas.districtWebsites + texas.campusWebsites !== texasInventory.publishedWebsites ||
+    expectedAreaCount === null ||
+    texas.representedCounties + texas.missingCounties.length !== expectedAreaCount
+  ) {
+    throw new Error('organized Texas coverage does not reconcile to its reviewed baseline');
+  }
 }
 
 async function sha256File(path: string): Promise<string> {

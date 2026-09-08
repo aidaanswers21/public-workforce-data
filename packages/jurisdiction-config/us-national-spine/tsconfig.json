@@ -10,6 +10,8 @@
     { "path": "../../core" },
     { "path": "../../database" },
     { "path": "../../shared-types" },
-    { "path": "../kit" }
+    { "path": "../kit" },
+    { "path": "../texas-education" },
+    { "path": "../../sectors/education" }
   ]
 }

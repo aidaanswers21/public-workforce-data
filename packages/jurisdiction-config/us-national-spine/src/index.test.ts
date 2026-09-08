@@ -148,6 +148,7 @@ describe('national spine source normalization', () => {
       'School Web Page Address': 'www.cayugaisd.com',
       'School Principal': 'ANOTHER PERSON WHO MUST NOT ENTER THIS IMPORT',
       'School Enrollment as of Oct 2025': '196',
+      'Grade Range': "'09-12",
     };
     const district = texasDistrictOverlay(row);
     const school = texasSchoolOverlay(row);
@@ -164,6 +165,11 @@ describe('national spine source normalization', () => {
         { systemCode: 'nces_district_id', value: '4813200', issuingStateCode: null },
       ]),
       attributes: { enrollment: 196 },
+    });
+    expect(school?.attributes).toMatchObject({
+      gradeRange: "'09-12",
+      lowGrade: '09',
+      highGrade: '12',
     });
     expect(serialized).not.toContain('A PERSON');
     expect(serialized).not.toContain('ANOTHER PERSON');
