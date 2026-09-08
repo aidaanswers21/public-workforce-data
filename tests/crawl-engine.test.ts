@@ -9,7 +9,7 @@ import { createSilentLogger } from '@public-workforce/observability';
 import { genericHtmlAdapter } from '@public-workforce/adapter-generic-html';
 import { genericJsonAdapter } from '@public-workforce/adapter-generic-json';
 import type { CrawlJob } from '@public-workforce/core';
-import type { CrawlCheckpoint, SourcePolicyRecord } from '@public-workforce/shared-types';
+import type { CrawlCheckpoint, Fetcher, SourcePolicyRecord } from '@public-workforce/shared-types';
 import { MapFetcher, StubRobotsProvider, recordingSleep } from './support/fetchers.js';
 import { readFixture } from './support/fixtures.js';
 import { allSectorsTaxonomy } from './support/taxonomy.js';
@@ -20,7 +20,7 @@ const CLOCK = fixedClock('2026-06-01T00:00:00.000Z');
 const LOGGER = createSilentLogger();
 
 function engine(
-  fetcher: MapFetcher,
+  fetcher: Fetcher,
   overrides: Partial<ConstructorParameters<typeof CrawlEngine>[0]> = {},
 ): CrawlEngine {
   return new CrawlEngine({
@@ -566,6 +566,35 @@ describe('CrawlEngine source policy gate', () => {
       }),
     );
     expect(result.records).toHaveLength(9);
+    expect(result.documents).toHaveLength(3);
+    expect(result.documents.every((document) => document.storageKey !== null)).toBe(true);
+    expect(result.documents.every((document) => document.sourcePolicyId === 'p1')).toBe(true);
+  });
+
+  it('refuses to parse a successful production response that was not archived', async () => {
+    const fixture = MapFetcher.from(NUMBERED);
+    const fetcher: Fetcher = {
+      key: 'unarchived-fixture',
+      async fetch(request) {
+        const outcome = await fixture.fetch(request);
+        if (!outcome.ok) return outcome;
+        const page = { ...outcome.page };
+        delete page.storageKey;
+        return { ok: true, page };
+      },
+    };
+
+    await expect(
+      engine(fetcher).run(
+        job({
+          seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+          collectionMode: 'production',
+          sourcePolicy: new SourcePolicyRegistry([
+            policy({ id: 'p1', domain: 'sample-isd.example.org', collectionStatus: 'permitted' }),
+          ]),
+        }),
+      ),
+    ).rejects.toThrow(/not archived/);
   });
 
   it('does not gate a fixture run, because nothing is collected', async () => {

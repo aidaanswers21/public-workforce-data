@@ -62,10 +62,14 @@ than as rows.
 
 No demographic inference, and no attributes the source did not publish.
 
-`source_documents.storage_key` archives a raw response for auditability. When
-the archiver is implemented, archived documents inherit the same retention rules
-as the records derived from them, and the boundary applies to what is extracted
-from them just as it does to a live page.
+`source_document_versions.storage_key` points to the exact successful response
+archived in private S3-compatible object storage before parsing. The worker
+gzip-compresses it under a content-addressed key and fails closed if the upload
+does not succeed. Archived documents inherit the same retention rules as the
+records derived from them, and the boundary applies to what is extracted from
+them just as it does to a live page. Because the raw evidence may include page
+material that is outside the normalized boundary, bucket access is restricted
+to the worker and authorized evidence review.
 
 ## Logging
 
@@ -140,6 +144,8 @@ with its own obligations, and the suppression list is not optional for it.
 
 - Confirm `CRAWLER_USER_AGENT` and `CRAWLER_CONTACT_URL` point at a real,
   reachable policy page describing the crawl and how to opt out.
+- Confirm the worker has least-privilege access to a private S3-compatible
+  archive bucket and prove an archived object can be recovered.
 - Confirm every domain in scope has a reviewed source policy with a recorded
   production approval (`pnpm admin policies` shows what is still outstanding).
 - Confirm suppression entries for any organization that has asked not to be
@@ -165,11 +171,12 @@ access through default privileges protects future grants, but does not switch on
 RLS, so the schema test enumerates every table and rejects an omission.
 
 `packages/database/src/schema.test.ts` asserts the schema-side half: every table
-protected, no policies. It cannot assert the PostgREST half, because the
-in-process PostgreSQL the tests run against has no `anon` role and no PostgREST
-in front of it. Proving that an anonymous request with a publishable key is
-refused needs an integration test against a real Supabase project, tracked as
-blocker RLS-1 in `BACKLOG.md`.
+protected, no policies. `pnpm rls:verify` checks the PostgREST half against a
+configured Supabase test project. `.github/workflows/supabase-rls.yml` runs it
+manually and weekly using secrets held in the `supabase-integration` GitHub
+environment. The dedicated hosted project was checked on 2026-09-04 and all 49
+application tables refused anonymous reads. A CI run still requires those
+environment secrets to be configured by the repository owner.
 
 ## Read API
 

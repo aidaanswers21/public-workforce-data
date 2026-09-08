@@ -8,6 +8,8 @@ import {
   PGliteClient,
   PostgresClient,
   CollectionProjectRepository,
+  ExportPurposeRepository,
+  ExportRepository,
   OrganizationRecordRepository,
   SourcePolicyRepository,
   WebsiteResolutionRepository,
@@ -19,6 +21,7 @@ import {
   loadMigrations,
   migrate,
   type CoverageSummary,
+  type ExportPurpose,
   type SqlClient,
 } from '@public-workforce/database';
 import { createLogger } from '@public-workforce/observability';
@@ -159,6 +162,8 @@ export function createAdminServer(options: AdminServerOptions): Server {
   const projects = new CollectionProjectRepository(options.database);
   const organizationRecords = new OrganizationRecordRepository(options.database);
   const sourcePolicies = new SourcePolicyRepository(options.database);
+  const exportPurposes = new ExportPurposeRepository(options.database);
+  const exports = new ExportRepository(options.database);
   const websites = new WebsiteResolutionRepository(options.database);
   const projectTemplates = options.projectTemplates ?? [];
   const projectBuilderCatalog = options.projectBuilderCatalog ?? EMPTY_PROJECT_BUILDER_CATALOG;
@@ -317,6 +322,84 @@ export function createAdminServer(options: AdminServerOptions): Server {
 
       if (request.method === 'GET' && url.pathname === '/projects') {
         sendHtml(response, 200, renderProjects(await projects.list(), projectTemplates, hosted));
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/exports') {
+        const [purposes, collectionProjects] = await Promise.all([
+          exportPurposes.listActive(),
+          projects.list(),
+        ]);
+        sendHtml(
+          response,
+          200,
+          renderExports(
+            purposes,
+            collectionProjects,
+            url.searchParams.get('message') ?? '',
+            hosted,
+          ),
+        );
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/export-purposes') {
+        const form = new URLSearchParams(await readBody(request));
+        try {
+          if (form.get('approvalConfirmed') !== 'yes') {
+            throw new Error('confirm this exact export purpose approval');
+          }
+          await exportPurposes.approve({
+            code: form.get('code') ?? '',
+            description: form.get('description') ?? '',
+            owner: authenticatedEmail,
+            approvedBy: authenticatedEmail,
+          });
+          redirect(response, '/exports?message=Export+purpose+approved');
+        } catch (error) {
+          redirect(response, `/exports?message=${encodeURIComponent(errorMessage(error))}`);
+        }
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/exports/download') {
+        const form = new URLSearchParams(await readBody(request));
+        if (form.get('exportConfirmed') !== 'yes') {
+          redirect(response, '/exports?message=Confirm+this+exact+export');
+          return;
+        }
+        const projectId = form.get('projectId') ?? '';
+        const project = await projects.get(projectId);
+        if (project === null) {
+          redirect(response, '/exports?message=Choose+a+collection+project');
+          return;
+        }
+        const purpose = form.get('purpose') ?? '';
+        const limit = formInteger(form, 'limit', 50_000);
+        if (limit < 1 || limit > 50_000) {
+          redirect(response, '/exports?message=Export+limit+must+be+between+1+and+50000');
+          return;
+        }
+        try {
+          const built = await exports.buildPeopleExport({
+            name: `${project.name} ${now().toISOString()}`,
+            requestedBy: authenticatedEmail,
+            purpose,
+            filters: {
+              collectionProjectId: projectId,
+              includeGeneralInboxes: form.get('includeGeneralInboxes') === 'yes',
+              limit,
+            },
+          });
+          sendCsv(
+            response,
+            built.csv,
+            `${slug(project.name)}-${now().toISOString().slice(0, 10)}.csv`,
+            built.exportId,
+          );
+        } catch (error) {
+          redirect(response, `/exports?message=${encodeURIComponent(errorMessage(error))}`);
+        }
         return;
       }
 
@@ -885,6 +968,14 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
   response.end(JSON.stringify(body));
 }
 
+function sendCsv(response: ServerResponse, csv: string, filename: string, exportId: string): void {
+  response.statusCode = 200;
+  response.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  response.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  response.setHeader('X-Export-ID', exportId);
+  response.end(csv);
+}
+
 function sendJavascript(response: ServerResponse, body: string): void {
   response.statusCode = 200;
   response.setHeader('Content-Type', 'text/javascript; charset=utf-8');
@@ -964,7 +1055,7 @@ function renderDashboard(data: DashboardData, query: string, hosted: boolean): s
     `<div class="app-shell">
       <header class="topbar">
         <a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a>
-        <div class="topbar-actions"><a class="nav-link" href="/spine">Organization spine</a><a class="nav-link" href="/organization-records">Explore organizations</a><a class="nav-link" href="/projects">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div>
+        <div class="topbar-actions"><a class="nav-link" href="/spine">Organization spine</a><a class="nav-link" href="/organization-records">Explore organizations</a><a class="nav-link" href="/projects">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><a class="nav-link" href="/exports">Exports</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div>
       </header>
       <main class="dashboard">
         <section class="dashboard-heading">
@@ -1314,6 +1405,52 @@ function renderProjects(
   );
 }
 
+function renderExports(
+  purposes: readonly ExportPurpose[],
+  projects: readonly CollectionProjectSummary[],
+  message: string,
+  hosted: boolean,
+): string {
+  const purposeOptions = purposes
+    .map(
+      (purpose) =>
+        `<option value="${escapeAttribute(purpose.code)}">${escapeHtml(purpose.code)} · ${escapeHtml(purpose.description)}</option>`,
+    )
+    .join('');
+  const projectOptions = projects
+    .filter((project) => project.status !== 'cancelled')
+    .map(
+      (project) =>
+        `<option value="${escapeAttribute(project.id)}">${escapeHtml(project.name)} · ${project.recordsCollected.toLocaleString()} records</option>`,
+    )
+    .join('');
+  const purposeRows = purposes
+    .map(
+      (purpose) => `<tr>
+        <td><strong>${escapeHtml(purpose.code)}</strong><span>${escapeHtml(purpose.description)}</span></td>
+        <td>${escapeHtml(purpose.owner)}</td>
+        <td>${escapeHtml(purpose.approvedBy)}<span>${formatDate(purpose.approvedAt)}</span></td>
+      </tr>`,
+    )
+    .join('');
+  const canExport = purposes.length > 0 && projectOptions.length > 0;
+
+  return page(
+    'Exports',
+    `${appHeader('/projects', hosted)}
+    <main class="dashboard">
+      <section class="dashboard-heading"><div><p class="eyebrow">Suppression-safe delivery</p><h1>Export collected records</h1><p class="muted">Download public professional records from one collection project. Every export is filtered in SQL, checked again in memory, checksummed, and audited.</p></div></section>
+      ${message.length === 0 ? '' : `<div class="flash" role="status">${escapeHtml(message)}</div>`}
+      <div class="project-grid">
+        <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Approval</p><h2>Approve an export purpose</h2></div></div><form class="panel-body release-form" method="post" action="/export-purposes"><label for="purposeCode">Purpose code</label><input id="purposeCode" name="code" pattern="[a-z][a-z0-9_-]{1,63}" placeholder="internal-review" required><label for="purposeDescription">Specific permitted use</label><textarea id="purposeDescription" name="description" rows="3" minlength="8" required placeholder="Internal review of the selected collection pilot"></textarea><label class="check-label"><input type="checkbox" name="approvalConfirmed" value="yes" required><span>I approve this named use of exported records.</span></label><button type="submit">Approve export purpose</button></form></section>
+        <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Download</p><h2>Create a governed CSV</h2></div></div><form class="panel-body release-form" method="post" action="/exports/download"><label for="exportProject">Collection project</label><select id="exportProject" name="projectId" required><option value="">Choose a project</option>${projectOptions}</select><label for="exportPurpose">Approved purpose</label><select id="exportPurpose" name="purpose" required><option value="">Choose an approved purpose</option>${purposeOptions}</select><label for="exportLimit">Maximum rows</label><input id="exportLimit" name="limit" type="number" min="1" max="50000" value="50000" required><label class="check-label"><input type="checkbox" name="includeGeneralInboxes" value="yes"><span>Include published general office inboxes.</span></label><label class="check-label"><input type="checkbox" name="exportConfirmed" value="yes" required><span>I approve this exact export for the selected purpose.</span></label><button type="submit" ${canExport ? '' : 'disabled'}>Download suppression-checked CSV</button><p class="field-help">Inferred candidates remain separate from published addresses. This repository does not send email.</p></form></section>
+      </div>
+      <section class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Controlled uses</p><h2>Active export purposes</h2></div><span class="summary-chip">${purposes.length}</span></div><div class="table-scroll"><table><thead><tr><th>Purpose</th><th>Owner</th><th>Approval</th></tr></thead><tbody>${purposeRows.length > 0 ? purposeRows : '<tr><td class="empty" colspan="3">No export purpose has been approved.</td></tr>'}</tbody></table></div></section>
+    </main>${appFooter(hosted)}`,
+    'dashboard-page',
+  );
+}
+
 function renderSourcePolicies(
   policies: readonly SourcePolicyRecord[],
   message: string,
@@ -1481,7 +1618,7 @@ function renderProjectDetail(
 }
 
 function appHeader(backTo: string, hosted: boolean): string {
-  return `<header class="topbar"><a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a><div class="topbar-actions"><a class="nav-link" href="/spine">Organization spine</a><a class="nav-link" href="/organization-records">Explore organizations</a><a class="nav-link" href="${escapeAttribute(backTo)}">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div></header>`;
+  return `<header class="topbar"><a class="wordmark" href="/" aria-label="Public Workforce Data home"><span class="brand-mark small">PW</span><span>Public Workforce Data<small>Operator console</small></span></a><div class="topbar-actions"><a class="nav-link" href="/spine">Organization spine</a><a class="nav-link" href="/organization-records">Explore organizations</a><a class="nav-link" href="${escapeAttribute(backTo)}">Collection projects</a><a class="nav-link" href="/policies">Source policies</a><a class="nav-link" href="/exports">Exports</a><span class="local-badge"><span class="status-dot"></span>${hosted ? 'Hosted service' : 'Local workspace'}</span><form method="post" action="/logout"><button class="quiet-button" type="submit">Sign out</button></form></div></header>`;
 }
 
 function appFooter(hosted: boolean): string {

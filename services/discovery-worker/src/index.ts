@@ -1,6 +1,7 @@
 import {
   CrawlEngine,
   canonicalizeUrl,
+  domainOf,
   isExcludedUrl,
   scoreDirectoryUrl,
   urlHash,
@@ -12,13 +13,14 @@ import {
 import type {
   DirectoryVocabulary,
   Fetcher,
+  RobotsDecision,
   RobotsProvider,
   Uuid,
 } from '@public-workforce/shared-types';
 import type { Logger } from '@public-workforce/observability';
 import type { AdapterRegistry } from '@public-workforce/adapter-kit';
 import { UnsupportedPlatformError } from '@public-workforce/adapter-kit';
-import type { SqlClient } from '@public-workforce/database';
+import { IngestionRepository, type SqlClient } from '@public-workforce/database';
 
 export interface DiscoveryTarget {
   /** The organization whose site this is. Any public body, at any level. */
@@ -104,10 +106,11 @@ export class DiscoveryWorker {
       };
     }
 
+    let robotsDecision: RobotsDecision | null = null;
     if (policy.respectRobots) {
-      const robots = await this.deps.robots.check(seed, policy.userAgent);
-      if (!robots.allowed) {
-        const note = `robots.txt disallows discovery${robots.matchedRule === null ? '' : ` by ${robots.matchedRule}`}`;
+      robotsDecision = await this.deps.robots.check(seed, policy.userAgent);
+      if (!robotsDecision.allowed) {
+        const note = `robots.txt disallows discovery${robotsDecision.matchedRule === null ? '' : ` by ${robotsDecision.matchedRule}`}`;
         await this.recordBlocked(target, seed, 'blocked', note);
         return {
           siteUrl: seed,
@@ -140,6 +143,27 @@ export class DiscoveryWorker {
     }
 
     const page = outcome.page;
+    const collectionMode = this.deps.collectionMode ?? 'production';
+    if (collectionMode === 'production' && page.storageKey == null) {
+      throw new Error('production discovery response was not archived; refusing to inspect it');
+    }
+    await new IngestionRepository(this.deps.client).recordSourceDocument({
+      url: page.finalUrl,
+      urlCanonical: page.finalUrl,
+      urlHash: urlHash(page.finalUrl),
+      domain: domainOf(page.finalUrl) ?? 'unknown',
+      sourceTypeCode: 'html_directory',
+      httpStatus: page.status,
+      contentHash: page.contentHash,
+      contentType: page.contentType,
+      storageKey: page.storageKey ?? null,
+      robotsAllowed: robotsDecision?.allowed ?? null,
+      robotsPolicyNote:
+        robotsDecision === null ? null : (robotsDecision.note ?? robotsDecision.matchedRule),
+      sourcePolicyId: sourceDecision.policyId,
+      crawlRunId: null,
+      retrievedAt: page.fetchedAt,
+    });
     let selection;
     try {
       selection = this.deps.adapters.select({

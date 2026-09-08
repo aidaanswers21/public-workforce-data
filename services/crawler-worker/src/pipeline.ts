@@ -1,4 +1,9 @@
-import type { CrawlRunResult, HarvestedRecord, TitleRuleSet } from '@public-workforce/core';
+import type {
+  CrawlRunResult,
+  FetchedDocument,
+  HarvestedRecord,
+  TitleRuleSet,
+} from '@public-workforce/core';
 import {
   applyDataBoundary,
   classifyEmail,
@@ -115,6 +120,15 @@ export class IngestionPipeline {
 
     const documents = new Map<string, SourceDocumentVersionRef>();
 
+    const recordDocuments = new Set(
+      result.records.map((record) => documentKey(record.sourceUrl, record.sourceContentHash)),
+    );
+    for (const fetched of result.documents) {
+      if (!recordDocuments.has(documentKey(fetched.sourceUrl, fetched.sourceContentHash))) {
+        await this.recordFetchedDocument(fetched, result.crawlRunId, context, documents);
+      }
+    }
+
     for (const harvested of result.records) {
       const document = await this.resolveDocument(harvested, result.crawlRunId, context, documents);
       const created = await this.ingestOne(
@@ -142,7 +156,8 @@ export class IngestionPipeline {
     context: IngestContext,
     cache: Map<string, SourceDocumentVersionRef>,
   ): Promise<SourceDocumentVersionRef> {
-    const cached = cache.get(harvested.sourceUrl);
+    const key = documentKey(harvested.sourceUrl, harvested.sourceContentHash);
+    const cached = cache.get(key);
     if (cached !== undefined) return cached;
 
     const reference = await this.deps.ingestion.recordSourceDocument({
@@ -154,14 +169,42 @@ export class IngestionPipeline {
       httpStatus: harvested.httpStatus,
       contentHash: harvested.sourceContentHash,
       contentType: harvested.contentType,
-      storageKey: null,
+      storageKey: harvested.storageKey ?? null,
       robotsAllowed: harvested.robotsAllowed,
       robotsPolicyNote: harvested.robotsPolicyNote,
+      sourcePolicyId: harvested.sourcePolicyId ?? null,
       crawlRunId,
       retrievedAt: harvested.fetchedAt,
     });
-    cache.set(harvested.sourceUrl, reference);
+    cache.set(key, reference);
     return reference;
+  }
+
+  private async recordFetchedDocument(
+    fetched: FetchedDocument,
+    crawlRunId: Uuid,
+    context: IngestContext,
+    cache: Map<string, SourceDocumentVersionRef>,
+  ): Promise<void> {
+    const key = documentKey(fetched.sourceUrl, fetched.sourceContentHash);
+    if (cache.has(key)) return;
+    const reference = await this.deps.ingestion.recordSourceDocument({
+      url: fetched.sourceUrl,
+      urlCanonical: fetched.sourceUrl,
+      urlHash: urlHash(fetched.sourceUrl),
+      domain: domainOf(fetched.sourceUrl) ?? 'unknown',
+      sourceTypeCode: context.sourceTypeCode,
+      httpStatus: fetched.httpStatus,
+      contentHash: fetched.sourceContentHash,
+      contentType: fetched.contentType,
+      storageKey: fetched.storageKey,
+      robotsAllowed: fetched.robotsAllowed,
+      robotsPolicyNote: fetched.robotsPolicyNote,
+      sourcePolicyId: fetched.sourcePolicyId,
+      crawlRunId,
+      retrievedAt: fetched.fetchedAt,
+    });
+    cache.set(key, reference);
   }
 
   private async ingestOne(
@@ -406,6 +449,10 @@ export class IngestionPipeline {
       summary.observations += 1;
     }
   }
+}
+
+function documentKey(url: string, contentHash: string): string {
+  return `${url}\u0000${contentHash}`;
 }
 
 /**

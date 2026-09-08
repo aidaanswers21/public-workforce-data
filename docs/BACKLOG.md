@@ -175,8 +175,11 @@ the applicable blockers below are resolved.**
   project.
 - **Status.** The dedicated Supabase project was exercised through PostgREST
   with its publishable key on 2026-09-04. All 49 public application tables
-  refused anonymous reads. A repeatable CI job against a throwaway project is
-  still required before independent review and human acceptance.
+  refused anonymous reads. `pnpm rls:verify` now checks every application table,
+  and a manual plus weekly GitHub Actions workflow runs it against credentials
+  held in the `supabase-integration` environment. Configuring those CI secrets,
+  recording a passing workflow run, independent review and human acceptance
+  remain.
 
 Ordered roughly by what unblocks the most. Implemented status is evidence for
 independent review and the human owner; it is not approval.
@@ -190,15 +193,16 @@ independent review and the human owner; it is not approval.
 - **Review and approve source policies.** Every domain in scope needs a
   `source_policies` row with a recorded review and production approval. The
   crawler refuses production collection otherwise. See `SOURCE_POLICY_REVIEW.md`.
-- **Apply the organization materializer and reconcile counts.** After a new
-  production approval, apply migration 0019 and rerun the spine import.
-  Reconcile 1,216 districts, 9,682 campuses, 1,213 district websites and 7,476
-  campus websites. The AskTED artifact represents 253 counties; Loving County
-  is absent and must remain an explained source-coverage difference rather than
-  an invented organization.
-- **Raw response archiving to R2.** `source_documents.storage_key` is plumbed but
-  nothing writes it. Needed before a real crawl, so a disputed record can be
-  checked against what the page actually said.
+- **AskTED organization materialization is complete.** Migration 0019 and the
+  preserved release were applied to the hosted database. It materialized 1,216
+  districts, 9,682 campuses and 8,689 published websites. Of 10,898 education
+  organizations, 10,602 carry valid enrollment and 296 source sentinel values
+  remain preserved in staging while materializing as null.
+- **Raw response archiving is implemented.** Every successful production
+  source response is gzip-compressed to private S3-compatible storage before
+  parsing, and its storage key and observed response metadata are stored on the
+  document version. Deployment still needs a private bucket, least-privilege
+  worker credentials and a recovery check before a live batch.
 
 ## Sector and jurisdiction coverage
 
@@ -236,8 +240,10 @@ independent review and the human owner; it is not approval.
   which currently show up as `empty_success`.
 - **Scheduler deployment and soak test.** The durable approved-batch queue,
   cross-worker domain exclusion, expiring leases and checkpoint reload path are
-  implemented behind the finite `collection:work` entry point. It still needs a
-  deployment definition and a multi-connection soak test before live use.
+  implemented behind the finite `collection:work` entry point. The Render
+  Blueprint defines the private console and worker, and the hosted database
+  passed a 12-worker distinct-claim test. The updated worker still needs a
+  deployed archive write/recovery check and a small approved live batch.
 - **Platform-specific adapters**, once discovery shows which real platforms
   recur. Not before, and only after checking whether the sector vocabulary is
   simply missing the wording.
@@ -278,8 +284,9 @@ extraction have both failed.
   published emails, inferred candidates, validated, suppressed, failed sources,
   unsupported platforms, sources on policy hold, last crawl date, estimated
   cost, policy review workflows, and richer data-quality samples.
-- Export download UI, going through `ExportRepository` so suppression is
-  enforced.
+- **Governed export download is implemented.** The hosted console can record a
+  human-approved purpose and download a collection-project-scoped CSV through
+  `ExportRepository`, with the two suppression passes, checksum and audit row.
 
 ## Platform
 

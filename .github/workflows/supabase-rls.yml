@@ -1,0 +1,27 @@
+name: Supabase RLS integration
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 8 * * 1'
+
+jobs:
+  verify-anonymous-default-deny:
+    name: Anonymous reads expose no application rows
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: supabase-integration
+    env:
+      SUPABASE_TEST_URL: ${{ secrets.SUPABASE_TEST_URL }}
+      SUPABASE_TEST_PUBLISHABLE_KEY: ${{ secrets.SUPABASE_TEST_PUBLISHABLE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm rls:verify

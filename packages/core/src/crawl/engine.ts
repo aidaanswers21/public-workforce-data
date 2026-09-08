@@ -50,9 +50,24 @@ export interface HarvestedRecord {
   /** Null means robots was deliberately not consulted, as in fixture mode. */
   robotsAllowed: boolean | null;
   robotsPolicyNote: string | null;
+  storageKey?: string | null;
+  sourcePolicyId?: Uuid | null;
   depth: number;
   /** Directory-wide context established by the page, such as organization or unit. */
   pageContext: Readonly<Record<string, string>>;
+}
+
+/** Metadata for one fetched response whose exact bytes have already been archived. */
+export interface FetchedDocument {
+  sourceUrl: string;
+  sourceContentHash: string;
+  fetchedAt: Timestamp;
+  httpStatus: number;
+  contentType: string | null;
+  robotsAllowed: boolean | null;
+  robotsPolicyNote: string | null;
+  storageKey: string | null;
+  sourcePolicyId: Uuid | null;
 }
 
 export interface CrawlJob {
@@ -85,6 +100,7 @@ export interface CrawlRunResult {
   adapterKey: string;
   adapterVersion: string;
   pages: CrawlPageRecord[];
+  documents: FetchedDocument[];
   records: HarvestedRecord[];
   errors: CrawlErrorRecord[];
   stops: CrawlStopSignal[];
@@ -143,6 +159,7 @@ export class CrawlEngine {
     const guards = new CrawlGuards(job.policy);
     const pages: CrawlPageRecord[] = [];
     const errors: CrawlErrorRecord[] = [];
+    const documents: FetchedDocument[] = [];
     const harvested: HarvestedRecord[] = [];
     const log = this.deps.logger.child({ crawlRunId: job.crawlRunId, adapter: job.adapter.key });
 
@@ -301,6 +318,22 @@ export class CrawlEngine {
 
       const page = outcome;
       bytesFetched += page.body.length;
+      if (collectionMode === 'production' && page.storageKey == null) {
+        throw new Error('production response was not archived; refusing to parse or ingest it');
+      }
+      const fetchedDocument: FetchedDocument = {
+        sourceUrl: page.finalUrl,
+        sourceContentHash: page.contentHash,
+        fetchedAt: page.fetchedAt,
+        httpStatus: page.status,
+        contentType: page.contentType,
+        robotsAllowed: robotsDecision?.allowed ?? null,
+        robotsPolicyNote:
+          robotsDecision === null ? null : (robotsDecision.note ?? robotsDecision.matchedRule),
+        storageKey: page.storageKey ?? null,
+        sourcePolicyId: policyDecision.policyId,
+      };
+      documents.push(fetchedDocument);
 
       if (CAPTCHA_MARKERS.test(page.body)) {
         errors.push(
@@ -462,6 +495,8 @@ export class CrawlEngine {
           robotsAllowed: robotsDecision?.allowed ?? null,
           robotsPolicyNote:
             robotsDecision === null ? null : (robotsDecision.note ?? robotsDecision.matchedRule),
+          storageKey: page.storageKey ?? null,
+          sourcePolicyId: policyDecision.policyId,
           depth: task.depth,
           pageContext,
         });
@@ -557,6 +592,7 @@ export class CrawlEngine {
       adapterKey: job.adapter.key,
       adapterVersion: job.adapter.version,
       pages,
+      documents,
       records: harvested,
       errors,
       stops: [...guards.stopSignals],

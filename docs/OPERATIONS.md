@@ -57,8 +57,10 @@ verified jurisdiction/source configuration will populate the same controls
 without adding branches to the console or crawler.
 
 The production entry point refuses to start without one approved batch ID, a
-database URL and the crawler identity. A supervised run may use a local job
-ceiling:
+database URL, the crawler identity and private S3-compatible archive
+credentials. `STORAGE_ENDPOINT`, `STORAGE_REGION`, `STORAGE_BUCKET`,
+`STORAGE_ACCESS_KEY_ID` and `STORAGE_SECRET_ACCESS_KEY` are all required. A
+supervised run may use a local job ceiling:
 
 ```bash
 pnpm collection:work -- --batch-id <approved-batch-uuid> --max-jobs 10
@@ -88,7 +90,8 @@ Oregon on Starter instances, with automatic deploys disabled. The web service
 has a 30-second shutdown window and `/health` returns success only when its
 database connection is ready. The worker uses a 300-second graceful shutdown
 window. `DATABASE_URL`, admin credentials, `CRAWLER_USER_AGENT`, and
-`CRAWLER_CONTACT_URL` remain dashboard-managed secrets. Both services use
+`CRAWLER_CONTACT_URL` remain dashboard-managed secrets. The worker also
+requires the five `STORAGE_*` values named above. Both services use
 Supabase's published production root certificate from
 `config/certificates/supabase-prod-ca-2021.crt` so the session-pool connections
 retain full certificate and hostname verification. A worker `SIGINT` or
@@ -134,6 +137,13 @@ release or an unavailable database. Keep deploys manual, verify `/health` after
 each release, and use Render's previous deployment rollback if a new release
 fails. Rotating a database password requires updating every service that uses
 that login before redeploying it.
+
+The **Exports** page creates controlled purposes and downloads a CSV for one
+selected collection project. Creating a purpose and producing a file each
+require an explicit signed-in confirmation. The repository rejects inactive or
+unknown purposes, limits a browser export to 50,000 rows, applies suppression in
+SQL, re-checks it immediately before rendering, and records the export checksum
+and audit event. This repository does not send the file or perform outreach.
 
 ## See it work
 

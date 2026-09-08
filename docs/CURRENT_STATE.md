@@ -41,6 +41,9 @@ production crawl run.
 | Sector-configured organization explorer with profiles, official aggregates, provenance and bulk selection         | Working                                                        |
 | Collection projects, active scope controls, approved-batch completion, durable leased scheduler jobs              | Working, no live batch run                                     |
 | Long-lived approved-job daemon and Render web/worker Blueprint                                                    | Working, manual deploys configured                             |
+| Private S3-compatible archive before production parsing, with document-version provenance                         | Working locally, deployment credentials required               |
+| Governed, project-scoped CSV download in the hosted console                                                       | Working locally, deployment required                           |
+| Repeatable Supabase PostgREST default-deny check and scheduled workflow                                           | Working locally, CI environment secrets required               |
 | Cross-worker one-active-job-per-domain guard, page and error batch stops                                          | Working                                                        |
 | Persistent embedded fixture database                                                                              | Working: `pnpm local:setup`                                    |
 | Fixture crawl end to end                                                                                          | Working: `pnpm crawl:fixture`                                  |
@@ -49,12 +52,13 @@ production crawl run.
 
 - **No production crawl has run.** Everything is fixture-driven.
 - **The first organization import is complete, but no production directory
-  crawl has run.** The hosted database contains 231,016 provenance-bearing
-  source records and 52,557 exact-ID canonical organizations. The remaining
-  source records stay in explicit classification, overlay or reconciliation
-  holds rather than receiving guessed values. Migration 0019 and the new
-  AskTED materialization path have not been applied to that hosted database;
-  doing so requires a new approval.
+  crawl has run.** The hosted database contains the 231,016-row organized
+  national release plus the preserved AskTED release. Migration 0019 is applied,
+  and AskTED materialized 1,216 districts, 9,682 campuses and 8,689 published
+  websites. The canonical organization count is 63,455, including 10,898 Texas
+  education organizations. Remaining source rows stay in explicit
+  classification, overlay or reconciliation holds rather than receiving
+  guessed values.
 - **Bulk-import approval does not approve live collection.** The scheduler
   loads policy rows from the database and moves unreviewed targets to
   `policy_hold`; discovery independently checks the same policy registry and
@@ -65,10 +69,11 @@ production crawl run.
   documented in `BACKLOG.md` with their risk, resolution, required tests and
   what each one blocks. No live source may be fetched and no real outreach
   export may be used until the applicable ones are resolved.
-- **Reserved environment variables remain visibly unwired.** Crawl-limit
-  overrides, object storage, validation-provider and n8n settings are declared
-  in `.env.example` and read by nothing. Crawler identity is now required by the
-  finite approved-batch worker. `.env.example` says so per variable.
+- **Some reserved environment variables remain visibly unwired.** Crawl-limit
+  overrides, validation-provider and n8n settings are declared in
+  `.env.example` and read by nothing. Crawler identity and the five private
+  object-storage values are required by the finite approved-batch worker.
+  `.env.example` says so per variable.
 - **Only the education sector has an extension table.** State, local and federal
   packs contribute types, roles, titles and vocabulary, and none of them needs
   attributes the neutral core does not already carry.
@@ -80,8 +85,6 @@ production crawl run.
   or source is reconciled; the console does not present those as ready.
 - **No browser rendering.** `requiresBrowser` is the seam; no adapter sets it.
 - **No AI extraction.** The contract for it is in `BACKLOG.md`, unimplemented.
-- **No raw response archiving.** `source_documents.storage_key` exists; the R2
-  uploader does not.
 - **No public or multi-user admin application.** The browser console is a
   private single-operator service with its own hashed-password login. It can
   define collection projects, record source-policy decisions, and approve
@@ -115,15 +118,16 @@ The tests that carry the generalization and persistence guarantees:
 
 ## Immediate next steps
 
-1. Review the organized national-spine summary and unresolved classifications.
-2. Confirm the exact official artifacts intended for a production import.
-3. Use the organization explorer to inspect official aggregate values and add
-   source records to draft collection projects.
-4. Resolve authoritative government-level classification for held source rows
-   before treating them as crawl-ready organizations.
-5. Review and approve policies for any source that will receive live requests.
-6. Resolve missing organization websites in bulk-first order.
-7. Run directory discovery over a small separately approved sample of organization sites.
-8. Read the failure breakdown; decide whether any real platform justifies an
+1. Confirm the exact Texas official source artifacts and mappings, then mark
+   the jurisdiction sources verified.
+2. Configure a private S3-compatible archive bucket and the worker credentials.
+3. Deploy the updated private console and worker, then prove archive recovery
+   and run the Supabase RLS workflow.
+4. Create a small collection project from the hosted AskTED organizations.
+5. Review and approve policies for only the domains in its first finite batch.
+6. Approve and run directory discovery for that exact small batch.
+7. Read the failure breakdown; decide whether any real platform justifies an
    adapter, or whether the sector vocabulary is simply missing wording.
-9. Only then consider widening employee collection.
+8. Approve a separate small collection batch, inspect the people and email
+   evidence, then download its suppression-checked project CSV.
+9. Only then consider widening collection.

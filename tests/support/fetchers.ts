@@ -103,9 +103,14 @@ export class MapFetcher implements Fetcher {
         fetchedAt: '2026-01-01T00:00:00.000Z',
         contentHash: contentHash(entry.body),
         fromCache: true,
+        storageKey: `fixture://${urlHashForStorage(canonical)}`,
       },
     });
   }
+}
+
+function urlHashForStorage(url: string): string {
+  return Buffer.from(url, 'utf8').toString('base64url');
 }
 
 /** Disallows any path matching one of the given prefixes. */

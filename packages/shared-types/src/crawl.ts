@@ -23,6 +23,8 @@ export interface FetchedPage {
   contentHash: string;
   /** True when served from the fixture store or an archived response. */
   fromCache: boolean;
+  /** Durable private-object key for the exact response bytes, when archived. */
+  storageKey?: string | null;
 }
 
 export interface FetchRequest {

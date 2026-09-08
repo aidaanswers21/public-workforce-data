@@ -425,6 +425,64 @@ describe('local admin server', () => {
     expect(html).toContain('Source policies');
   });
 
+  it('approves a named purpose and downloads an audited project CSV', async () => {
+    const { origin } = await start();
+    const cookie = await login(origin);
+    const projectResponse = await fetch(`${origin}/projects`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        template: 'fixture-scope',
+        stateCode: 'TX',
+        governmentLevelCode: 'state',
+        sectorCode: 'general_government',
+        name: 'Export fixture',
+        batchSize: '5',
+        maxPagesPerTarget: '5',
+        maxPagesPerBatch: '20',
+        maxErrorsPerBatch: '2',
+      }),
+    });
+    const projectId = projectResponse.headers.get('location')?.split('/')[2]?.split('?')[0] ?? '';
+
+    const purposeResponse = await fetch(`${origin}/export-purposes`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code: 'pilot-review',
+        description: 'Review the first governed collection pilot.',
+        approvalConfirmed: 'yes',
+      }),
+    });
+    expect(purposeResponse.status).toBe(303);
+
+    const page = await fetch(`${origin}/exports`, { headers: { cookie } });
+    const html = await page.text();
+    expect(page.status).toBe(200);
+    expect(html).toContain('Download suppression-checked CSV');
+    expect(html).toContain('pilot-review');
+    expect(html).toContain('Export fixture');
+
+    const download = await fetch(`${origin}/exports/download`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        projectId,
+        purpose: 'pilot-review',
+        limit: '100',
+        exportConfirmed: 'yes',
+      }),
+    });
+    expect(download.status).toBe(200);
+    expect(download.headers.get('content-type')).toContain('text/csv');
+    expect(download.headers.get('content-disposition')).toContain('export-fixture');
+    expect(download.headers.get('x-export-id')).toMatch(/^[0-9a-f-]{36}$/);
+    expect(await download.text()).toContain('full_name_published');
+    expect(await databases[0]?.count('exports', "status = 'completed'")).toBe(1);
+  });
+
   it('uses a hashed password and secure cookie in hosted mode', async () => {
     const publicOrigin = 'https://console.example.test';
     const { origin } = await start({

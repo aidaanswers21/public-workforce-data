@@ -50,6 +50,14 @@ export class ExportRepository {
 
   async buildPeopleExport(input: BuildExportInput): Promise<BuiltExport> {
     const requestedAt: Timestamp = nowTimestamp(this.clock);
+    const purpose = await this.client.query<{ code: string }>(
+      `select code from export_purposes
+       where code = $1 and active and retired_at is null`,
+      [input.purpose],
+    );
+    if (purpose.rows[0] === undefined) {
+      throw new Error(`export purpose "${input.purpose}" is not active and approved`);
+    }
     const created = await this.client.query<{ id: Uuid }>(
       `insert into exports (name, requested_by, purpose, filters, status)
        values ($1,$2,$3,$4,'building') returning id`,

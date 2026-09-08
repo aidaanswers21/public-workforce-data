@@ -7,6 +7,7 @@ export interface ExportFilters {
   sectorCode?: string;
   jurisdictionId?: Uuid;
   organizationId?: Uuid;
+  collectionProjectId?: Uuid;
   /** Include everything under the organization, not only its own staff. */
   includeOrganizationSubtree?: boolean;
   stateCode?: string;
@@ -164,6 +165,15 @@ export class QueryRepository {
         filters.includeOrganizationSubtree === true
           ? `exists (select 1 from org_ancestry oa2 where oa2.organization_id = emp.organization_id and oa2.ancestor_id = ${bind(filters.organizationId)})`
           : `emp.organization_id = ${bind(filters.organizationId)}`,
+      );
+    }
+    if (filters.collectionProjectId !== undefined) {
+      conditions.push(
+        `exists (
+           select 1 from collection_project_organizations project_org
+           where project_org.project_id = ${bind(filters.collectionProjectId)}
+             and project_org.organization_id = emp.organization_id
+         )`,
       );
     }
     if (filters.stateCode !== undefined) {

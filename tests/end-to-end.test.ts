@@ -11,6 +11,7 @@ import {
   ComplianceRepository,
   CrawlRepository,
   ExportRepository,
+  ExportPurposeRepository,
   IngestionRepository,
   OrganizationRepository,
   QueryRepository,
@@ -178,6 +179,14 @@ async function harness(): Promise<Harness> {
     logger,
     clock: CLOCK,
     sleep: () => Promise.resolve(),
+  });
+
+  await new ExportPurposeRepository(database).approve({
+    code: PURPOSE,
+    description: 'Fixture-only internal review export.',
+    owner: 'test',
+    approvedBy: 'test',
+    approvedAt: AT,
   });
 
   return {
