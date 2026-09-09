@@ -185,3 +185,31 @@ describe('generic-html adapter behaviour', () => {
     expect(detection.score).toBeLessThan(genericHtmlAdapter.detectionThreshold);
   });
 });
+
+describe('adjacent HTML fields', () => {
+  it.each([
+    [
+      'cards',
+      [
+        'jane_smith@agency.example.gov',
+        'alex.jones@agency.example.gov',
+        'sam.lee@agency.example.gov',
+      ],
+    ],
+    ['definitions', ['jane.smith@agency.example.gov', 'alex.jones@agency.example.gov']],
+    ['table', ['jane.smith@agency.example.gov']],
+  ])('extracts exactly the published emails from minified %s', (name, addresses) => {
+    const fixture = withVocabulary(
+      loadAdapterFixture({
+        name,
+        file: `generic-html/adjacent-fields/${name}.html`,
+        url: 'https://agency.example.gov/staff',
+      }),
+    );
+    const result = genericHtmlAdapter.extractListing(fixturePage(fixture), fixtureContext(fixture));
+    expect(result.records.map((record) => record.emails.map((email) => email.address))).toEqual(
+      addresses.map((address) => [address]),
+    );
+    if (name === 'cards') expect(result.records[0]?.phonePublished).toBe('202-555-0101');
+  });
+});

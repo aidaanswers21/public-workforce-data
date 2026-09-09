@@ -2431,6 +2431,76 @@ describe('QueryRepository and ExportRepository', () => {
     expect(built.rowCount).toBe(0);
   });
 
+  it.each(['inactive', 'invalid', 'other-organization', 'suppressed-source'])(
+    'excludes %s email from both export address fields',
+    async (reason) => {
+      const h = await harness();
+      const org = await h.makeOrganization({
+        name: 'Bureau',
+        typeCode: 'federal_bureau',
+        levelCode: 'federal',
+      });
+      const person = await h.addPerson(
+        org,
+        'Jane Smith',
+        'Program Analyst',
+        'jane.smith@agency.example.gov',
+      );
+      expect(await h.queries.queryExportableRows(AT, PURPOSE)).toHaveLength(1);
+      if (reason === 'inactive')
+        await h.database.query("update email_addresses set status='inactive' where person_id=$1", [
+          person,
+        ]);
+      if (reason === 'invalid')
+        await h.database.query(
+          "update email_addresses set classification='invalid' where person_id=$1",
+          [person],
+        );
+      if (reason === 'other-organization') {
+        const other = await h.makeOrganization({
+          name: 'Other Bureau',
+          typeCode: 'federal_bureau',
+          levelCode: 'federal',
+        });
+        await h.database.query('update email_addresses set organization_id=$1 where person_id=$2', [
+          other,
+          person,
+        ]);
+      }
+      if (reason === 'suppressed-source') {
+        const document = await h.ingestion.recordSourceDocument({
+          url: 'https://agency.example.gov/contact',
+          urlCanonical: 'https://agency.example.gov/contact',
+          urlHash: 'other-document',
+          domain: 'agency.example.gov',
+          sourceTypeCode: 'html_directory',
+          httpStatus: 200,
+          contentHash: 'other-content',
+          contentType: 'text/html',
+          storageKey: null,
+          robotsAllowed: true,
+          robotsPolicyNote: null,
+          crawlRunId: null,
+          retrievedAt: AT,
+        });
+        await h.database.query(
+          'update email_addresses set source_document_id=$1 where person_id=$2',
+          [document.documentId, person],
+        );
+        await h.compliance.addSuppression({
+          scope: 'source',
+          value: document.documentId,
+          sourceDocumentId: document.documentId,
+          reason: 'withhold contact page',
+          source: 'opt_out_request',
+          createdBy: 'ops',
+          effectiveAt: EFFECTIVE_FROM,
+        });
+      }
+      expect(await h.queries.queryExportableRows(AT, PURPOSE)).toHaveLength(0);
+    },
+  );
+
   it('excludes suppressed people in SQL, before any export code runs', async () => {
     const h = await harness();
     const org = await h.makeOrganization({

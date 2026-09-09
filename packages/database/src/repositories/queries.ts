@@ -274,7 +274,11 @@ export class QueryRepository {
        left join lateral (
          select * from email_addresses e
          where e.person_id = p.id
+           and e.status = 'active'
+           and (e.organization_id is null or e.organization_id = emp.organization_id)
+           and e.classification in ('published', 'decoded_published'${filters.includeGeneralInboxes === true ? ", 'general_inbox'" : ''})
            and ${addressSuppressionFilter('e.address_normalized', 'e.domain')}
+           and not exists(select 1 from active_suppressions ps where ps.scope = 'source' and ps.source_document_id = e.source_document_id)
          order by case e.classification
            when 'published' then 0 when 'decoded_published' then 1
            when 'general_inbox' then 2 else 3 end, e.last_seen_at desc

@@ -44,7 +44,7 @@ export const GENERIC_HTML_ADAPTER_KEY = 'generic-html';
  */
 export class GenericHtmlAdapter implements DirectoryAdapter {
   readonly key = GENERIC_HTML_ADAPTER_KEY;
-  readonly version = '2.0.0';
+  readonly version = '2.0.1';
   readonly displayName = 'Generic HTML directory';
   readonly detectionThreshold = 0.25;
   readonly requiresBrowser = false;
