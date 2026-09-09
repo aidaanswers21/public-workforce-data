@@ -145,6 +145,7 @@ export class CrawlGuards {
     recordKeys: readonly string[];
     empty: boolean;
     isFirstPage: boolean;
+    trackPaginationProgress?: boolean;
   }): { newRecordKeys: string[]; verdict: GuardVerdict } {
     const newRecordKeys = input.recordKeys.filter((key) => !this.seenRecordKeys.has(key));
     for (const key of newRecordKeys) this.seenRecordKeys.add(key);
@@ -163,6 +164,8 @@ export class CrawlGuards {
         },
       };
     }
+
+    if (input.trackPaginationProgress === false) return { newRecordKeys, verdict: CONTINUE };
 
     if (newRecordKeys.length === 0) {
       this.pagesWithoutNewRecords += 1;

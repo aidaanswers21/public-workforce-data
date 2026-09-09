@@ -213,3 +213,63 @@ describe('adjacent HTML fields', () => {
     if (name === 'cards') expect(result.records[0]?.phonePublished).toBe('202-555-0101');
   });
 });
+
+describe('plain individual profiles', () => {
+  const profilePage = (html: string, url: string) =>
+    fixturePage({ name: 'plain profile', html, url, kind: 'profile' });
+  const context = {
+    ...fixtureContext({
+      name: 'plain profile',
+      html: '',
+      url: 'https://example.test/directory',
+      kind: 'profile',
+    }),
+    vocabulary: VOCABULARY,
+  };
+  it('extracts a single named main profile without pairing its footer inbox', () => {
+    const page = profilePage(
+      '<main><h1>Ana Rivera</h1><p><a href="mailto:ana@example.test">Contact me</a></p></main><footer><a href="mailto:office@example.test">Office</a></footer>',
+      'https://example.test/pages/17',
+    );
+    const record = genericHtmlAdapter.extractProfile(page, context);
+    expect(record?.fullNamePublished).toBe('Ana Rivera');
+    expect(record?.emails.map((email) => email.address)).toEqual(['ana@example.test']);
+  });
+  it('does not infer a profile email from a footer or an ambiguous multi-person body', () => {
+    for (const html of [
+      '<main><h1>Ana Rivera</h1></main><footer><a href="mailto:office@example.test">Office</a></footer>',
+      '<main><h1>Ana Rivera</h1><h1>Sam Ortiz</h1><p>ana@example.test sam@example.test</p></main>',
+      '<main><h1>Contact Office</h1><p>office@example.test</p></main>',
+    ])
+      expect(
+        genericHtmlAdapter.extractProfile(
+          profilePage(html, 'https://example.test/pages/17'),
+          context,
+        ),
+      ).toBeNull();
+  });
+  it('follows profile links even when the index publishes no title or email', () => {
+    const page = profilePage(
+      '<nav><a href="/pages/9">Other Person</a></nav><main><h1>Staff Directory</h1><ul><li><a href="/pages/17">Ana Rivera</a></li><li><a href="/pages/18">Sam Ortiz</a></li></ul></main>',
+      'https://example.test/directory',
+    );
+    const records = genericHtmlAdapter.extractListing(page, context).records;
+    expect(records.map((record) => record.fullNamePublished)).toEqual(['Ana Rivera', 'Sam Ortiz']);
+    expect(records.map((record) => record.profileUrl)).toEqual([
+      'https://example.test/pages/17',
+      'https://example.test/pages/18',
+    ]);
+  });
+});
+
+it('follows a published name link in a table even when the URL has no profile keywords', () => {
+  const fixture: AdapterFixture = {
+    name: 'opaque table profile',
+    kind: 'listing',
+    url: 'https://example.test/directory',
+    html: '<table><tr><th>Name</th><th>Title</th></tr><tr><td><a href="/pages/17">Ana Rivera</a></td><td>Teacher</td></tr></table>',
+    context: { vocabulary: VOCABULARY },
+  };
+  const listing = genericHtmlAdapter.extractListing(fixturePage(fixture), fixtureContext(fixture));
+  expect(listing.records[0]?.profileUrl).toBe('/pages/17');
+});

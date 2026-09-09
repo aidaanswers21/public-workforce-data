@@ -1,5 +1,10 @@
 import type { DirectoryVocabulary, ExtractedPersonRecord } from '@public-workforce/shared-types';
-import { collapseWhitespace, normalizePhone } from '@public-workforce/core';
+import {
+  collapseWhitespace,
+  normalizePhone,
+  resolveUrl,
+  isOrganizationLabel,
+} from '@public-workforce/core';
 import {
   classifyHeader,
   cloudflareEncodedValues,
@@ -96,7 +101,7 @@ export function extractFromTables(input: ExtractInput): ExtractedPersonRecord[] 
         phonePublished: first('phone'),
         emailSources,
         cloudflareEncoded: collectCfEmails(input.$, rowHtml),
-        profileUrl: firstProfileHref(input.$, rowHtml),
+        profileUrl: firstProfileHref(input.$, rowHtml, composed),
         vocabulary: input.vocabulary,
         extractionMethod: 'html_table',
         confidence: parsed.score,
@@ -202,7 +207,7 @@ export function extractFromCards(input: ExtractInput): ExtractedPersonRecord[] {
         phonePublished: guessPhoneWithin(text),
         emailSources: [...emailSources, ...attributeEmails, ...inlineEmails],
         cloudflareEncoded: cfEmails,
-        profileUrl: firstProfileHref($, html),
+        profileUrl: firstProfileHref($, html, name),
         vocabulary: input.vocabulary,
         extractionMethod: group.selector === 'li' ? 'html_list' : 'html_card',
         confidence: hasContact ? 0.8 : 0.6,
@@ -317,7 +322,7 @@ function collectCfEmails($: Html, html: string): string[] {
   return cloudflareEncodedValues($.load(html));
 }
 
-function firstProfileHref($: Html, html: string): string | null {
+function firstProfileHref($: Html, html: string, personName: string): string | null {
   const fragment = $.load(html);
   let found: string | null = null;
   fragment('a[href]').each((_index, element) => {
@@ -325,7 +330,11 @@ function firstProfileHref($: Html, html: string): string | null {
     const href = fragment(element).attr('href');
     if (href === undefined) return;
     if (/^(mailto:|tel:|#|javascript:)/i.test(href)) return;
-    if (!/(staff|profile|bio|person|employee|directory|user|detail)/i.test(href)) return;
+    if (
+      !/(staff|profile|bio|person|employee|directory|user|detail)/i.test(href) &&
+      textOf(fragment, element) !== personName
+    )
+      return;
     found = href;
   });
   return found;
@@ -415,4 +424,93 @@ function guessPhoneWithin(text: string): string | null {
   const match = /(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/.exec(text);
   if (match === null) return null;
   return normalizePhone(match[0]);
+}
+
+/** A directory can publish only named profile links, with contacts on the destination. */
+export function extractProfileLinks(input: ExtractInput): ExtractedPersonRecord[] {
+  const { $ } = input;
+  const records: ExtractedPersonRecord[] = [];
+  const heading = $('h1, h2').text().toLowerCase();
+  if (!input.vocabulary.headingTerms.some((term) => heading.includes(term.toLowerCase())))
+    return records;
+  $('main a[href], [role="main"] a[href], article a[href], li a[href], td a[href]').each(
+    (_index, element) => {
+      const link = $(element);
+      if (link.closest('nav, header, footer, aside').length > 0) return;
+      const name = textOf($, link);
+      const href = link.attr('href') ?? '';
+      if (
+        !looksLikePersonName(name) ||
+        /^(contact|about|our|meet|welcome|view|read|next|previous)\b/i.test(name) ||
+        name.trim().split(/\s+/).length < 2 ||
+        isOrganizationLabel(name, input.vocabulary.organizationLabelWords) ||
+        looksLikeTitleText(name, input.vocabulary) ||
+        /^(mailto:|tel:|#|javascript:)/i.test(href)
+      )
+        return;
+      const url = resolveUrl(href, input.sourceUrl);
+      if (url === null || url === input.sourceUrl) return;
+      const record = buildPersonRecord({
+        adapterKey: input.adapterKey,
+        sourceUrl: input.sourceUrl,
+        localKey: url,
+        fullNamePublished: name,
+        profileUrl: url,
+        vocabulary: input.vocabulary,
+        extractionMethod: 'html_list',
+        confidence: 0.65,
+        selector: 'a[href]',
+        snippet: name,
+      });
+      if (record !== null) records.push(record);
+    },
+  );
+  return records;
+}
+
+/** Only a single named main heading may vouch for a profile's contact block. */
+export function extractSingleProfile(input: ExtractInput): ExtractedPersonRecord | null {
+  const { $ } = input;
+  const roots = $('main, [role="main"], article').filter(
+    (_index, element) => $(element).find('h1').length === 1,
+  );
+  if (roots.length !== 1) return null;
+  const root = roots.first().clone();
+  root.find('nav, header, footer, aside').remove();
+  const name = textOf($, root.find('h1').first());
+  if (
+    !looksLikePersonName(name) ||
+    /^(contact|about|our|meet|welcome|view|read|next|previous)\b/i.test(name) ||
+    name.trim().split(/\s+/).length < 2 ||
+    isOrganizationLabel(name, input.vocabulary.organizationLabelWords) ||
+    looksLikeTitleText(name, input.vocabulary)
+  )
+    return null;
+  const html = $.html(root) ?? '';
+  const record = buildPersonRecord({
+    adapterKey: input.adapterKey,
+    sourceUrl: input.sourceUrl,
+    localKey: name,
+    fullNamePublished: name,
+    emailSources: [
+      ...collectHrefEmails($, html),
+      ...collectAttributeEmails($, html),
+      emailTextOf($, root),
+    ],
+    cloudflareEncoded: collectCfEmails($, html),
+    vocabulary: input.vocabulary,
+    extractionMethod: 'html_card',
+    confidence: 0.75,
+    selector: 'main h1',
+    snippet: snippetOf(textOf($, root)),
+  });
+  // Multiple contacts or named cards can describe other people, not the heading's person.
+  if (
+    record === null ||
+    record.emails.length !== 1 ||
+    root.find('[itemtype*="Person"], [class*="person"], [class*="staff"], [class*="member"]')
+      .length > 1
+  )
+    return null;
+  return record;
 }

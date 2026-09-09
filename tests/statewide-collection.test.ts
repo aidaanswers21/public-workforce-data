@@ -236,6 +236,101 @@ describe('statewide collection', () => {
       });
     },
   );
+  it('collects emails from individual profiles and exports the actual email source pages', async () => {
+    const s = await setup();
+    await db.query(
+      `update organizations set organization_type_code='school',name='Fixture School',name_normalized='fixture school' where id=$1`,
+      [s.organizationId],
+    );
+    s.target.organizationName = 'Fixture School';
+    s.pages.set(
+      `${root}directory`,
+      '<main><h1>Staff Directory</h1><ul><li><a href="/pages/11">Pat Allen</a></li><li><a href="/pages/12">Lee Jordan</a></li><li><a href="/pages/13">Chris Moss</a></li><li><a href="/pages/14">Kelly Taylor</a></li><li><a href="/pages/17">Ana Rivera</a></li><li><a href="/pages/18">Sam Ortiz</a></li></ul></main>',
+    );
+    s.pages.set(`${root}pages/11`, '<main><h1>Pat Allen</h1></main>');
+    s.pages.set(`${root}pages/12`, '<main><h1>Lee Jordan</h1></main>');
+    s.pages.set(`${root}pages/13`, '<main><h1>Chris Moss</h1></main>');
+    s.pages.set(`${root}pages/14`, '<main><h1>Chris Moss</h1></main>');
+    s.pages.set(
+      `${root}pages/17`,
+      '<main><h1>Ana Rivera</h1><div><a href="mailto:ana@example.test">Email me</a></div></main><footer><a href="mailto:office@example.test">Office</a></footer>',
+    );
+    s.pages.set(`${root}pages/18`, '<main><h1>Sam Ortiz</h1><p>sam@example.test</p></main>');
+    await s.projects.generateDiscoveryTargets(s.projectId, 'owner');
+    const batchId = await s.projects.createApprovedRun({
+      projectId: s.projectId,
+      approvedBy: 'owner',
+      approvalNote: 'Approve saved school profile fixtures',
+      expiresAt: new Date(Date.now() + 86400000).toISOString(),
+    });
+    const executor = new ProductionCollectionExecutor({
+      client: db,
+      fetcher: s.fetcher,
+      robots: s.robots,
+      adapters: s.adapters,
+      taxonomy: s.taxonomy,
+      logger: s.logger,
+      workerId: 'fixture',
+      sleep: () => Promise.resolve(),
+      discover: async () => {
+        const r = await s.discovery().discover(s.target);
+        return {
+          pagesProcessed: r.pagesProcessed,
+          targetsRecorded: r.targetsRecorded,
+          outcome: r.outcome,
+          detail: r.note,
+        };
+      },
+    });
+    const worker = new CollectionWorker({
+      queue: s.projects,
+      executor,
+      workerId: 'fixture',
+      logger: s.logger,
+      batchId,
+    });
+    expect(await worker.drainApprovedBatch()).toEqual({ completed: 2, failed: 0, held: 0 });
+    expect(s.fetched).toContain(`${root}pages/17`);
+    expect(s.fetched).toContain(`${root}pages/18`);
+    expect(await db.count('email_addresses')).toBe(2);
+    expect(await db.count('people')).toBe(6);
+    await new ExportPurposeRepository(db).approve({
+      code: 'profile-fixture',
+      description: 'Saved profile fixture verification',
+      owner: 'owner',
+      approvedBy: 'owner',
+    });
+    const exporter = new ExportRepository(db);
+    const input = {
+      name: 'Simple contacts',
+      requestedBy: 'owner',
+      purpose: 'profile-fixture',
+      format: 'contacts' as const,
+      filters: { collectionProjectId: s.projectId },
+    };
+    const result = await exporter.buildPeopleExport(input);
+    expect(result.rowCount).toBe(2);
+    expect(result.csv.split('\r\n')[0]).toBe('first_name,last_name,email,organization,source_page');
+    expect(result.csv).toContain(`Ana,Rivera,ana@example.test,Fixture School,${root}pages/17`);
+    expect(result.csv).toContain(`Sam,Ortiz,sam@example.test,Fixture School,${root}pages/18`);
+    expect(result.csv).not.toContain('office@example.test');
+    await db.query(`insert into employment_assignments(person_id,organization_id,title_published,title_normalized,source_document_id,extraction_method_code,confidence)
+      select person_id,organization_id,'Teacher','teacher',source_document_id,'html_table',1 from employment_assignments where person_id=(select id from people where full_name_published='Sam Ortiz') limit 1`);
+    const repeated = await exporter.buildPeopleExport(input);
+    expect(repeated.rowCount).toBe(2);
+    await db.query(
+      `insert into suppression_entries(scope,value,reason,source,created_by) values('email','ana@example.test','Fixture suppression','manual_review','owner')`,
+    );
+    let csv = '';
+    const streamed = await exporter.streamPeopleExport(input, (chunk) => {
+      csv += chunk;
+      return Promise.resolve();
+    });
+    expect(streamed.rowCount).toBe(1);
+    expect(csv).not.toContain('ana@example.test');
+    expect(csv).toContain('sam@example.test');
+  });
+
   it('runs discovery through ingestion and phone export after one approval', async () => {
     const s = await setup();
     await s.projects.generateDiscoveryTargets(s.projectId, 'owner');
@@ -774,6 +869,15 @@ describe('statewide collection', () => {
       purpose: 'stream-fixture',
       filters: { collectionProjectId: s.projectId },
     };
+    await db.query(
+      `update employment_assignments set id='00000000-0000-0000-0000-000000000001' where person_id=(select id from people order by id limit 1)`,
+    );
+    await db.query(`insert into employment_assignments(id,person_id,organization_id,title_normalized,source_document_id,extraction_method_code,confidence)
+      select 'ffffffff-ffff-ffff-ffff-ffffffffffff',person_id,organization_id,'additional role',source_document_id,'html_table',1 from employment_assignments where id='00000000-0000-0000-0000-000000000001'`);
+    const compact = await exporter.streamPeopleExport({ ...input, format: 'contacts' }, () =>
+      Promise.resolve(),
+    );
+    expect(compact.rowCount).toBe(2005);
     const chunks: string[] = [];
     expect(
       (
@@ -782,7 +886,7 @@ describe('statewide collection', () => {
           return Promise.resolve();
         })
       ).rowCount,
-    ).toBe(2005);
+    ).toBe(2006);
     expect(chunks.length).toBe(2);
     expect(chunks.join('').match(/all_published_emails/g)?.length).toBe(1);
     let writes = 0;
