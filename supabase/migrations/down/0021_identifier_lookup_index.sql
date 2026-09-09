@@ -1,0 +1,1 @@
+drop index if exists external_identifiers_system_value_idx;

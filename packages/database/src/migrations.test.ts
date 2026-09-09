@@ -96,6 +96,7 @@ describe('migrate', () => {
       '0018',
       '0019',
       '0020',
+      '0021',
     ]);
     const audit = await database.query<{ sequence_number: string; valid: boolean }>(
       `select sequence_number,
@@ -147,6 +148,7 @@ describe('rollback', () => {
     const migrations = loadMigrations();
     const reverted = await rollback(database, migrations, '0007');
     expect(reverted).toEqual([
+      '0021',
       '0020',
       '0019',
       '0018',
@@ -187,6 +189,7 @@ describe('rollback', () => {
 
     const migrations = loadMigrations();
     expect(await rollback(database, migrations, '0011')).toEqual([
+      '0021',
       '0020',
       '0019',
       '0018',
@@ -219,6 +222,7 @@ describe('rollback', () => {
       '0018',
       '0019',
       '0020',
+      '0021',
     ]);
     expect(await database.count('complaints')).toBe(1);
     expect(await database.count('suppression_entries')).toBe(1);
