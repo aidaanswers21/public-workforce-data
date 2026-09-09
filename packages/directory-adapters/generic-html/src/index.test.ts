@@ -261,3 +261,15 @@ describe('plain individual profiles', () => {
     ]);
   });
 });
+
+it('follows a published name link in a table even when the URL has no profile keywords', () => {
+  const fixture: AdapterFixture = {
+    name: 'opaque table profile',
+    kind: 'listing',
+    url: 'https://example.test/directory',
+    html: '<table><tr><th>Name</th><th>Title</th></tr><tr><td><a href="/pages/17">Ana Rivera</a></td><td>Teacher</td></tr></table>',
+    context: { vocabulary: VOCABULARY },
+  };
+  const listing = genericHtmlAdapter.extractListing(fixturePage(fixture), fixtureContext(fixture));
+  expect(listing.records[0]?.profileUrl).toBe('/pages/17');
+});

@@ -314,6 +314,10 @@ describe('statewide collection', () => {
     expect(result.csv).toContain(`Ana,Rivera,ana@example.test,Fixture School,${root}pages/17`);
     expect(result.csv).toContain(`Sam,Ortiz,sam@example.test,Fixture School,${root}pages/18`);
     expect(result.csv).not.toContain('office@example.test');
+    await db.query(`insert into employment_assignments(person_id,organization_id,title_published,title_normalized,source_document_id,extraction_method_code,confidence)
+      select person_id,organization_id,'Teacher','teacher',source_document_id,'html_table',1 from employment_assignments where person_id=(select id from people where full_name_published='Sam Ortiz') limit 1`);
+    const repeated = await exporter.buildPeopleExport(input);
+    expect(repeated.rowCount).toBe(2);
     await db.query(
       `insert into suppression_entries(scope,value,reason,source,created_by) values('email','ana@example.test','Fixture suppression','manual_review','owner')`,
     );
@@ -865,6 +869,15 @@ describe('statewide collection', () => {
       purpose: 'stream-fixture',
       filters: { collectionProjectId: s.projectId },
     };
+    await db.query(
+      `update employment_assignments set id='00000000-0000-0000-0000-000000000001' where person_id=(select id from people order by id limit 1)`,
+    );
+    await db.query(`insert into employment_assignments(id,person_id,organization_id,title_normalized,source_document_id,extraction_method_code,confidence)
+      select 'ffffffff-ffff-ffff-ffff-ffffffffffff',person_id,organization_id,'additional role',source_document_id,'html_table',1 from employment_assignments where id='00000000-0000-0000-0000-000000000001'`);
+    const compact = await exporter.streamPeopleExport({ ...input, format: 'contacts' }, () =>
+      Promise.resolve(),
+    );
+    expect(compact.rowCount).toBe(2005);
     const chunks: string[] = [];
     expect(
       (
@@ -873,7 +886,7 @@ describe('statewide collection', () => {
           return Promise.resolve();
         })
       ).rowCount,
-    ).toBe(2005);
+    ).toBe(2006);
     expect(chunks.length).toBe(2);
     expect(chunks.join('').match(/all_published_emails/g)?.length).toBe(1);
     let writes = 0;

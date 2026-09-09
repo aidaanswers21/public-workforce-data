@@ -101,7 +101,7 @@ export function extractFromTables(input: ExtractInput): ExtractedPersonRecord[] 
         phonePublished: first('phone'),
         emailSources,
         cloudflareEncoded: collectCfEmails(input.$, rowHtml),
-        profileUrl: firstProfileHref(input.$, rowHtml),
+        profileUrl: firstProfileHref(input.$, rowHtml, composed),
         vocabulary: input.vocabulary,
         extractionMethod: 'html_table',
         confidence: parsed.score,
@@ -207,7 +207,7 @@ export function extractFromCards(input: ExtractInput): ExtractedPersonRecord[] {
         phonePublished: guessPhoneWithin(text),
         emailSources: [...emailSources, ...attributeEmails, ...inlineEmails],
         cloudflareEncoded: cfEmails,
-        profileUrl: firstProfileHref($, html),
+        profileUrl: firstProfileHref($, html, name),
         vocabulary: input.vocabulary,
         extractionMethod: group.selector === 'li' ? 'html_list' : 'html_card',
         confidence: hasContact ? 0.8 : 0.6,
@@ -322,7 +322,7 @@ function collectCfEmails($: Html, html: string): string[] {
   return cloudflareEncodedValues($.load(html));
 }
 
-function firstProfileHref($: Html, html: string): string | null {
+function firstProfileHref($: Html, html: string, personName: string): string | null {
   const fragment = $.load(html);
   let found: string | null = null;
   fragment('a[href]').each((_index, element) => {
@@ -330,7 +330,11 @@ function firstProfileHref($: Html, html: string): string | null {
     const href = fragment(element).attr('href');
     if (href === undefined) return;
     if (/^(mailto:|tel:|#|javascript:)/i.test(href)) return;
-    if (!/(staff|profile|bio|person|employee|directory|user|detail)/i.test(href)) return;
+    if (
+      !/(staff|profile|bio|person|employee|directory|user|detail)/i.test(href) &&
+      textOf(fragment, element) !== personName
+    )
+      return;
     found = href;
   });
   return found;

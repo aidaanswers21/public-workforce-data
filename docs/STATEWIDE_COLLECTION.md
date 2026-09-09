@@ -207,7 +207,8 @@ The default selection on the download form is a five-column file:
 organization is the school. Each row contains one published email and the actual
 page that published that email, even when the person's name was first encountered
 on a directory index. Null name parts remain blank. Inferred addresses and
-phone-only records are absent from this compact file. Published general inboxes
+phone-only records are absent from this compact file. Repeated assignments do not
+repeat the same email within an organization, including across download chunks. Published general inboxes
 remain opt-in. Full contact and provenance exports remain available from the
 Columns menu. Both formats retain SQL filtering and the final suppression recheck.
 

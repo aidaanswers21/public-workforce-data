@@ -72,6 +72,7 @@ export class ExportRepository {
     );
     const exportId = created.rows[0]?.id;
     if (exportId === undefined) throw new Error('export insert failed');
+    const seenContactKeys = new Set<string>();
     let cursor = input.filters.afterAssignmentId;
     let rowCount = 0;
     let suppressedCount = 0;
@@ -98,6 +99,7 @@ export class ExportRepository {
         const result = exportPeopleCsv({
           rows,
           format: input.format ?? 'full',
+          seenContactKeys,
           suppression,
           at: nowTimestamp(this.clock),
           purpose: input.purpose,

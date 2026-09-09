@@ -193,6 +193,7 @@ export function exportPeopleCsv(input: {
   /** Declared purpose, matched against `export_purpose` suppression entries. */
   purpose: string;
   format?: 'full' | 'contacts';
+  seenContactKeys?: Set<string>;
 }): ExportResult {
   const subjectOf = (row: ExportablePersonRow): SuppressionSubject =>
     exportSubject(row, input.purpose);
@@ -290,14 +291,22 @@ export function exportPeopleCsv(input: {
     }
   }
 
+  const seenContactKeys = input.seenContactKeys ?? new Set<string>();
   const contacts = allowed.flatMap((row) =>
-    (row.publishedEmails ?? []).map((email) => ({
-      firstName: row.firstName,
-      lastName: row.lastName,
-      email: email.value,
-      organization: row.organizationName,
-      sourcePage: email.sourceUrl ?? null,
-    })),
+    (row.publishedEmails ?? [])
+      .filter((email) => {
+        const key = JSON.stringify([row.organizationId, email.value.toLowerCase()]);
+        if (seenContactKeys.has(key)) return false;
+        seenContactKeys.add(key);
+        return true;
+      })
+      .map((email) => ({
+        firstName: row.firstName,
+        lastName: row.lastName,
+        email: email.value,
+        organization: row.organizationName,
+        sourcePage: email.sourceUrl ?? null,
+      })),
   );
   const csv =
     input.format === 'contacts'
