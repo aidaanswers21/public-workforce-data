@@ -160,3 +160,12 @@ The complete export records its total row count and checksum. A disconnected
 stream is marked failed. Downloads are fresh streams, not stored asynchronous
 artifacts; retrying starts a new export. Concurrent edits to existing assignments
 may be visible on subsequent chunks, while later-created assignments are excluded.
+
+## Fixture browser in CI
+
+CI downloads the Chromium revision selected by the locked Playwright dependency
+without refreshing system package repositories. The browser fixture tests still
+launch Chromium, so missing runtime libraries fail CI. This avoids an unrelated
+system-package mirror preventing all verification before tests can start.
+Standalone Linux deployments still need the browser and its system libraries as
+described above.
