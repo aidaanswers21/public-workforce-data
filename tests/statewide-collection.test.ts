@@ -355,6 +355,97 @@ describe('statewide collection', () => {
     expect(record?.organization_id).toBeTruthy();
     expect(record?.status).toBe('classification_hold');
   });
+  it.each([1, 2000])(
+    'continues past classification conflicts with chunk size %s',
+    async (limit) => {
+      const s = await setup();
+      const importer = new OrganizationSpineImportRepository(db);
+      await importer.stage(
+        ['a-conflict', 'b-conflict', 'c-ready'].map((key) => ({
+          sourceKey: 'fixture-conflicts',
+          sourceRecordKey: key,
+          name: key,
+          nameNormalized: key,
+          organizationTypeCode: key === 'c-ready' ? 'school_district' : 'state_education_agency',
+          governmentLevelCode: 'special_district',
+          sectorCode: 'education',
+          classificationReviewReason: null,
+          jurisdictionId: null,
+          websiteValueRaw: 'https://ready.example.test/',
+          websiteUrl: 'https://ready.example.test/',
+          primaryDomain: 'ready.example.test',
+          identifiers: [
+            {
+              systemCode: 'nces_district_id',
+              value: key === 'c-ready' ? '7654321' : '1234567',
+              issuingStateCode: null,
+            },
+          ],
+          parentIdentifiers: [],
+          location: { stateCode: 'TX' },
+          attributes: {},
+          status: 'ready_to_import' as const,
+          sourceDocumentId: s.document.documentId,
+          sourceDocumentVersionId: s.document.versionId,
+          sourceEffectiveDate: null,
+          observedAt: new Date().toISOString(),
+        })),
+      );
+      await expect(importer.canonicalizeReady()).rejects.toThrow(/conflicting classification/);
+      let processed = 0;
+      for (;;) {
+        const count = await importer.canonicalizeReady(limit, {
+          sourceKeys: ['fixture-conflicts'],
+          stateCodes: ['TX'],
+        });
+        if (count === 0) break;
+        processed += count;
+        if (processed > 3) throw new Error('conflicts were selected again');
+      }
+      expect(processed).toBe(3);
+      const rows = (
+        await db.query<{
+          status: string;
+          organization_id: string | null;
+          classification_review_reason: string | null;
+        }>(
+          'select status,organization_id,classification_review_reason from organization_spine_records order by source_record_key',
+        )
+      ).rows;
+      expect(rows.slice(0, 2)).toEqual([
+        {
+          status: 'reconciliation_hold',
+          organization_id: null,
+          classification_review_reason:
+            'organization spine exact match has conflicting classification',
+        },
+        {
+          status: 'reconciliation_hold',
+          organization_id: null,
+          classification_review_reason:
+            'organization spine exact match has conflicting classification',
+        },
+      ]);
+      expect(rows[2]?.status).toBe('imported');
+      expect(rows[2]?.organization_id).toBeTruthy();
+      const projectId = await s.projects.prepareRoster(
+        { ...s.input, key: `conflict-roster-${limit}` },
+        ['fixture-conflicts'],
+        ['TX'],
+      );
+      expect(await s.projects.get(projectId)).toMatchObject({
+        organizationsSelected: 2,
+        sourceRecordsHeld: 2,
+      });
+      expect(
+        (
+          await db.query('select organization_type_code from organizations where id=$1', [
+            s.target.organizationId,
+          ])
+        ).rows[0]?.['organization_type_code'],
+      ).toBe('school_district');
+    },
+  );
   it('charges requests before transport and refuses expired claims', async () => {
     const s = await setup();
     await db.query('update collection_projects set max_pages_per_batch=2 where id=$1', [
