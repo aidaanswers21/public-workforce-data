@@ -971,7 +971,8 @@ export class CollectionProjectRepository {
       const retry = input.retryable && Number(job.attempt_count) < Number(job.max_attempts);
       await tx.query(
         `update collection_jobs
-         set status = $3, last_error = $4, finished_at = case when $3 = 'failed' then now() else null end,
+         set status = $3::collection_job_status, last_error = $4,
+             finished_at = case when $3::collection_job_status = 'failed' then now() else null end,
              claimed_by = null, claim_token = null, lease_expires_at = null
          where id = $1 and claim_token = $2`,
         [input.jobId, input.claimToken, retry ? 'queued' : 'failed', input.error.slice(0, 2000)],
