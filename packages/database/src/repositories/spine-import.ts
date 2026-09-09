@@ -135,8 +135,23 @@ export class OrganizationSpineImportRepository {
           collectionScope?.stateCodes ?? [],
         ],
       );
-      const ids = selected.rows.map((row) => row.id);
+      let ids = selected.rows.map((row) => row.id);
       if (ids.length === 0) return 0;
+      let held = 0;
+      const holdConflicts = async (rows: readonly { id: Uuid }[], reason: string) => {
+        if (rows.length === 0) return;
+        if (collectionScope === undefined) throw new Error(reason);
+        const conflicts = rows.map((row) => row.id);
+        await tx.query(
+          `update organization_spine_records set organization_id=null,status='reconciliation_hold',
+           classification_review_reason=concat_ws('; ',nullif(classification_review_reason,''),$2::text)
+           where id=any($1::uuid[])`,
+          [conflicts, reason],
+        );
+        const excluded = new Set(conflicts);
+        ids = ids.filter((id) => !excluded.has(id));
+        held += conflicts.length;
+      };
 
       const ambiguous = await tx.query<{ id: Uuid }>(
         `select r.id
@@ -149,13 +164,14 @@ export class OrganizationSpineImportRepository {
             nullif(identifier.item ->> 'issuingStateCode', '')
           and existing.identifier_value = identifier.item ->> 'value'
          where r.id = any($1::uuid[])
-         group by r.id having count(distinct existing.entity_id) > 1
-         limit 1`,
+         group by r.id having count(distinct existing.entity_id) > 1`,
         [ids],
       );
-      if (ambiguous.rows[0] !== undefined) {
-        throw new Error('organization spine identifiers resolve to conflicting organizations');
-      }
+      await holdConflicts(
+        ambiguous.rows,
+        'organization spine identifiers resolve to conflicting organizations',
+      );
+      if (ids.length === 0) return held;
 
       await tx.query(
         `update organization_spine_records r set organization_id = matched.entity_id
@@ -190,13 +206,14 @@ export class OrganizationSpineImportRepository {
                and r.jurisdiction_id is not null
                and organization.jurisdiction_id <> r.jurisdiction_id
              )
-           )
-         limit 1`,
+           )`,
         [ids],
       );
-      if (classificationConflict.rows[0] !== undefined) {
-        throw new Error('organization spine exact match has conflicting classification');
-      }
+      await holdConflicts(
+        classificationConflict.rows,
+        'organization spine exact match has conflicting classification',
+      );
+      if (ids.length === 0) return held;
 
       await tx.query(
         `insert into organizations (
@@ -367,7 +384,7 @@ export class OrganizationSpineImportRepository {
          returning id`,
         [ids],
       );
-      return imported.rows.length;
+      return imported.rows.length + held;
     });
   }
 

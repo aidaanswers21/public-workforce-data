@@ -11,6 +11,11 @@ website targets. An organization whose identity, type and sector are published
 can be collected while its government level remains null. Its source row keeps
 its classification hold and reason. No government level is guessed. Missing
 identities, conflicting identifiers and missing websites remain exceptions.
+During collection preparation, conflicting existing identities or classifications
+move to a reconciliation hold with their original evidence and a recorded reason.
+Other records continue through preparation, including when an entire internal
+chunk consists of conflicts. The standalone strict import retains its refusal
+behavior. The preparation screen counts source records that remain unlinked.
 Published parent relationships are materialized separately from classification.
 
 The preparation screen lists the actual source URLs and policy decisions. Review
