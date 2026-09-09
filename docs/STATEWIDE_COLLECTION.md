@@ -90,12 +90,16 @@ it is not included in the content-request count. This differs from legacy batch
 page accounting. A budget stop is a partial result, not complete directory coverage.
 The configured crawler identity is used for robots matching and requests.
 
-Existing deployments must apply migration 0020 and deploy the updated application
+Existing deployments must apply migrations 0020 and 0021 and deploy the updated application
 and worker before using this workflow. Remote migrations and deployment remain
 separate operator actions. Browser-enabled deployments also need Chromium and its
 system libraries. Rollback refuses if new nullable classifications or duplicate
 per-kind jobs cannot fit the previous schema; reconcile or remove only the specific
 new run data under an approved rollback plan before reverting.
+
+Migration 0021 indexes exact identifier system/value lookups, with nullable issuing
+jurisdictions compared afterward. This prevents relationship preparation from
+scanning the whole identifier table again for every organization in a state.
 
 ## Export and coverage
 
