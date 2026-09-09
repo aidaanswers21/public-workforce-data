@@ -16,12 +16,15 @@ import type {
   Uuid,
 } from '@public-workforce/shared-types';
 import { runAtomically, type SqlClient } from '../client.js';
+import { OrganizationSpineImportRepository } from './spine-import.js';
 
 export interface CollectionProjectFilters {
   organizationTypeCodes: string[];
   includedOrganizationIds: Uuid[];
   excludedOrganizationIds: Uuid[];
   workMode: CollectionWorkMode;
+  allGovernmentLevels?: boolean;
+  stateCodes?: string[];
 }
 
 export type CollectionWorkMode = 'approved_batch_complete' | 'operator_job_limit';
@@ -126,8 +129,10 @@ export interface ClaimedCollectionJob {
   organizationName: string;
   parentOrganizationName: string | null;
   jurisdictionId: Uuid | null;
-  governmentLevelCode: string;
+  governmentLevelCode: string | null;
   sectorCode: string;
+  collectDiscovered?: boolean;
+  discoveryState?: unknown;
   maxPagesPerTarget: number;
   /** Preserved across an expired lease so an executor can load its checkpoint. */
   crawlRunId: Uuid | null;
@@ -139,6 +144,7 @@ export interface CompleteCollectionJobInput {
   crawlRunId: Uuid | null;
   pagesProcessed: number;
   recordsCollected: number;
+  detail?: string | null;
 }
 
 export interface FailCollectionJobInput {
@@ -211,6 +217,118 @@ export class CollectionProjectRepository {
         sectorCodes: input.sectorCodes,
       });
       return id;
+    });
+  }
+
+  async prepareRoster(
+    input: CreateCollectionProjectInput,
+    sourceKeys: readonly string[],
+    stateCodes: readonly string[],
+  ): Promise<Uuid> {
+    if (sourceKeys.length === 0 || stateCodes.length === 0)
+      throw new Error('choose source rosters and states');
+    const available = await this.client.query(
+      `select 1 from organization_spine_records where source_key=any($1::text[]) and location->>'stateCode'=any($2::text[]) limit 1`,
+      [sourceKeys, stateCodes],
+    );
+    if (available.rows.length === 0)
+      throw new Error(
+        'No loaded source records match these states and rosters. Import the official release first.',
+      );
+    const importer = new OrganizationSpineImportRepository(this.client);
+    while ((await importer.canonicalizeReady(2000, { sourceKeys, stateCodes })) > 0) {
+      /* Each transaction is bounded and idempotent. */
+    }
+    for (const sourceKey of sourceKeys) await importer.materializeRelationships(sourceKey);
+    const projectId = await this.create({
+      ...input,
+      filters: { ...input.filters, allGovernmentLevels: true, stateCodes: [...stateCodes] },
+    });
+    await this.client.query(
+      `insert into collection_project_source_records (project_id,source_record_id,added_by)
+      select $1,id,$2 from organization_spine_records where source_key=any($3::text[]) and location->>'stateCode'=any($4::text[]) on conflict do nothing`,
+      [projectId, input.createdBy, sourceKeys, stateCodes],
+    );
+    await this.generateDiscoveryTargets(projectId, input.createdBy);
+    return projectId;
+  }
+
+  async organizationOutcomes(
+    projectId: Uuid,
+    after: Uuid | null = null,
+  ): Promise<Record<string, unknown>[]> {
+    return (
+      await this.client.query<Record<string, unknown>>(
+        `select o.id,o.name,o.website_url,
+      (select count(*)::int from employment_assignments e where e.organization_id=o.id) as people,
+      (select count(*)::int from email_addresses e where e.organization_id=o.id and e.classification in ('published','decoded_published')) as published_emails,
+      case when o.website_url is null then 'missing website'
+        when exists(select 1 from crawl_target_organizations l join collection_jobs j on j.crawl_target_id=l.crawl_target_id where l.organization_id=o.id and j.project_id=$1 and j.status='policy_hold') then 'policy hold'
+        when exists(select 1 from crawl_target_organizations l join collection_jobs j on j.crawl_target_id=l.crawl_target_id where l.organization_id=o.id and j.project_id=$1 and j.status in ('queued','claimed','running')) then 'in progress'
+        when exists(select 1 from crawl_target_organizations l join collection_jobs j on j.crawl_target_id=l.crawl_target_id where l.organization_id=o.id and j.project_id=$1 and (j.status in ('failed','cancelled') or j.outcome_detail is not null)) then 'partial or exception'
+        when exists(select 1 from crawl_target_organizations l join collection_jobs j on j.crawl_target_id=l.crawl_target_id where l.organization_id=o.id and j.project_id=$1 and j.kind='crawl' and j.status='completed') then 'collected'
+        else 'not collected' end as outcome,
+      (select coalesce(j.outcome_detail,j.last_error) from crawl_target_organizations l join collection_jobs j on j.crawl_target_id=l.crawl_target_id
+       where l.organization_id=o.id and j.project_id=$1 and coalesce(j.outcome_detail,j.last_error) is not null order by j.created_at desc limit 1) as detail
+      from collection_project_organizations scope join organizations o on o.id=scope.organization_id
+      where scope.project_id=$1 and ($2::uuid is null or o.id>$2) order by o.id limit 100`,
+        [projectId, after],
+      )
+    ).rows;
+  }
+
+  async domainManifest(
+    projectId: Uuid,
+  ): Promise<{ domain: string; url: string; status: string; reason: string }[]> {
+    const rows = await this.client.query<{ url: string }>(
+      `select distinct t.url from crawl_targets t
+      join crawl_target_organizations l on l.crawl_target_id=t.id
+      join collection_project_organizations scope on scope.organization_id=l.organization_id where scope.project_id=$1 order by t.url`,
+      [projectId],
+    );
+    const registry = await loadSourcePolicyRegistry(this.client);
+    const domains = new Map<
+      string,
+      { domain: string; url: string; status: string; reason: string }
+    >();
+    for (const row of rows.rows) {
+      const domain = new URL(row.url).hostname;
+      const decision = registry.evaluate(row.url, 'production');
+      domains.set(row.url, {
+        domain,
+        url: row.url,
+        status: decision.allowed ? 'ready' : decision.status,
+        reason: decision.reason,
+      });
+    }
+    return [...domains.values()];
+  }
+
+  async resumePolicyHolds(projectId: Uuid, actor: string): Promise<number> {
+    return runAtomically(this.client, async (tx) => {
+      const registry = await loadSourcePolicyRegistry(tx);
+      const rows = await tx.query<{ id: Uuid; url: string; batch_id: Uuid }>(
+        `select j.id,t.url,j.batch_id from collection_jobs j
+        join collection_batches b on b.id=j.batch_id join crawl_targets t on t.id=j.crawl_target_id
+        where j.project_id=$1 and j.status='policy_hold' and b.collect_discovered and b.expires_at>now()
+          and b.status<>'cancelled' and b.pages_processed<b.page_limit and b.errors_encountered<b.error_limit for update of j`,
+        [projectId],
+      );
+      let count = 0;
+      for (const row of rows.rows)
+        if (registry.evaluate(row.url, 'production').allowed) {
+          await tx.query(
+            `update collection_jobs set status='queued',finished_at=null,last_error=null where id=$1`,
+            [row.id],
+          );
+          await tx.query(
+            `update collection_batches set status='queued',finished_at=null where id=$1`,
+            [row.batch_id],
+          );
+          count++;
+        }
+      await appendAudit(tx, actor, 'collection_run.policy_holds_resumed', projectId, { count });
+      return count;
     });
   }
 
@@ -295,11 +413,12 @@ export class CollectionProjectRepository {
                )))
               or (cardinality($6::uuid[]) > 0 and o.id = any($6::uuid[])))
          and o.sector_code = any($3::text[])
-         and o.government_level_code = any($4::text[])
+         and (o.government_level_code = any($4::text[]) or $9::boolean)
          and ($8::text is null or exists (
            select 1 from organization_locations location
            where location.organization_id = o.id and location.state_code = $8
          ))
+         and (cardinality($10::text[])=0 or exists(select 1 from organization_locations l where l.organization_id=o.id and l.state_code=any($10::text[])))
          and (cardinality($5::text[]) = 0 or o.organization_type_code = any($5::text[]))
          and (cardinality($6::uuid[]) = 0 or o.id = any($6::uuid[]))
          and not (o.id = any($7::uuid[]))
@@ -314,6 +433,8 @@ export class CollectionProjectRepository {
         filters.includedOrganizationIds,
         filters.excludedOrganizationIds,
         row['state_code'] ?? null,
+        filters.allGovernmentLevels === true,
+        filters.stateCodes ?? [],
       ],
     );
     return inserted.rows.length;
@@ -334,18 +455,36 @@ export class CollectionProjectRepository {
         [projectId],
       );
       let created = 0;
-      for (const candidate of candidates.rows) {
+      const records = candidates.rows.flatMap((candidate) => {
         const url = canonicalizeUrl(candidate.website_url);
-        if (url === null) continue;
-        const result = await tx.query<{ id: Uuid }>(
-          `insert into crawl_targets (
-             organization_id, jurisdiction_id, url, url_hash, target_type,
-             source_type_code, status, priority
-           ) values ($1,$2,$3,$4,'organization_site','html_directory','pending',100)
-           on conflict (url_hash) do nothing returning id`,
-          [candidate.organization_id, candidate.jurisdiction_id, url, urlHash(url)],
+        return url === null
+          ? []
+          : [
+              {
+                organizationId: candidate.organization_id,
+                jurisdictionId: candidate.jurisdiction_id,
+                url,
+                hash: urlHash(url),
+              },
+            ];
+      });
+      for (let offset = 0; offset < records.length; offset += 1000) {
+        const chunk = JSON.stringify(records.slice(offset, offset + 1000));
+        await tx.query(
+          `insert into crawl_targets(organization_id,jurisdiction_id,url,url_hash,target_type,source_type_code,status,priority)
+          select distinct on (r.hash) r."organizationId",r."jurisdictionId",r.url,r.hash,'organization_site','html_directory','pending',100
+          from jsonb_to_recordset($1::jsonb) as r("organizationId" uuid,"jurisdictionId" uuid,url text,hash text)
+          order by r.hash,r."organizationId" on conflict(url_hash) do nothing`,
+          [chunk],
         );
-        created += result.rows.length;
+        const linked = await tx.query(
+          `insert into crawl_target_organizations(crawl_target_id,organization_id,source_document_id)
+          select t.id,o.id,o.source_document_id from jsonb_to_recordset($1::jsonb) as r("organizationId" uuid,hash text)
+          join crawl_targets t on t.url_hash=r.hash join organizations o on o.id=r."organizationId"
+          on conflict do nothing returning crawl_target_id`,
+          [chunk],
+        );
+        created += linked.rows.length;
       }
       await appendAudit(tx, actor, 'collection_project.discovery_targets_generated', projectId, {
         created,
@@ -353,6 +492,150 @@ export class CollectionProjectRepository {
       });
       return created;
     });
+  }
+
+  /** Snapshots the complete prepared scope under one finite human authorization. */
+  async createApprovedRun(input: {
+    projectId: Uuid;
+    approvedBy: string;
+    approvalNote: string;
+    expiresAt: string;
+  }): Promise<Uuid> {
+    if (input.approvedBy.trim().length === 0 || input.approvalNote.trim().length < 8)
+      throw new Error('named approval and a specific run note are required');
+    const expiry = new Date(input.expiresAt).getTime();
+    if (!Number.isFinite(expiry) || expiry <= Date.now() || expiry > Date.now() + 31 * 86400000)
+      throw new Error('run expiry must be within the next 31 days');
+    return runAtomically(this.client, async (tx) => {
+      const config = (
+        await tx.query<Record<string, unknown>>(
+          'select * from collection_projects where id=$1 for update',
+          [input.projectId],
+        )
+      ).rows[0];
+      if (config === undefined || ['cancelled', 'completed'].includes(String(config['status'])))
+        throw new Error('project is not available');
+      const batch = (
+        await tx.query<{ id: Uuid }>(
+          `insert into collection_batches (project_id,sequence_number,kind,status,target_limit,page_limit,error_limit,approved_by,approved_at,approval_note,created_by,collect_discovered,expires_at)
+         select $1,coalesce(max(sequence_number),0)+1,'discovery','queued',1000000,$2,$3,$4,now(),$5,$4,true,$6
+         from collection_batches where project_id=$1 returning id`,
+          [
+            input.projectId,
+            config['max_pages_per_batch'],
+            config['max_errors_per_batch'],
+            input.approvedBy,
+            input.approvalNote,
+            input.expiresAt,
+          ],
+        )
+      ).rows[0];
+      if (batch === undefined) throw new Error('run insert returned no id');
+      await tx.query(
+        `insert into collection_batch_organizations select $1,organization_id from collection_project_organizations where project_id=$2`,
+        [batch.id, input.projectId],
+      );
+      const targets = await tx.query<{ id: Uuid; url: string; target_type: string }>(
+        `select distinct t.id,t.url,t.target_type from crawl_targets t
+         join crawl_target_organizations links on links.crawl_target_id=t.id
+         join collection_batch_organizations scope on scope.organization_id=links.organization_id and scope.batch_id=$1
+         where t.status not in ('blocked','excluded') and not exists (
+           select 1 from collection_jobs j where j.crawl_target_id=t.id and j.status in ('queued','claimed','running'))`,
+        [batch.id],
+      );
+      if (targets.rows.length === 0)
+        throw new Error('no published websites are ready; prepare the roster first');
+      for (let offset = 0; offset < targets.rows.length; offset += 1000) {
+        const chunk = targets.rows.slice(offset, offset + 1000).map((target) => ({
+          id: target.id,
+          domain: registrableDomain(new URL(target.url).hostname, US_LOCALITY_DOMAIN_LABELS),
+          kind: target.target_type === 'organization_site' ? 'discovery' : 'crawl',
+        }));
+        await tx.query(
+          `insert into collection_jobs(project_id,batch_id,crawl_target_id,domain_key,kind)
+          select $1,$2,r.id,r.domain,r.kind::collection_job_kind from jsonb_to_recordset($3::jsonb) as r(id uuid,domain text,kind text)`,
+          [input.projectId, batch.id, JSON.stringify(chunk)],
+        );
+      }
+      await tx.query(
+        `update collection_projects set status='active',updated_at=now() where id=$1`,
+        [input.projectId],
+      );
+      await appendAudit(tx, input.approvedBy, 'collection_run.approved', batch.id, {
+        projectId: input.projectId,
+        initialTargets: targets.rows.length,
+        expiresAt: input.expiresAt,
+        approvalNote: input.approvalNote,
+      });
+      return batch.id;
+    });
+  }
+
+  async renewLease(jobId: Uuid, claimToken: Uuid, seconds = 300): Promise<void> {
+    const result = await this.client.query<{ id: Uuid }>(
+      `update collection_jobs j set lease_expires_at=now()+make_interval(secs=>$3)
+       from collection_projects p,collection_batches b
+       where j.id=$1 and j.claim_token=$2 and j.status in ('claimed','running') and j.lease_expires_at>now()
+         and p.id=j.project_id and p.status='active' and b.id=j.batch_id
+         and b.status in ('queued','running') and (b.expires_at is null or b.expires_at>now()) returning j.id`,
+      [jobId, claimToken, seconds],
+    );
+    if (result.rows.length === 0)
+      throw new Error('collection lease expired, cancelled, paused, or superseded');
+  }
+
+  async saveDiscoveryState(jobId: Uuid, claimToken: Uuid, state: unknown): Promise<void> {
+    await this.renewLease(jobId, claimToken);
+    await this.client.query(
+      'update collection_jobs set discovery_state=$3 where id=$1 and claim_token=$2',
+      [jobId, claimToken, JSON.stringify(state)],
+    );
+  }
+
+  /** Charge before transport, including retries; independent workers share this counter. */
+  async reserveRequest(jobId: Uuid, claimToken: Uuid): Promise<void> {
+    await runAtomically(this.client, async (tx) => {
+      const job = (
+        await tx.query<{
+          batch_id: Uuid;
+          collect_discovered: boolean;
+          pages_processed: number;
+          max_pages_per_target: number;
+        }>(
+          `select j.batch_id,b.collect_discovered,j.pages_processed,p.max_pages_per_target from collection_jobs j
+         join collection_batches b on b.id=j.batch_id join collection_projects p on p.id=j.project_id
+         where j.id=$1 and j.claim_token=$2 and j.status='running' and j.lease_expires_at>now()
+           and p.status='active' and b.status in ('queued','running') and (b.expires_at is null or b.expires_at>now())
+         for update of b,j`,
+          [jobId, claimToken],
+        )
+      ).rows[0];
+      if (job === undefined) throw new Error('collection claim is no longer active');
+      if (!job.collect_discovered) return;
+      if (Number(job.pages_processed) >= Number(job.max_pages_per_target))
+        throw new Error('target request budget reached; collection is partial');
+      const reserved = await tx.query(
+        `update collection_batches set pages_processed=pages_processed+1
+        where id=$1 and pages_processed<page_limit and errors_encountered<error_limit returning id`,
+        [job.batch_id],
+      );
+      if (reserved.rows.length === 0)
+        throw new Error('run request or error budget reached; collection is partial');
+      await tx.query('update collection_jobs set pages_processed=pages_processed+1 where id=$1', [
+        jobId,
+      ]);
+    });
+  }
+
+  async batchHasPendingWork(batchId: Uuid): Promise<boolean> {
+    const result = await this.client.query(
+      `select 1 from collection_jobs j join collection_projects p on p.id=j.project_id
+      join collection_batches b on b.id=j.batch_id where j.batch_id=$1 and j.status in ('queued','claimed','running')
+      and p.status='active' and b.status in ('queued','running') and (b.expires_at is null or b.expires_at>now())
+      and b.pages_processed<b.page_limit and b.errors_encountered<b.error_limit limit 1`,
+      [batchId],
+    );
+    return result.rows.length > 0;
   }
 
   async createApprovedBatch(input: CreateApprovedBatchInput): Promise<Uuid> {
@@ -498,14 +781,20 @@ export class CollectionProjectRepository {
       throw new Error('lease must be between 30 and 3600 seconds');
     }
     return runAtomically(this.client, async (tx) => {
+      await tx.query("select pg_advisory_xact_lock(hashtext('collection_job_claim'))");
       await recoverExpiredLeases(tx);
+      await tx.query(`update collection_batches b set status='completed_with_errors',finished_at=now()
+        where b.expires_at<=now() and b.status in ('queued','running')
+          and not exists(select 1 from collection_jobs j where j.batch_id=b.id and j.status in ('claimed','running'))`);
+      await tx.query(`update collection_jobs j set status='cancelled',finished_at=now(),last_error='run expired'
+        from collection_batches b where b.id=j.batch_id and b.expires_at<=now() and j.status='queued'`);
       for (;;) {
         const selected = await tx.query<Record<string, unknown>>(
           `select j.id, j.project_id, j.batch_id, j.kind, j.crawl_target_id, j.crawl_run_id,
                   t.url, t.adapter_key, t.source_type_code,
                   o.id as organization_id, o.name as organization_name,
                   o.jurisdiction_id, o.government_level_code, o.sector_code,
-                  p.max_pages_per_target,
+                  p.max_pages_per_target,b.collect_discovered,j.discovery_state,
                   (select parent.name
                    from organization_relationships r
                    join relationship_types rt on rt.code = r.relationship_type_code
@@ -517,10 +806,13 @@ export class CollectionProjectRepository {
            join collection_batches b on b.id = j.batch_id
            join collection_projects p on p.id = j.project_id
            join crawl_targets t on t.id = j.crawl_target_id
-           join organizations o on o.id = t.organization_id
+           join organizations o on o.id = coalesce((select links.organization_id from crawl_target_organizations links
+             join collection_batch_organizations scope on scope.organization_id=links.organization_id and scope.batch_id=j.batch_id
+             where links.crawl_target_id=t.id order by links.organization_id limit 1),t.organization_id)
            where j.status = 'queued' and p.status = 'active'
              and ($1::uuid is null or j.batch_id = $1)
              and b.status in ('queued','running')
+             and (b.expires_at is null or b.expires_at>now())
              and b.approved_by is not null and b.approved_at is not null
              and b.pages_processed < b.page_limit
              and b.errors_encountered < b.error_limit
@@ -587,7 +879,9 @@ export class CollectionProjectRepository {
           organizationName: String(row['organization_name']),
           parentOrganizationName: nullableString(row['parent_organization_name']),
           jurisdictionId: nullableString(row['jurisdiction_id']),
-          governmentLevelCode: String(row['government_level_code']),
+          governmentLevelCode: nullableString(row['government_level_code']),
+          collectDiscovered: row['collect_discovered'] === true,
+          discoveryState: row['discovery_state'],
           sectorCode: String(row['sector_code']),
           maxPagesPerTarget: Number(row['max_pages_per_target']),
           crawlRunId: nullableString(row['crawl_run_id']),
@@ -626,8 +920,8 @@ export class CollectionProjectRepository {
         `update collection_jobs
          set status = 'completed', crawl_run_id = coalesce($3, crawl_run_id),
              pages_processed = $4, records_collected = $5, finished_at = now(),
-             lease_expires_at = null
-         where id = $1 and claim_token = $2 and status in ('claimed','running')
+             lease_expires_at = null, outcome_detail=$6
+         where id = $1 and claim_token = $2 and status in ('claimed','running') and lease_expires_at>now()
          returning batch_id, crawl_target_id, kind`,
         [
           input.jobId,
@@ -635,6 +929,7 @@ export class CollectionProjectRepository {
           input.crawlRunId,
           input.pagesProcessed,
           input.recordsCollected,
+          input.detail ?? null,
         ],
       );
       const job = result.rows[0];
@@ -643,14 +938,15 @@ export class CollectionProjectRepository {
         `update crawl_targets set status = $2::crawl_target_status,
                 last_crawled_at = case when $2::text = 'crawled' then now() else last_crawled_at end,
                 updated_at = now() where id = $1`,
-        [job.crawl_target_id, 'crawled'],
+        [job.crawl_target_id, job.kind === 'discovery' ? 'ready' : 'crawled'],
       );
       await tx.query(
         `update collection_batches
          set pages_processed = pages_processed + $2
-         where id = $1`,
+         where id = $1 and not collect_discovered`,
         [job.batch_id, input.pagesProcessed],
       );
+      await enqueueDiscovered(tx, job.batch_id, job.crawl_target_id);
       await enforceBatchLimits(tx, job.batch_id);
       await finishBatchIfSettled(tx, job.batch_id);
     });
@@ -689,6 +985,7 @@ export class CollectionProjectRepository {
         `update collection_batches set errors_encountered = errors_encountered + 1 where id = $1`,
         [job.batch_id],
       );
+      await enqueueDiscovered(tx, job.batch_id, job.crawl_target_id);
       await enforceBatchLimits(tx, job.batch_id);
       await finishBatchIfSettled(tx, job.batch_id);
     });
@@ -754,6 +1051,41 @@ select p.*,
         where j.project_id = p.id and j.status in ('claimed','running')) as running_jobs
 from collection_projects p`;
 
+async function enqueueDiscovered(
+  tx: SqlClient,
+  batchId: Uuid,
+  sourceTargetId: Uuid,
+): Promise<void> {
+  const batch = (
+    await tx.query<{ project_id: Uuid }>(
+      `select project_id from collection_batches where id=$1 and collect_discovered
+    and expires_at>now() and status in ('queued','running') for update`,
+      [batchId],
+    )
+  ).rows[0];
+  if (batch === undefined) return;
+  const targets = await tx.query<{ id: Uuid; url: string; priority: number }>(
+    `select distinct t.id,t.url,t.priority from crawl_targets t join crawl_target_organizations links on links.crawl_target_id=t.id
+     join collection_batch_organizations scope on scope.organization_id=links.organization_id and scope.batch_id=$1
+     where links.organization_id in (select organization_id from crawl_target_organizations where crawl_target_id=$2)
+       and t.target_type in ('organization_directory','unit_directory','profile_page','api_endpoint') and t.status in ('ready','crawled')
+       and not exists(select 1 from collection_jobs j where j.batch_id=$1 and j.crawl_target_id=t.id and j.kind='crawl')
+       and not exists(select 1 from collection_jobs j where j.crawl_target_id=t.id and j.status in ('claimed','running'))`,
+    [batchId, sourceTargetId],
+  );
+  for (const target of targets.rows)
+    await tx.query(
+      `insert into collection_jobs (project_id,batch_id,crawl_target_id,domain_key,kind,priority) values ($1,$2,$3,$4,'crawl',$5) on conflict do nothing`,
+      [
+        batch.project_id,
+        batchId,
+        target.id,
+        registrableDomain(new URL(target.url).hostname, US_LOCALITY_DOMAIN_LABELS),
+        target.priority,
+      ],
+    );
+}
+
 async function recoverExpiredLeases(tx: SqlClient): Promise<void> {
   await tx.query(
     `update collection_jobs
@@ -778,7 +1110,9 @@ export async function loadSourcePolicyRegistry(client: SqlClient): Promise<Sourc
   const policies = await client.query<Record<string, unknown>>(
     'select * from source_policies order by effective_at desc',
   );
-  return new SourcePolicyRegistry(policies.rows.map(mapSourcePolicy));
+  return new SourcePolicyRegistry(policies.rows.map(mapSourcePolicy), {
+    localityDomainLabels: US_LOCALITY_DOMAIN_LABELS,
+  });
 }
 
 function mapSourcePolicy(row: Record<string, unknown>): SourcePolicyRecord {
@@ -847,7 +1181,7 @@ async function finishBatchIfSettled(tx: SqlClient, batchId: Uuid): Promise<void>
     `update collection_batches
      set status = case
            when errors_encountered > 0
-             or exists (select 1 from collection_jobs where batch_id = $1 and status in ('failed','policy_hold'))
+             or exists (select 1 from collection_jobs where batch_id = $1 and (status in ('failed','policy_hold','cancelled') or outcome_detail is not null))
            then 'completed_with_errors'::collection_batch_status
            else 'completed'::collection_batch_status
          end,
@@ -895,6 +1229,8 @@ function normalizeFilters(
   filters: Partial<CollectionProjectFilters> = {},
 ): CollectionProjectFilters {
   return {
+    stateCodes: unique(filters.stateCodes ?? []),
+    allGovernmentLevels: filters.allGovernmentLevels === true,
     organizationTypeCodes: unique(filters.organizationTypeCodes ?? []),
     includedOrganizationIds: unique(filters.includedOrganizationIds ?? []),
     excludedOrganizationIds: unique(filters.excludedOrganizationIds ?? []),
@@ -915,6 +1251,8 @@ function parseFilters(value: unknown): CollectionProjectFilters {
   if (parsed === null || typeof parsed !== 'object') return { ...EMPTY_FILTERS };
   const record = parsed as Record<string, unknown>;
   return normalizeFilters({
+    stateCodes: stringArray(record['stateCodes']),
+    allGovernmentLevels: record['allGovernmentLevels'] === true,
     organizationTypeCodes: stringArray(record['organizationTypeCodes']),
     includedOrganizationIds: stringArray(record['includedOrganizationIds']),
     excludedOrganizationIds: stringArray(record['excludedOrganizationIds']),

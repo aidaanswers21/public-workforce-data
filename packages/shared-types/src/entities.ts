@@ -100,8 +100,8 @@ export interface OrganizationRecord {
   id: Uuid;
   /** Reference code from the taxonomy, e.g. `federal_bureau`, `school`. */
   organizationTypeCode: string;
-  /** Denormalized from the type for querying. Kept in step by the pipeline. */
-  governmentLevelCode: string;
+  /** Independently recorded when supported by source evidence. */
+  governmentLevelCode: string | null;
   sectorCode: string;
   jurisdictionId: Uuid | null;
   name: string;

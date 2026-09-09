@@ -46,7 +46,7 @@ import {
 export interface IngestContext {
   organizationId: Uuid;
   organizationName: string | null;
-  governmentLevelCode: string;
+  governmentLevelCode: string | null;
   sectorCode: string;
   jurisdictionId: Uuid | null;
   /** Reference code from the taxonomy, e.g. `html_directory`. */
@@ -96,6 +96,8 @@ export class IngestionPipeline {
       organizations: OrganizationRepository;
       logger: Logger;
       clock?: Clock;
+      assertActive?: () => Promise<void>;
+      resolveContext?: (record: HarvestedRecord, context: IngestContext) => IngestContext | null;
     },
   ) {}
 
@@ -130,12 +132,25 @@ export class IngestionPipeline {
     }
 
     for (const harvested of result.records) {
-      const document = await this.resolveDocument(harvested, result.crawlRunId, context, documents);
+      await this.deps.assertActive?.();
+      const resolved = this.deps.resolveContext?.(harvested, context);
+      if (resolved === null) {
+        await this.resolveDocument(harvested, result.crawlRunId, context, documents);
+        summary.errors++;
+        continue;
+      }
+      const recordContext = resolved ?? context;
+      const document = await this.resolveDocument(
+        harvested,
+        result.crawlRunId,
+        recordContext,
+        documents,
+      );
       const created = await this.ingestOne(
         harvested,
         document,
         result.crawlRunId,
-        context,
+        recordContext,
         summary,
       );
       summary.peopleSeen += 1;

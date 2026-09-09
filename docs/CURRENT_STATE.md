@@ -1,6 +1,6 @@
 # Current state
 
-Last updated: 2026-09-08. Phase: foundation generalized across six levels of
+Last updated: 2026-09-09. Phase: foundation generalized across six levels of
 government, then corrected against an independent architecture review. No
 production crawl run.
 
@@ -9,7 +9,7 @@ production crawl run.
 | Capability                                                                                                        | Status                                                         |
 | ----------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
 | Monorepo, strict TypeScript, lint, typecheck (sources and tests), build, tests                                    | Working                                                        |
-| Schema: 53 tables in the local harness, 14 reference tables, enums, constraints, triggers                         | Working, tested against real Postgres                          |
+| Schema: 55 tables in the local harness, 14 reference tables, enums, constraints, triggers                         | Working, tested against real Postgres                          |
 | Migrations up and down, checksum guard                                                                            | Working                                                        |
 | Controlled reference data seeded from the composed taxonomy                                                       | Working                                                        |
 | Sector packs: education, state and local government, federal government                                           | Working                                                        |
@@ -32,7 +32,7 @@ production crawl run.
 | Suppression: 11 scopes, enforced in SQL and re-checked at export                                                  | Working                                                        |
 | Organization-subtree suppression, both paths tested against each other                                            | Working                                                        |
 | Idempotent complaint intake, immutable suppression, serialized hash-chained audit trail                           | Working                                                        |
-| CSV export with 33 fields and independent channel suppression accounting                                          | Working                                                        |
+| CSV export with 35 fields and independent channel suppression accounting                                          | Working                                                        |
 | Texas education jurisdiction configuration                                                                        | Written, sources not yet verified                              |
 | Discovery worker                                                                                                  | Working, not run against real sites                            |
 | National bulk-file organizer, exact-ID canonicalizer, jurisdiction/relationship materializer and website overlays | Working locally; first hosted import predates the materializer |
@@ -83,7 +83,9 @@ production crawl run.
   The project builder can narrow a national configuration by state. Federal and
   state general-government rows remain held until their authoritative hierarchy
   or source is reconciled; the console does not present those as ready.
-- **No browser rendering.** `requiresBrowser` is the seam; no adapter sets it.
+- **Optional browser rendering is implemented.** Set `CRAWLER_RENDER_BROWSER=true`
+  after installing Chromium. All browser requests use the guarded transport.
+  See `STATEWIDE_COLLECTION.md`.
 - **No AI extraction.** The contract for it is in `BACKLOG.md`, unimplemented.
 - **No public or multi-user admin application.** The browser console is a
   private single-operator service with its own hashed-password login. It can
@@ -131,3 +133,12 @@ The tests that carry the generalization and persistence guarantees:
 8. Approve a separate small collection batch, inspect the people and email
    evidence, then download its suppression-checked project CSV.
 9. Only then consider widening collection.
+
+## Statewide collection workflow
+
+The state roster builder, finite discovery-to-extraction run, bulk source decisions,
+lease renewal, concurrent worker pool, shared-directory associations, coverage
+outcomes and full streaming contact export are implemented. Migration 0020 and an
+application/worker deployment are required before hosted use. Unknown government
+levels remain null; their source classification holds remain recorded. See
+`STATEWIDE_COLLECTION.md` for exact behavior and limitations.

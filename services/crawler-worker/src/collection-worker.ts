@@ -8,7 +8,7 @@ import {
   type ClaimedCollectionJob,
   type SqlClient,
 } from '@public-workforce/database';
-import { CrawlEngine } from '@public-workforce/core';
+import { CrawlEngine, type CrawlPolicy } from '@public-workforce/core';
 import type { Fetcher, RobotsProvider } from '@public-workforce/shared-types';
 import type { AdapterRegistry } from '@public-workforce/adapter-kit';
 import type { Taxonomy } from '@public-workforce/taxonomy';
@@ -19,7 +19,8 @@ export interface CollectionJobResult {
   crawlRunId: string | null;
   pagesProcessed: number;
   recordsCollected: number;
-  outcome: 'completed' | 'policy_hold' | 'blocked';
+  outcome: 'completed' | 'policy_hold' | 'blocked' | 'failed';
+  retryable?: boolean;
   detail: string | null;
 }
 
@@ -36,7 +37,8 @@ export interface CollectionJobExecutor {
 export interface ScheduledDiscoveryResult {
   pagesProcessed: number;
   targetsRecorded: number;
-  outcome: 'completed' | 'policy_hold' | 'blocked';
+  outcome: 'completed' | 'policy_hold' | 'blocked' | 'failed';
+  retryable?: boolean;
   detail: string | null;
 }
 
@@ -51,6 +53,8 @@ export interface ProductionCollectionExecutorOptions {
   /** The discovery service is injected so it can remain independently deployable. */
   discover(job: ClaimedCollectionJob): Promise<ScheduledDiscoveryResult>;
   sleep?: (milliseconds: number) => Promise<void>;
+  policy?: Partial<CrawlPolicy>;
+  fetcherForJob?: (job: ClaimedCollectionJob) => Fetcher;
 }
 
 /** Runs a claimed job through the existing discovery or ingestion pipeline. */
@@ -66,6 +70,7 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
         recordsCollected: 0,
         outcome: result.outcome,
         detail: result.detail,
+        retryable: result.retryable ?? false,
       };
     }
 
@@ -73,11 +78,48 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
     if (adapter === null) throw new Error(`no registered adapter is recorded for ${job.url}`);
 
     const crawl = new CrawlRepository(this.options.client);
+    const associations = await this.options.client.query<{
+      id: string;
+      name: string;
+      government_level_code: string | null;
+      sector_code: string;
+      jurisdiction_id: string | null;
+    }>(
+      `select o.id,o.name,o.government_level_code,o.sector_code,o.jurisdiction_id from crawl_target_organizations link
+       join organizations o on o.id=link.organization_id
+       where link.crawl_target_id=$1 and ($3::boolean=false or exists(select 1 from collection_batch_organizations scope where scope.batch_id=$2 and scope.organization_id=o.id))`,
+      [job.crawlTargetId, job.batchId, job.collectDiscovered ?? false],
+    );
     const pipeline = new IngestionPipeline({
       ingestion: new IngestionRepository(this.options.client),
       crawl,
       organizations: new OrganizationRepository(this.options.client),
       logger: this.options.logger,
+      assertActive: () =>
+        new CollectionProjectRepository(this.options.client).renewLease(job.id, job.claimToken),
+      resolveContext: (record, context) => {
+        if (associations.rows.length <= 1) return context;
+        const published = record.record.organizationPublished?.trim().toLowerCase();
+        const matched = associations.rows.filter(
+          (org) => org.name.trim().toLowerCase() === published,
+        );
+        const organization = matched.length === 1 ? matched[0] : undefined;
+        if (organization === undefined) return null;
+        const rules = buildScopedRules(this.options.taxonomy, {
+          governmentLevelCode: organization.government_level_code,
+          sectorCode: organization.sector_code,
+        });
+        return {
+          ...context,
+          organizationId: organization.id,
+          organizationName: organization.name,
+          governmentLevelCode: organization.government_level_code,
+          sectorCode: organization.sector_code,
+          jurisdictionId: organization.jurisdiction_id,
+          vocabulary: rules.vocabulary,
+          titleRules: rules.titleRules,
+        };
+      },
     });
     const rules = buildScopedRules(this.options.taxonomy, {
       governmentLevelCode: job.governmentLevelCode,
@@ -103,7 +145,7 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
     const resumeFrom = await crawl.loadCheckpoint(crawlRunId, job.crawlTargetId);
     const sourcePolicy = await loadSourcePolicyRegistry(this.options.client);
     const engine = new CrawlEngine({
-      fetcher: this.options.fetcher,
+      fetcher: this.options.fetcherForJob?.(job) ?? this.options.fetcher,
       robots: this.options.robots,
       logger: this.options.logger,
       ...(this.options.sleep === undefined ? {} : { sleep: this.options.sleep }),
@@ -116,7 +158,7 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
         crawlTargetId: job.crawlTargetId,
         seedUrl: job.url,
         adapter,
-        policy: buildCrawlPolicy({ maxPagesPerRun: job.maxPagesPerTarget }),
+        policy: buildCrawlPolicy({ ...this.options.policy, maxPagesPerRun: job.maxPagesPerTarget }),
         vocabulary: rules.vocabulary,
         organizationName: job.organizationName,
         parentOrganizationName: job.parentOrganizationName,
@@ -124,6 +166,7 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
         sourcePolicy,
         ...(resumeFrom === null ? {} : { resumeFrom }),
       });
+      await new CollectionProjectRepository(this.options.client).renewLease(job.id, job.claimToken);
       const summary = await pipeline.ingestRun(result, {
         organizationId: job.organizationId,
         organizationName: job.organizationName,
@@ -135,6 +178,8 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
         titleRules: rules.titleRules,
       });
       const outcome = crawlOutcome(result.stops.map((stop) => stop.reason));
+      const partial =
+        result.checkpoint.pendingTasks.length > 0 || result.errors.length > 0 || summary.errors > 0;
       await crawl.finishRun(
         crawlRunId,
         outcome === 'completed'
@@ -150,7 +195,11 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
         pagesProcessed: result.stats.pagesFetched,
         recordsCollected: summary.peopleSeen,
         outcome,
-        detail: result.stops.at(-1)?.detail ?? null,
+        detail: partial
+          ? `partial collection: ${result.stops.at(-1)?.detail ?? 'errors or unfinished pages'}`
+          : result.records.length === 0
+            ? 'no public contacts extracted'
+            : null,
       };
     } catch (error) {
       await crawl.finishRun(
@@ -180,6 +229,8 @@ export interface CollectionWorkerOptions {
   workerId: string;
   logger: Logger;
   leaseSeconds?: number;
+  heartbeatMilliseconds?: number;
+  sleep?: (ms: number) => Promise<void>;
   /** A production invocation names the exact approved batch it is consuming. */
   batchId?: string;
 }
@@ -202,9 +253,35 @@ export class CollectionWorker {
     );
     if (job === null) return 'empty';
 
+    const heartbeat: { failure: Error | null; renewing: Promise<void> | null } = {
+      failure: null,
+      renewing: null,
+    };
+    const timer = setInterval(() => {
+      if (heartbeat.renewing !== null) return;
+      heartbeat.renewing = this.options.queue
+        .renewLease(job.id, job.claimToken, this.options.leaseSeconds)
+        .catch((error: unknown) => {
+          heartbeat.failure = error instanceof Error ? error : new Error(String(error));
+        })
+        .finally(() => {
+          heartbeat.renewing = null;
+        });
+    }, this.options.heartbeatMilliseconds ?? 30000);
+    timer.unref();
     try {
       await this.options.queue.markJobRunning(job.id, job.claimToken, job.crawlRunId);
       const result = await this.options.executor.execute(job);
+      if (heartbeat.failure !== null) throw heartbeat.failure;
+      if (result.outcome === 'failed') {
+        await this.options.queue.failJob({
+          jobId: job.id,
+          claimToken: job.claimToken,
+          error: result.detail ?? 'collection failed',
+          retryable: result.retryable ?? false,
+        });
+        return 'failed';
+      }
       if (result.outcome !== 'completed') {
         await this.options.queue.blockJob({
           jobId: job.id,
@@ -220,6 +297,7 @@ export class CollectionWorker {
         crawlRunId: result.crawlRunId,
         pagesProcessed: result.pagesProcessed,
         recordsCollected: result.recordsCollected,
+        ...(result.detail === null ? {} : { detail: result.detail }),
       });
       this.options.logger.info(
         { jobId: job.id, batchId: job.batchId, kind: job.kind },
@@ -231,17 +309,27 @@ export class CollectionWorker {
       const retryable =
         error instanceof Error &&
         ['AbortError', 'TimeoutError', 'NetworkError'].includes(error.name);
-      await this.options.queue.failJob({
-        jobId: job.id,
-        claimToken: job.claimToken,
-        error: message,
-        retryable,
-      });
+      await this.options.queue
+        .failJob({
+          jobId: job.id,
+          claimToken: job.claimToken,
+          error: message,
+          retryable,
+        })
+        .catch((claimError: unknown) => {
+          this.options.logger.warn(
+            { jobId: job.id, error: String(claimError) },
+            'failed worker no longer owns the claim',
+          );
+        });
       this.options.logger.error(
         { jobId: job.id, batchId: job.batchId, kind: job.kind, message },
         'approved collection job failed',
       );
       return 'failed';
+    } finally {
+      clearInterval(timer);
+      if (heartbeat.renewing !== null) await heartbeat.renewing;
     }
   }
 
@@ -278,7 +366,16 @@ export class CollectionWorker {
     let held = 0;
     for (;;) {
       const result = await this.runNext();
-      if (result === 'empty') return { completed, failed, held };
+      if (result === 'empty') {
+        if (await this.options.queue.batchHasPendingWork(this.options.batchId)) {
+          await (
+            this.options.sleep ??
+            ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+          )(1000);
+          continue;
+        }
+        return { completed, failed, held };
+      }
       if (result === 'completed') completed += 1;
       else if (result === 'failed') failed += 1;
       else held += 1;

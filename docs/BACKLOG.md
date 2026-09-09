@@ -235,9 +235,9 @@ independent review and the human owner; it is not approval.
 
 ## Crawling
 
-- **Browser rendering** behind `requiresBrowser`, using a Playwright fetcher
-  implementing the `Fetcher` port. Needed for JavaScript-rendered directories,
-  which currently show up as `empty_success`.
+- **Browser rendering is implemented as an optional guarded transport.** Chromium
+  and its libraries must be installed on the worker. Search-only enumeration and
+  platform-specific adapters still need representative source fixtures.
 - **Scheduler deployment and soak test.** The durable approved-batch queue,
   cross-worker domain exclusion, expiring leases and checkpoint reload path are
   implemented behind the finite `collection:work` entry point. The Render

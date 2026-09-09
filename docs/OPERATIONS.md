@@ -147,7 +147,7 @@ that login before redeploying it.
 The **Exports** page creates controlled purposes and downloads a CSV for one
 selected collection project. Creating a purpose and producing a file each
 require an explicit signed-in confirmation. The repository rejects inactive or
-unknown purposes, limits a browser export to 50,000 rows, applies suppression in
+unknown purposes, supports a limited sample or a complete streaming download, applies suppression in
 SQL, re-checks it immediately before rendering, and records the export checksum
 and audit event. This repository does not send the file or perform outreach.
 
@@ -284,3 +284,6 @@ request id per check so spend is attributable.
 See `CRAWLING_POLICY.md` and `SOURCE_POLICY_REVIEW.md`. In short: verified
 sources, approved source policies, a real user agent with a reachable policy
 page, a small approved sample first, read the failures, then widen. Not before.
+
+For multi-state roster preparation, full collection runs, browser installation,
+worker concurrency, and streaming exports, see `STATEWIDE_COLLECTION.md`.

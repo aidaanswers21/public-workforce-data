@@ -358,7 +358,9 @@ export function createAdminServer(options: AdminServerOptions): Server {
           });
           redirect(response, '/exports?message=Export+purpose+approved');
         } catch (error) {
-          redirect(response, `/exports?message=${encodeURIComponent(errorMessage(error))}`);
+          if (response.headersSent)
+            response.destroy(error instanceof Error ? error : new Error(String(error)));
+          else redirect(response, `/exports?message=${encodeURIComponent(errorMessage(error))}`);
         }
         return;
       }
@@ -382,6 +384,55 @@ export function createAdminServer(options: AdminServerOptions): Server {
           return;
         }
         try {
+          if (form.get('downloadAll') === 'yes') {
+            let started = false;
+            await exports.streamPeopleExport(
+              {
+                name: `${project.name} ${now().toISOString()}`,
+                requestedBy: authenticatedEmail,
+                purpose,
+                filters: {
+                  collectionProjectId: projectId,
+                  includeGeneralInboxes: form.get('includeGeneralInboxes') === 'yes',
+                },
+              },
+              async (chunk) => {
+                if (response.destroyed) throw new Error('download disconnected');
+                if (!started) {
+                  response.writeHead(200, {
+                    'Content-Type': 'text/csv; charset=utf-8',
+                    'Content-Disposition': `attachment; filename="${slug(project.name)}-all.csv"`,
+                    'Cache-Control': 'no-store',
+                  });
+                  started = true;
+                }
+                if (!response.write(chunk)) {
+                  await new Promise<void>((resolve, reject) => {
+                    const cleanup = () => {
+                      response.off('drain', drained);
+                      response.off('close', closed);
+                      response.off('error', failed);
+                    };
+                    const drained = () => {
+                      cleanup();
+                      resolve();
+                    };
+                    const failed = (error: Error) => {
+                      cleanup();
+                      reject(error);
+                    };
+                    const closed = () => failed(new Error('download disconnected'));
+                    response.once('drain', drained);
+                    response.once('close', closed);
+                    response.once('error', failed);
+                    if (response.destroyed) closed();
+                  });
+                }
+              },
+            );
+            response.end();
+            return;
+          }
           const built = await exports.buildPeopleExport({
             name: `${project.name} ${now().toISOString()}`,
             requestedBy: authenticatedEmail,
@@ -399,7 +450,9 @@ export function createAdminServer(options: AdminServerOptions): Server {
             built.exportId,
           );
         } catch (error) {
-          redirect(response, `/exports?message=${encodeURIComponent(errorMessage(error))}`);
+          if (response.headersSent)
+            response.destroy(error instanceof Error ? error : new Error(String(error)));
+          else redirect(response, `/exports?message=${encodeURIComponent(errorMessage(error))}`);
         }
         return;
       }
@@ -603,6 +656,186 @@ export function createAdminServer(options: AdminServerOptions): Server {
             response,
             `/policies?message=${encodeURIComponent(errorMessage(error))}&returnTo=${encodeURIComponent(returnTo)}`,
           );
+        }
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/collections/new') {
+        sendHtml(
+          response,
+          200,
+          page(
+            'Collect by state',
+            `${appHeader('/projects', hosted)}<main class="dashboard narrow-dashboard">
+          <h1>Collect by state</h1><p>Choose the official organization rosters and states. Preparation uses the loaded source releases and makes no website requests.</p>
+          <form class="panel panel-body release-form" method="post" action="/collections">
+          <label>Collection name<input name="name" required></label>
+          <fieldset><legend>Organization rosters</legend>${projectBuilderCatalog.explorerPresets.map((preset) => `<label class="check-label"><input type="checkbox" name="presets" value="${escapeAttribute(preset.key)}" checked><span>${escapeHtml(preset.name)}</span></label>`).join('')}</fieldset>
+          <label>States<select name="states" multiple required size="10">${(projectBuilderCatalog.states ?? []).map((state) => `<option value="${escapeAttribute(state.code)}">${escapeHtml(state.name)}</option>`).join('')}</select></label>
+          <label>Requests per target<input type="number" name="maxPagesPerTarget" min="1" max="1000" value="100"></label>
+          <label>Total request budget<input type="number" name="maxPagesPerBatch" min="1" max="100000" value="100000"></label>
+          <label>Error stop<input type="number" name="maxErrorsPerBatch" min="1" max="1000" value="1000"></label>
+          <button type="submit">Prepare collection</button></form></main>${appFooter(hosted)}`,
+            'dashboard-page',
+          ),
+        );
+        return;
+      }
+      if (request.method === 'POST' && url.pathname === '/collections') {
+        const form = new URLSearchParams(await readBody(request));
+        try {
+          const stateCodes = unique(form.getAll('states'));
+          if (
+            stateCodes.length === 0 ||
+            stateCodes.some(
+              (code) => !(projectBuilderCatalog.states ?? []).some((state) => state.code === code),
+            )
+          )
+            throw new Error('choose valid states');
+          const presets = projectBuilderCatalog.explorerPresets.filter((preset) =>
+            form.getAll('presets').includes(preset.key),
+          );
+          if (presets.length === 0) throw new Error('choose an organization roster');
+          const id = await projects.prepareRoster(
+            {
+              key: `collection-${randomUUID()}`,
+              name: form.get('name') ?? '',
+              jurisdictionConfigKey: 'source-roster',
+              jurisdictionCode: 'source-roster',
+              stateCode: stateCodes.length === 1 ? (stateCodes[0] ?? null) : null,
+              sectorCodes: unique(presets.flatMap((p) => p.sectorCodes)),
+              governmentLevelCodes: projectBuilderCatalog.governmentLevels.map(
+                (level) => level.code,
+              ),
+              filters: {
+                organizationTypeCodes: unique(presets.flatMap((p) => p.organizationTypeCodes)),
+              },
+              batchSize: 1000,
+              maxPagesPerTarget: formInteger(form, 'maxPagesPerTarget', 100),
+              maxPagesPerBatch: formInteger(form, 'maxPagesPerBatch', 100000),
+              maxErrorsPerBatch: formInteger(form, 'maxErrorsPerBatch', 1000),
+              createdBy: authenticatedEmail,
+            },
+            unique(presets.flatMap((p) => p.sourceKeys)),
+            stateCodes,
+          );
+          redirect(response, `/projects/${id}/run`);
+        } catch (error) {
+          sendHtml(
+            response,
+            400,
+            renderMessage('Collection preparation failed', errorMessage(error)),
+          );
+        }
+        return;
+      }
+      const outcomeMatch = /^\/projects\/([0-9a-f-]+)\/outcomes$/.exec(url.pathname);
+      if (request.method === 'GET' && outcomeMatch !== null) {
+        const projectId = outcomeMatch[1] as string;
+        const rows = await projects.organizationOutcomes(projectId, url.searchParams.get('after'));
+        sendHtml(
+          response,
+          200,
+          page(
+            'Collection coverage',
+            `${appHeader('/projects', hosted)}<main class="dashboard"><h1>Coverage and exceptions</h1><a href="/projects/${escapeAttribute(projectId)}">Back to collection</a><section class="panel"><table><thead><tr><th>Organization</th><th>Outcome</th><th>People</th><th>Published emails</th><th>Detail</th></tr></thead><tbody>${rows.map((row) => `<tr><td>${escapeHtml(String(row['name']))}</td><td>${escapeHtml(String(row['outcome']))}</td><td>${Number(row['people'])}</td><td>${Number(row['published_emails'])}</td><td>${escapeHtml(typeof row['detail'] === 'string' ? row['detail'] : '')}</td></tr>`).join('')}</tbody></table></section>${rows.length === 100 ? `<a href="?after=${escapeAttribute(String(rows.at(-1)?.['id']))}">Next organizations</a>` : ''}</main>${appFooter(hosted)}`,
+            'dashboard-page',
+          ),
+        );
+        return;
+      }
+      const runMatch = /^\/projects\/([0-9a-f-]+)\/run$/.exec(url.pathname);
+      if (runMatch !== null) {
+        const projectId = runMatch[1] as string;
+        const project = await projects.get(projectId);
+        if (project === null) {
+          sendHtml(
+            response,
+            404,
+            renderMessage('Project not found', 'Choose a collection project.'),
+          );
+          return;
+        }
+        if (request.method === 'POST') {
+          const form = new URLSearchParams(await readBody(request));
+          try {
+            if (form.get('approvalConfirmed') !== 'yes')
+              throw new Error('confirm this finite discovery and collection run');
+            await projects.createApprovedRun({
+              projectId,
+              approvedBy: authenticatedEmail,
+              approvalNote: form.get('approvalNote') ?? '',
+              expiresAt: `${form.get('expiresAt') ?? ''}Z`,
+            });
+            redirect(response, `/projects/${projectId}?message=Collection+run+queued`);
+          } catch (error) {
+            sendHtml(response, 400, renderMessage('Run could not start', errorMessage(error)));
+          }
+          return;
+        }
+        if (request.method === 'GET') {
+          const manifest = await projects.domainManifest(projectId);
+          sendHtml(
+            response,
+            200,
+            page(
+              'Start collection',
+              `${appHeader('/projects', hosted)}<main class="dashboard"><h1>${escapeHtml(project.name)}</h1>
+            <p>${project.organizationsSelected.toLocaleString()} organizations; ${project.websitesAvailable.toLocaleString()} published websites; ${project.sourceRecordsHeld.toLocaleString()} source rows still unlinked.</p>
+            <p>Discovery and scraping proceed automatically within this roster. Source exceptions do not prevent other permitted domains from running.</p>
+            <form class="panel panel-body release-form" method="post"><label>Run note<textarea name="approvalNote" minlength="8" required></textarea></label>
+            <label>Expires at (UTC)<input name="expiresAt" type="datetime-local" required value="${new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 16)}"></label>
+            <p>At most ${project.maxPagesPerBatch.toLocaleString()} requests, ${project.maxPagesPerTarget} per target, stopping after ${project.maxErrorsPerBatch} errors.</p>
+            <label class="check-label"><input name="approvalConfirmed" type="checkbox" value="yes" required><span>I authorize discovery and collection for this finite roster until expiry or the stated limits.</span></label><button>Start collection</button></form>
+            <section class="panel panel-body"><h2>Source manifest</h2><p>Review missing policies in bulk below or use the existing policy screen. Prohibited sources remain blocked.</p><table><thead><tr><th>Source</th><th>Status</th></tr></thead><tbody>${manifest.map((row) => `<tr><td><a href="${escapeAttribute(row.url)}" target="_blank" rel="noreferrer">${escapeHtml(row.url)}</a></td><td>${escapeHtml(row.status)}</td></tr>`).join('')}</tbody></table></section>
+            <form class="panel panel-body release-form" method="post" action="/projects/${projectId}/policies/bulk"><h2>Record reviewed source decisions</h2><p>One reviewed domain per line: domain | what you checked. Each line records its own review and production approval.</p><textarea name="decisions" rows="8" required></textarea><label class="check-label"><input type="checkbox" name="approvalConfirmed" value="yes" required><span>I reviewed these sources and approve collection from them.</span></label><button>Record decisions and resume eligible work</button></form>
+            </main>${appFooter(hosted)}`,
+              'dashboard-page',
+            ),
+          );
+          return;
+        }
+      }
+      const bulkPolicyMatch = /^\/projects\/([0-9a-f-]+)\/policies\/bulk$/.exec(url.pathname);
+      if (request.method === 'POST' && bulkPolicyMatch !== null) {
+        const projectId = bulkPolicyMatch[1] as string;
+        const form = new URLSearchParams(await readBody(request));
+        try {
+          if (form.get('approvalConfirmed') !== 'yes')
+            throw new Error('confirm the source decisions');
+          const manifest = await projects.domainManifest(projectId);
+          const lines = (form.get('decisions') ?? '')
+            .split('\n')
+            .map((line) => line.trim())
+            .filter(Boolean);
+          if (lines.length === 0 || lines.length > 1000)
+            throw new Error('provide between 1 and 1000 source decisions');
+          const decisions = lines.map((line) => {
+            const separator = line.indexOf('|');
+            const domain = line.slice(0, separator).trim().toLowerCase();
+            const note = line.slice(separator + 1).trim();
+            if (separator < 0 || note.length < 8 || !manifest.some((row) => row.domain === domain))
+              throw new Error('each decision needs a manifest domain and review evidence');
+            if (manifest.some((row) => row.domain === domain && row.status === 'prohibited'))
+              throw new Error('a prohibited source cannot be approved');
+            return { domain, note };
+          });
+          for (const decision of decisions) {
+            const id = await sourcePolicies.recordReview({
+              domain: decision.domain,
+              collectionStatus: 'review_required',
+              automatedAccessStatus: 'unknown',
+              commercialUseStatus: 'unknown',
+              solicitationStatus: 'unknown',
+              reviewedBy: authenticatedEmail,
+              reviewNotes: decision.note,
+            });
+            await sourcePolicies.approve(id, authenticatedEmail, decision.note);
+          }
+          await projects.resumePolicyHolds(projectId, authenticatedEmail);
+          redirect(response, `/projects/${projectId}/run`);
+        } catch (error) {
+          sendHtml(response, 400, renderMessage('Source decisions failed', errorMessage(error)));
         }
         return;
       }
@@ -1418,7 +1651,7 @@ function renderProjects(
     <main class="dashboard">
       <section class="dashboard-heading">
         <div><p class="eyebrow">Collection control plane</p><h1>Collection projects</h1><p class="muted">Choose a governed scope, prepare targets, and release only finite approved batches.</p></div>
-        <a class="primary-link${templates.length === 0 ? ' disabled' : ''}" href="/projects/new">Create project</a>
+        <a class="primary-link" href="/collections/new">Collect by state</a><a class="primary-link${templates.length === 0 ? ' disabled' : ''}" href="/projects/new">Create project</a>
       </section>
       <section class="notice"><span class="shield">✓</span><div><strong>Preparation is separate from collection</strong><p>Creating a project or target does not contact a website. A worker can claim only an explicitly approved batch whose source policy allows it.</p></div></section>
       <section class="panel">
@@ -1469,7 +1702,7 @@ function renderExports(
       ${message.length === 0 ? '' : `<div class="flash" role="status">${escapeHtml(message)}</div>`}
       <div class="project-grid">
         <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Approval</p><h2>Approve an export purpose</h2></div></div><form class="panel-body release-form" method="post" action="/export-purposes"><label for="purposeCode">Purpose code</label><input id="purposeCode" name="code" pattern="[a-z][a-z0-9_-]{1,63}" placeholder="internal-review" required><label for="purposeDescription">Specific permitted use</label><textarea id="purposeDescription" name="description" rows="3" minlength="8" required placeholder="Internal review of the selected collection pilot"></textarea><label class="check-label"><input type="checkbox" name="approvalConfirmed" value="yes" required><span>I approve this named use of exported records.</span></label><button type="submit">Approve export purpose</button></form></section>
-        <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Download</p><h2>Create a governed CSV</h2></div></div><form class="panel-body release-form" method="post" action="/exports/download"><label for="exportProject">Collection project</label><select id="exportProject" name="projectId" required><option value="">Choose a project</option>${projectOptions}</select><label for="exportPurpose">Approved purpose</label><select id="exportPurpose" name="purpose" required><option value="">Choose an approved purpose</option>${purposeOptions}</select><label for="exportLimit">Maximum rows</label><input id="exportLimit" name="limit" type="number" min="1" max="50000" value="50000" required><label class="check-label"><input type="checkbox" name="includeGeneralInboxes" value="yes"><span>Include published general office inboxes.</span></label><label class="check-label"><input type="checkbox" name="exportConfirmed" value="yes" required><span>I approve this exact export for the selected purpose.</span></label><button type="submit" ${canExport ? '' : 'disabled'}>Download suppression-checked CSV</button><p class="field-help">Inferred candidates remain separate from published addresses. This repository does not send email.</p></form></section>
+        <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Download</p><h2>Create a governed CSV</h2></div></div><form class="panel-body release-form" method="post" action="/exports/download"><label class="check-label"><input type="checkbox" name="downloadAll" value="yes" checked><span>Download the complete collection, including all pages</span></label><label for="exportProject">Collection project</label><select id="exportProject" name="projectId" required><option value="">Choose a project</option>${projectOptions}</select><label for="exportPurpose">Approved purpose</label><select id="exportPurpose" name="purpose" required><option value="">Choose an approved purpose</option>${purposeOptions}</select><label for="exportLimit">Maximum rows</label><input id="exportLimit" name="limit" type="number" min="1" max="50000" value="50000" required><label class="check-label"><input type="checkbox" name="includeGeneralInboxes" value="yes"><span>Include published general office inboxes.</span></label><label class="check-label"><input type="checkbox" name="exportConfirmed" value="yes" required><span>I approve this exact export for the selected purpose.</span></label><button type="submit" ${canExport ? '' : 'disabled'}>Download suppression-checked CSV</button><p class="field-help">Inferred candidates remain separate from published addresses. This repository does not send email.</p></form></section>
       </div>
       <section class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Controlled uses</p><h2>Active export purposes</h2></div><span class="summary-chip">${purposes.length}</span></div><div class="table-scroll"><table><thead><tr><th>Purpose</th><th>Owner</th><th>Approval</th></tr></thead><tbody>${purposeRows.length > 0 ? purposeRows : '<tr><td class="empty" colspan="3">No export purpose has been approved.</td></tr>'}</tbody></table></div></section>
     </main>${appFooter(hosted)}`,
@@ -1648,7 +1881,7 @@ function renderProjectDetail(
       <section class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Readiness</p><h2>Official sources</h2></div><span class="summary-chip">${(template?.officialSources ?? []).filter((source) => source.verified).length} verified</span></div><div class="table-scroll"><table><thead><tr><th>Source</th><th>Verification</th><th>What remains</th></tr></thead><tbody>${sourceRows.length > 0 ? sourceRows : '<tr><td class="empty" colspan="3">The configuration is not available in this running console.</td></tr>'}</tbody></table></div></section>
       <section class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Durable queue</p><h2>Approved batches</h2></div></div><div class="table-scroll"><table><thead><tr><th>Batch</th><th>Stage</th><th>Status</th><th>Jobs</th><th>Pages</th><th>Issues</th><th>Approval</th></tr></thead><tbody>${batchRows.length > 0 ? batchRows : '<tr><td class="empty" colspan="7">No work has been released. Preparation alone never starts collection.</td></tr>'}</tbody></table></div></section>
       ${policyHolds.length === 0 ? '' : `<section id="policy-holds" class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Action required</p><h2>Review held source domains</h2><p class="muted">No request was made to these sources. Inspect each source, record its policy decision, then approve a new finite batch. The failed batch will not retry itself.</p></div><span class="summary-chip">${policyHolds.length}</span></div><div class="table-scroll"><table><thead><tr><th>Domain</th><th>Hold reason</th><th>Source</th><th>Next action</th></tr></thead><tbody>${policyHoldRows}</tbody></table></div></section>`}
-      <section class="project-controls"><form method="post" action="/projects/${escapeAttribute(project.id)}/status"><input type="hidden" name="status" value="${project.status === 'paused' ? 'active' : 'paused'}"><button class="secondary-button" type="submit">${project.status === 'paused' ? 'Resume approved work' : 'Pause project'}</button></form><form method="post" action="/projects/${escapeAttribute(project.id)}/status"><input type="hidden" name="status" value="completed"><button class="quiet-button" type="submit">Mark complete</button></form></section>
+      <section class="project-controls"><a class="secondary-link" href="/projects/${escapeAttribute(project.id)}/outcomes">Coverage and exceptions</a><a class="primary-link" href="/projects/${escapeAttribute(project.id)}/run">Start full collection</a><form method="post" action="/projects/${escapeAttribute(project.id)}/status"><input type="hidden" name="status" value="${project.status === 'paused' ? 'active' : 'paused'}"><button class="secondary-button" type="submit">${project.status === 'paused' ? 'Resume approved work' : 'Pause project'}</button></form><form method="post" action="/projects/${escapeAttribute(project.id)}/status"><input type="hidden" name="status" value="completed"><button class="quiet-button" type="submit">Mark complete</button></form></section>
     </main>${appFooter(hosted)}`,
     'dashboard-page',
   );

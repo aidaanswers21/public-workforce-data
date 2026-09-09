@@ -110,17 +110,30 @@ export class OrganizationSpineImportRepository {
     return result.rows.length;
   }
 
-  async canonicalizeReady(limit = 5_000): Promise<number> {
+  async canonicalizeReady(
+    limit = 5_000,
+    collectionScope?: { sourceKeys: readonly string[]; stateCodes: readonly string[] },
+  ): Promise<number> {
     if (!Number.isInteger(limit) || limit < 1 || limit > 5_000) {
       throw new Error('organization spine import limit must be between 1 and 5000');
     }
     return runAtomically(this.client, async (tx) => {
+      await tx.query("select pg_advisory_xact_lock(hashtext('organization_spine_identity'))");
       const selected = await tx.query<{ id: Uuid }>(
         `select id from organization_spine_records
-         where status = 'ready_to_import' and organization_id is null
+         where organization_id is null and (
+           ($2::boolean=false and status='ready_to_import') or
+           ($2::boolean and source_key=any($3::text[]) and location->>'stateCode'=any($4::text[])
+             and status in ('ready_to_import','classification_hold')
+             and organization_type_code is not null and sector_code is not null and jsonb_array_length(identifiers)>0))
          order by source_key, source_record_key, id
          for update skip locked limit $1`,
-        [limit],
+        [
+          limit,
+          collectionScope !== undefined,
+          collectionScope?.sourceKeys ?? [],
+          collectionScope?.stateCodes ?? [],
+        ],
       );
       const ids = selected.rows.map((row) => row.id);
       if (ids.length === 0) return 0;
@@ -349,7 +362,7 @@ export class OrganizationSpineImportRepository {
         [ids],
       );
       const imported = await tx.query<{ id: Uuid }>(
-        `update organization_spine_records set status = 'imported'
+        `update organization_spine_records set status = case when government_level_code is null or classification_review_reason is not null then 'classification_hold'::organization_spine_record_status else 'imported'::organization_spine_record_status end
          where id = any($1::uuid[]) and organization_id is not null
          returning id`,
         [ids],
@@ -372,7 +385,7 @@ export class OrganizationSpineImportRepository {
           and identifier.issuing_state_code is not distinct from
             nullif(parent.item ->> 'issuingStateCode', '')
           and identifier.identifier_value = parent.item ->> 'value'
-         where r.status = 'imported' and r.organization_id is not null
+         where r.organization_id is not null
            and ($1::text is null or r.source_key = $1)
          group by r.id having count(distinct identifier.entity_id) > 1
          limit 1`,
@@ -404,7 +417,7 @@ export class OrganizationSpineImportRepository {
               nullif(parent.item ->> 'issuingStateCode', '')
             and identifier.identifier_value = parent.item ->> 'value'
          ) resolved
-         where r.status = 'imported' and r.organization_id is not null
+         where r.organization_id is not null
            and jsonb_array_length(r.parent_identifiers) > 0
            and resolved.parent_id is not null
            and resolved.parent_id <> r.organization_id
@@ -422,7 +435,7 @@ export class OrganizationSpineImportRepository {
       const unresolved = await tx.query<{ count: number }>(
         `select count(*)::int as count
          from organization_spine_records r
-         where r.status = 'imported' and r.organization_id is not null
+         where r.organization_id is not null
            and jsonb_array_length(r.parent_identifiers) > 0
            and ($1::text is null or r.source_key = $1)
            and not exists (

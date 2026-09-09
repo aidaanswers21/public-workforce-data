@@ -26,6 +26,9 @@ import { renderCsv, type CsvColumn } from './csv.js';
  */
 export interface ExportablePersonRow {
   personId: Uuid;
+  assignmentId?: Uuid;
+  publishedEmails?: readonly { value: string; sourceDocumentId: Uuid }[];
+  workPhones?: readonly { value: string; sourceDocumentId: Uuid }[];
   firstName: string | null;
   middleName: string | null;
   lastName: string | null;
@@ -100,6 +103,14 @@ export const PEOPLE_EXPORT_COLUMNS: readonly CsvColumn<ExportablePersonRow>[] = 
   { header: 'duty_location_city', value: (row) => row.dutyLocationCity },
   { header: 'duty_location_county', value: (row) => row.dutyLocationCountyName },
   { header: 'duty_location_state', value: (row) => row.dutyLocationStateCode },
+  {
+    header: 'work_phones',
+    value: (row) => row.workPhones?.map((phone) => phone.value).join(' | ') ?? null,
+  },
+  {
+    header: 'all_published_emails',
+    value: (row) => row.publishedEmails?.map((email) => email.value).join(' | ') ?? null,
+  },
   { header: 'published_email', value: (row) => row.publishedEmail },
   { header: 'inferred_email_candidate', value: (row) => row.inferredEmailCandidate },
   { header: 'email_classification', value: (row) => row.emailClassification },
@@ -209,7 +220,26 @@ export function exportPeopleCsv(input: {
 
     const publishedEmail = publishedSuppressed ? null : row.publishedEmail;
     const inferredEmailCandidate = candidateSuppressed ? null : row.inferredEmailCandidate;
-    if (publishedEmail === null && inferredEmailCandidate === null) {
+    const publishedEmails = (row.publishedEmails ?? []).filter(
+      (email) =>
+        !input.suppression.isSuppressed(
+          { ...subject, emailAddress: email.value, sourceDocumentId: email.sourceDocumentId },
+          input.at,
+        ),
+    );
+    const workPhones = (row.workPhones ?? []).filter(
+      (phone) =>
+        !input.suppression.isSuppressed(
+          { ...subject, sourceDocumentId: phone.sourceDocumentId },
+          input.at,
+        ),
+    );
+    if (
+      publishedEmail === null &&
+      inferredEmailCandidate === null &&
+      publishedEmails.length === 0 &&
+      workPhones.length === 0
+    ) {
       if (publishedSuppressed || candidateSuppressed) suppressedPersonIds.push(row.personId);
       continue;
     }
@@ -219,6 +249,8 @@ export function exportPeopleCsv(input: {
       ...row,
       publishedEmail,
       inferredEmailCandidate,
+      publishedEmails,
+      workPhones,
       ...(publishedSuppressed
         ? {
             emailClassification: null,
@@ -233,6 +265,16 @@ export function exportPeopleCsv(input: {
   for (const row of allowed) {
     const subject = subjectOf(row);
     input.suppression.assertNotSuppressed(subject, input.at);
+    for (const email of row.publishedEmails ?? [])
+      input.suppression.assertNotSuppressed(
+        { ...subject, emailAddress: email.value, sourceDocumentId: email.sourceDocumentId },
+        input.at,
+      );
+    for (const phone of row.workPhones ?? [])
+      input.suppression.assertNotSuppressed(
+        { ...subject, sourceDocumentId: phone.sourceDocumentId },
+        input.at,
+      );
     if (row.publishedEmail !== null) {
       input.suppression.assertNotSuppressed(
         { ...subject, emailAddress: row.publishedEmail },
