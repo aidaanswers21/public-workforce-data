@@ -9,6 +9,13 @@ import { DEFAULT_URL_EXCLUSION_PATTERNS, registrableDomain } from '../normalize/
  * are configuration rather than constants, and every one of them is enforced by
  * the engine rather than left to adapters.
  */
+export interface WebsiteScope {
+  /** Published website for the organization that owns this job. */
+  websiteUrl: string;
+  /** Other published organization websites on the same host, including nested sites. */
+  otherWebsiteUrls: readonly string[];
+}
+
 export interface CrawlPolicy {
   /** Identifies us and points at a page explaining the crawl and how to opt out. */
   userAgent: string;
@@ -30,6 +37,7 @@ export interface CrawlPolicy {
    * unrelated site.
    */
   allowedDomains: readonly string[];
+  websiteScope?: WebsiteScope;
   excludedUrlPatterns: readonly RegExp[];
   /**
    * DNS labels used by United States locality domains, from the taxonomy.
@@ -67,8 +75,10 @@ export function withPolicyDefaults(overrides: Partial<CrawlPolicy> = {}): CrawlP
   return { ...DEFAULT_CRAWL_POLICY, ...overrides };
 }
 
-/** True when `url` is on a domain this run is permitted to fetch. */
+/** Apply the domain allowlist and, when set, the organization website boundary. */
 export function isAllowedDomain(url: string, seedUrl: string, policy: CrawlPolicy): boolean {
+  if (policy.websiteScope !== undefined && !isWithinWebsiteScope(url, policy.websiteScope))
+    return false;
   let host: string;
   let seedHost: string;
   try {
@@ -81,6 +91,53 @@ export function isAllowedDomain(url: string, seedUrl: string, policy: CrawlPolic
   return policy.allowedDomains.some(
     (allowed) => registrableDomain(allowed, policy.localityDomainLabels) === host,
   );
+}
+
+/** Hosts and path prefixes identify a website more narrowly than a registrable domain. */
+export function isWithinWebsiteScope(url: string, scope: WebsiteScope): boolean {
+  try {
+    const candidate = new URL(url);
+    const own = websiteRoot(scope.websiteUrl);
+    if (!matchesWebsite(candidate, own)) return false;
+    return !scope.otherWebsiteUrls.some((otherUrl) => {
+      const other = websiteRoot(otherUrl);
+      // A shared homepage is ambiguous, not evidence for a nested organization.
+      return (
+        (other.pathname.length > own.pathname.length ||
+          (other.pathname === own.pathname &&
+            [...other.searchParams].length > [...own.searchParams].length)) &&
+        other.pathname.startsWith(own.pathname) &&
+        matchesWebsite(candidate, other)
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+function websiteRoot(value: string): URL {
+  const root = new URL(value);
+  root.pathname = root.pathname.replace(/[^/]+\.(?:html?|aspx?|php|cfm)$/i, '');
+  root.pathname = root.pathname.replace(/\/$/, '') + '/';
+  return root;
+}
+
+function matchesWebsite(candidate: URL, root: URL): boolean {
+  const host = (url: URL) => url.hostname.toLowerCase().replace(/^www\./, '');
+  return (
+    ['http:', 'https:'].includes(candidate.protocol) &&
+    host(candidate) === host(root) &&
+    candidate.port === root.port &&
+    (candidate.pathname === root.pathname.slice(0, -1) ||
+      candidate.pathname.startsWith(root.pathname)) &&
+    [...root.searchParams].every(([key, value]) => candidate.searchParams.get(key) === value)
+  );
+}
+
+export function websiteSitemapUrl(websiteUrl: string): string {
+  const root = websiteRoot(websiteUrl);
+  root.pathname += 'sitemap.xml';
+  return root.href;
 }
 
 /**

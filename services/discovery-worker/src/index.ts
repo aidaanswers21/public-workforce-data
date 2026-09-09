@@ -7,6 +7,7 @@ import {
   scoreDirectoryUrl,
   urlHash,
   withPolicyDefaults,
+  websiteSitemapUrl,
   SourcePolicyRegistry,
   type CollectionMode,
   type CrawlPolicy,
@@ -82,7 +83,13 @@ export class DiscoveryWorker {
           ? []
           : [
               { url: seed, depth: 0 },
-              { url: new URL('/sitemap.xml', seed).href, depth: 0 },
+              {
+                url:
+                  this.deps.policy?.websiteScope === undefined
+                    ? new URL('/sitemap.xml', seed).href
+                    : websiteSitemapUrl(this.deps.policy.websiteScope.websiteUrl),
+                depth: 0,
+              },
             ],
       visited: [],
       candidates: [],
@@ -175,7 +182,9 @@ export class DiscoveryWorker {
         state.pending.shift();
         state.visited.push(task.url);
         // Missing sitemap is an exhausted navigation option, not a failed directory.
-        if (!(new URL(task.url).pathname === '/sitemap.xml' && result.failure.status === 404)) {
+        if (!(
+          new URL(task.url).pathname.endsWith('/sitemap.xml') && result.failure.status === 404
+        )) {
           failures++;
           lastFailure = result.failure.message;
         }
@@ -183,6 +192,14 @@ export class DiscoveryWorker {
         continue;
       }
       const page = result.page;
+      if (!isAllowedDomain(page.finalUrl, seed, policy)) {
+        state.pending.shift();
+        state.visited.push(task.url);
+        failures++;
+        lastFailure = 'redirect left the organization website';
+        await this.deps.onCheckpoint?.(state);
+        continue;
+      }
       if (mode === 'production' && page.storageKey == null)
         throw new Error('production discovery response was not archived; refusing to inspect it');
       const document = await new IngestionRepository(this.deps.client).recordSourceDocument({

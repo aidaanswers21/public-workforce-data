@@ -47,7 +47,9 @@ jobs:
         run: pnpm run db:migrate -- --check
 
       - name: Install fixture browser
-        run: pnpm --filter @public-workforce/crawler-worker exec playwright install --with-deps chromium
+        # Browser fixture tests verify the runner libraries by launching Chromium.
+        # Avoid refreshing unrelated system repositories during browser setup.
+        run: pnpm --filter @public-workforce/crawler-worker exec playwright install chromium
 
       - name: Test
         # Database tests run against an in-process PostgreSQL, and every crawl

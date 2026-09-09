@@ -225,7 +225,7 @@ export class CrawlEngine {
         pages.push(
           this.pageRecord(job, task, {
             status: 'skipped',
-            note: 'cross-domain navigation refused',
+            note: 'navigation outside the approved website refused',
           }),
         );
         log.debug({ url: task.url }, 'refused cross-domain navigation');
@@ -317,6 +317,21 @@ export class CrawlEngine {
       }
 
       const page = outcome;
+      if (!isAllowedDomain(page.finalUrl, seed, job.policy)) {
+        log.warn(
+          { url: task.url, finalUrl: page.finalUrl },
+          'redirect outside the approved website refused',
+        );
+        pages.push(
+          this.pageRecord(job, task, {
+            status: 'skipped',
+            httpStatus: page.status,
+            durationMs,
+            note: 'redirect outside the approved website refused',
+          }),
+        );
+        continue;
+      }
       bytesFetched += page.body.length;
       if (collectionMode === 'production' && page.storageKey == null) {
         throw new Error('production response was not archived; refusing to parse or ingest it');

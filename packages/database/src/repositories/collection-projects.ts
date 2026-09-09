@@ -5,6 +5,7 @@ import {
   domainOf,
   registrableDomain,
   urlHash,
+  type WebsiteScope,
 } from '@public-workforce/core';
 import { US_LOCALITY_DOMAIN_LABELS } from '@public-workforce/taxonomy';
 import type {
@@ -133,6 +134,7 @@ export interface ClaimedCollectionJob {
   sectorCode: string;
   collectDiscovered?: boolean;
   discoveryState?: unknown;
+  websiteScope?: WebsiteScope;
   maxPagesPerTarget: number;
   /** Preserved across an expired lease so an executor can load its checkpoint. */
   crawlRunId: Uuid | null;
@@ -792,7 +794,7 @@ export class CollectionProjectRepository {
         const selected = await tx.query<Record<string, unknown>>(
           `select j.id, j.project_id, j.batch_id, j.kind, j.crawl_target_id, j.crawl_run_id,
                   t.url, t.adapter_key, t.source_type_code,
-                  o.id as organization_id, o.name as organization_name,
+                  o.id as organization_id, o.name as organization_name, o.website_url,
                   o.jurisdiction_id, o.government_level_code, o.sector_code,
                   p.max_pages_per_target,b.collect_discovered,j.discovery_state,
                   (select parent.name
@@ -865,7 +867,13 @@ export class CollectionProjectRepository {
           row['crawl_target_id'],
           row['kind'] === 'discovery' ? 'discovering' : 'crawling',
         ]);
+        const websiteUrl = nullableString(row['website_url']);
+        const websiteScope =
+          websiteUrl === null
+            ? undefined
+            : await this.websiteScope(tx, websiteUrl, String(row['organization_id']));
         return {
+          ...(websiteScope === undefined ? {} : { websiteScope }),
           id: String(row['id']),
           projectId: String(row['project_id']),
           batchId: String(row['batch_id']),
@@ -888,6 +896,20 @@ export class CollectionProjectRepository {
         };
       }
     });
+  }
+
+  private async websiteScope(
+    tx: SqlClient,
+    websiteUrl: string,
+    organizationId: Uuid,
+  ): Promise<WebsiteScope> {
+    const host = new URL(websiteUrl).host.toLowerCase().replace(/^www\./, '');
+    const other = await tx.query<{ website_url: string }>(
+      `select distinct website_url from organizations where id<>$1 and website_url is not null
+       and lower(split_part(split_part(split_part(website_url,'://',2),'/',1),'?',1))=any($2::text[])`,
+      [organizationId, [host, 'www.' + host]],
+    );
+    return { websiteUrl, otherWebsiteUrls: other.rows.map((row) => row.website_url) };
   }
 
   async markJobRunning(jobId: Uuid, claimToken: Uuid, crawlRunId: Uuid | null): Promise<void> {
