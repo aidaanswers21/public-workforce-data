@@ -1,7 +1,7 @@
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { TestDatabase } from '@public-workforce/database';
+import { CollectionProjectRepository, TestDatabase } from '@public-workforce/database';
 import { createAdminServer, hashAdminPassword, type AdminServerOptions } from './server.js';
 
 const servers: Server[] = [];
@@ -423,6 +423,92 @@ describe('local admin server', () => {
     expect(html).toContain('example.test');
     expect(html).toContain('operator@example.test');
     expect(html).toContain('Source policies');
+  });
+
+  it('links policy-held jobs to a prefilled review and explains the new-batch recovery', async () => {
+    const { origin } = await start();
+    const cookie = await login(origin);
+    const database = databases[0];
+    const source = await database?.query<{ id: string }>(
+      `insert into source_documents (
+         url, url_canonical, url_hash, domain, source_type_code
+       ) values (
+         'https://fixture.example.test/release', 'https://fixture.example.test/release',
+         'held-source-release', 'fixture.example.test', 'html_directory'
+       ) returning id`,
+    );
+    const organization = await database?.query<{ id: string }>(
+      `insert into organizations (
+         organization_type_code, government_level_code, sector_code,
+         name, name_normalized, website_url, identity_tier, identity_fingerprint,
+         source_document_id, extraction_method_code, confidence
+       ) values (
+         'state_department','state','general_government',
+         'Held Public Body','held public body','https://held.example.test',
+         'official_identifier','held-public-body',$1,'manual',1
+       ) returning id`,
+      [source?.rows[0]?.id],
+    );
+    await database?.query(
+      `insert into organization_locations (
+         organization_id, state_code, is_primary, source_document_id,
+         extraction_method_code, confidence
+       ) values ($1,'TX',true,$2,'manual',1)`,
+      [organization?.rows[0]?.id, source?.rows[0]?.id],
+    );
+
+    const created = await fetch(`${origin}/projects`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        template: 'fixture-scope',
+        stateCode: 'TX',
+        governmentLevelCode: 'state',
+        sectorCode: 'general_government',
+        name: 'Held source recovery',
+        batchSize: '5',
+        maxPagesPerTarget: '5',
+        maxPagesPerBatch: '20',
+        maxErrorsPerBatch: '2',
+      }),
+    });
+    const projectId = created.headers.get('location')?.split('/')[2]?.split('?')[0] ?? '';
+    await fetch(`${origin}/projects/${projectId}/generate`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+    });
+    await fetch(`${origin}/projects/${projectId}/batch`, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        kind: 'discovery',
+        targetLimit: '1',
+        approvalNote: 'Approve this one held-source fixture target.',
+        approvalConfirmed: 'yes',
+      }),
+    });
+    const projects = new CollectionProjectRepository(database!);
+    expect(await projects.claimNextJob('fixture-worker')).toBeNull();
+
+    const detail = await fetch(`${origin}/projects/${projectId}`, { headers: { cookie } });
+    const detailHtml = await detail.text();
+    expect(detailHtml).toContain('1 policy hold');
+    expect(detailHtml).toContain('Review held source domains');
+    expect(detailHtml).toContain('held.example.test');
+    expect(detailHtml).toContain('Record policy review');
+    expect(detailHtml).toContain('The failed batch will not retry itself.');
+
+    const review = await fetch(
+      `${origin}/policies?domain=example.test&sourceTypeCode=html_directory&returnTo=/projects/${projectId}`,
+      { headers: { cookie } },
+    );
+    const reviewHtml = await review.text();
+    expect(reviewHtml).toContain('value="example.test"');
+    expect(reviewHtml).toContain('value="html_directory"');
+    expect(reviewHtml).toContain('Back to held batch');
   });
 
   it('approves a named purpose and downloads an audited project CSV', async () => {

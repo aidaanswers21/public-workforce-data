@@ -14,6 +14,7 @@ import {
   SourcePolicyRepository,
   WebsiteResolutionRepository,
   type CollectionBatchSummary,
+  type CollectionPolicyHold,
   type CollectionProjectSummary,
   type MissingWebsiteOrganization,
   type OrganizationRecordPage,
@@ -532,12 +533,18 @@ export function createAdminServer(options: AdminServerOptions): Server {
       }
 
       if (request.method === 'GET' && url.pathname === '/policies') {
+        const returnTo = policyReturnPath(url.searchParams.get('returnTo'));
         sendHtml(
           response,
           200,
           renderSourcePolicies(
             await sourcePolicies.list(),
             url.searchParams.get('message') ?? '',
+            {
+              domain: url.searchParams.get('domain') ?? '',
+              sourceTypeCode: url.searchParams.get('sourceTypeCode') ?? '',
+              returnTo,
+            },
             hosted,
           ),
         );
@@ -546,6 +553,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
 
       if (request.method === 'POST' && url.pathname === '/policies') {
         const form = new URLSearchParams(await readBody(request));
+        const returnTo = policyReturnPath(form.get('returnTo'));
         try {
           await sourcePolicies.recordReview({
             domain: form.get('domain'),
@@ -560,9 +568,15 @@ export function createAdminServer(options: AdminServerOptions): Server {
             reviewNotes: form.get('reviewNotes') ?? '',
             reviewedBy: authenticatedEmail,
           });
-          redirect(response, '/policies?message=Source+review+recorded');
+          redirect(
+            response,
+            `/policies?message=Source+review+recorded&returnTo=${encodeURIComponent(returnTo)}`,
+          );
         } catch (error) {
-          redirect(response, `/policies?message=${encodeURIComponent(errorMessage(error))}`);
+          redirect(
+            response,
+            `/policies?message=${encodeURIComponent(errorMessage(error))}&returnTo=${encodeURIComponent(returnTo)}`,
+          );
         }
         return;
       }
@@ -570,6 +584,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
       const policyApproval = /^\/policies\/([0-9a-f-]+)\/approve$/.exec(url.pathname);
       if (request.method === 'POST' && policyApproval !== null) {
         const form = new URLSearchParams(await readBody(request));
+        const returnTo = policyReturnPath(form.get('returnTo'));
         try {
           if (form.get('approvalConfirmed') !== 'yes') {
             throw new Error('confirm this exact production source approval');
@@ -579,9 +594,15 @@ export function createAdminServer(options: AdminServerOptions): Server {
             authenticatedEmail,
             form.get('approvalNote') ?? '',
           );
-          redirect(response, '/policies?message=Production+approval+recorded');
+          redirect(
+            response,
+            `/policies?message=Production+approval+recorded&returnTo=${encodeURIComponent(returnTo)}`,
+          );
         } catch (error) {
-          redirect(response, `/policies?message=${encodeURIComponent(errorMessage(error))}`);
+          redirect(
+            response,
+            `/policies?message=${encodeURIComponent(errorMessage(error))}&returnTo=${encodeURIComponent(returnTo)}`,
+          );
         }
         return;
       }
@@ -713,12 +734,17 @@ export function createAdminServer(options: AdminServerOptions): Server {
         const template = projectTemplates.find(
           (item) => item.key === project.jurisdictionConfigKey,
         );
+        const [batches, policyHolds] = await Promise.all([
+          projects.listBatches(projectId),
+          projects.listPolicyHolds(projectId),
+        ]);
         sendHtml(
           response,
           200,
           renderProjectDetail(
             project,
-            await projects.listBatches(projectId),
+            batches,
+            policyHolds,
             template,
             url.searchParams.get('message') ?? '',
             hosted,
@@ -1454,6 +1480,7 @@ function renderExports(
 function renderSourcePolicies(
   policies: readonly SourcePolicyRecord[],
   message: string,
+  prefill: { domain: string; sourceTypeCode: string; returnTo: string },
   hosted: boolean,
 ): string {
   const rows = policies
@@ -1465,7 +1492,7 @@ function renderSourcePolicies(
         <td><span class="project-status ${escapeHtml(policy.collectionStatus)}">${escapeHtml(label(policy.collectionStatus))}</span></td>
         <td>${escapeHtml(label(policy.automatedAccessStatus))}</td>
         <td>${policy.lastReviewedAt === null ? 'Not reviewed' : `${escapeHtml(policy.reviewedBy ?? 'Unknown')}<span>${formatDate(policy.lastReviewedAt)}</span>`}</td>
-        <td>${approved ? `${escapeHtml(policy.productionApprovedBy ?? 'Unknown')}<span>${formatDate(policy.productionApprovedAt ?? '')}</span>` : prohibited ? 'Cannot approve' : `<form class="inline-approval" method="post" action="/policies/${escapeAttribute(policy.id)}/approve"><input name="approvalNote" aria-label="Approval note" placeholder="Why this source may run" required minlength="8"><label class="check-label"><input type="checkbox" name="approvalConfirmed" value="yes" required><span>I approve production collection</span></label><button class="secondary-button" type="submit">Approve</button></form>`}</td>
+        <td>${approved ? `${escapeHtml(policy.productionApprovedBy ?? 'Unknown')}<span>${formatDate(policy.productionApprovedAt ?? '')}</span>` : prohibited ? 'Cannot approve' : `<form class="inline-approval" method="post" action="/policies/${escapeAttribute(policy.id)}/approve"><input type="hidden" name="returnTo" value="${escapeAttribute(prefill.returnTo)}"><input name="approvalNote" aria-label="Approval note" placeholder="Why this source may run" required minlength="8"><label class="check-label"><input type="checkbox" name="approvalConfirmed" value="yes" required><span>I approve production collection</span></label><button class="secondary-button" type="submit">Approve</button></form>`}</td>
       </tr>`;
     })
     .join('');
@@ -1475,13 +1502,15 @@ function renderSourcePolicies(
     <main class="dashboard">
       <section class="dashboard-heading"><div><p class="eyebrow">Collection gate</p><h1>Source policies</h1><p class="muted">Record what a person actually reviewed. Prohibited sources can never be approved.</p></div></section>
       ${message.length === 0 ? '' : `<div class="flash">${escapeHtml(message)}</div>`}
+      ${prefill.returnTo === '/policies' ? '' : `<p><a class="secondary-link" href="${escapeAttribute(prefill.returnTo)}">Back to held batch</a></p>`}
       <section class="panel project-form">
         <div class="panel-heading"><div><p class="eyebrow">Human review</p><h2>Record a source decision</h2></div></div>
         <form method="post" action="/policies">
+          <input type="hidden" name="returnTo" value="${escapeAttribute(prefill.returnTo)}">
           <div class="form-section"><div class="form-grid">
-            <div><label for="domain">Domain</label><input id="domain" name="domain" placeholder="agency.gov"></div>
+            <div><label for="domain">Domain</label><input id="domain" name="domain" value="${escapeAttribute(prefill.domain)}" placeholder="agency.gov"></div>
             <div><label for="urlPattern">URL pattern (optional)</label><input id="urlPattern" name="urlPattern" placeholder="^https://agency\\.gov/directory/"></div>
-            <div><label for="sourceTypeCode">Source type</label><input id="sourceTypeCode" name="sourceTypeCode" placeholder="html_directory"></div>
+            <div><label for="sourceTypeCode">Source type</label><input id="sourceTypeCode" name="sourceTypeCode" value="${escapeAttribute(prefill.sourceTypeCode)}" placeholder="html_directory"></div>
             <div><label for="policyUrl">Policy or terms URL</label><input id="policyUrl" name="policyUrl" type="url" placeholder="https://agency.gov/terms"></div>
           </div><div class="form-grid three-columns">
             ${policySelect('collectionStatus', 'Collection status', ['unknown', 'review_required', 'permitted', 'prohibited'])}
@@ -1576,6 +1605,7 @@ function renderNewProject(
 function renderProjectDetail(
   project: CollectionProjectSummary,
   batches: readonly CollectionBatchSummary[],
+  policyHolds: readonly CollectionPolicyHold[],
   template: CollectionProjectTemplate | undefined,
   message: string,
   hosted: boolean,
@@ -1589,8 +1619,14 @@ function renderProjectDetail(
   const batchRows = batches
     .map(
       (batch) =>
-        `<tr><td>#${batch.sequenceNumber}</td><td>${escapeHtml(label(batch.kind))}</td><td><span class="project-status ${escapeHtml(batch.status)}">${escapeHtml(label(batch.status))}</span></td><td>${batch.completedJobs} complete · ${batch.queuedJobs} open</td><td>${batch.pagesProcessed} / ${batch.pageLimit}</td><td>${batch.failedJobs + batch.heldJobs} / ${batch.errorLimit}</td><td>${batch.approvedBy === null ? 'Not approved' : `${escapeHtml(batch.approvedBy)}<span>${formatDate(batch.approvedAt ?? batch.createdAt)}</span>`}</td></tr>`,
+        `<tr><td>#${batch.sequenceNumber}</td><td>${escapeHtml(label(batch.kind))}</td><td><span class="project-status ${escapeHtml(batch.status)}">${escapeHtml(label(batch.status))}</span></td><td>${batch.completedJobs} complete · ${batch.queuedJobs} open</td><td>${batch.pagesProcessed} / ${batch.pageLimit}</td><td>${batch.heldJobs > 0 ? `<a class="table-link" href="#policy-holds">${batch.heldJobs} policy ${batch.heldJobs === 1 ? 'hold' : 'holds'}</a>` : `${batch.failedJobs} / ${batch.errorLimit}`}</td><td>${batch.approvedBy === null ? 'Not approved' : `${escapeHtml(batch.approvedBy)}<span>${formatDate(batch.approvedAt ?? batch.createdAt)}</span>`}</td></tr>`,
     )
+    .join('');
+  const policyHoldRows = policyHolds
+    .map((hold) => {
+      const reviewUrl = `/policies?domain=${encodeURIComponent(hold.domain)}&sourceTypeCode=${encodeURIComponent(hold.sourceTypeCode)}&returnTo=${encodeURIComponent(`/projects/${project.id}`)}`;
+      return `<tr><td><strong>${escapeHtml(hold.domain)}</strong><span>${escapeHtml(hold.organizationName)}${hold.jobCount > 1 ? ` · ${hold.jobCount} held jobs` : ''}</span></td><td>${escapeHtml(hold.reason)}</td><td><a class="table-link" href="${escapeAttribute(hold.targetUrl)}" target="_blank" rel="noopener noreferrer">Inspect source</a></td><td><a class="secondary-link" href="${escapeAttribute(reviewUrl)}">Record policy review</a></td></tr>`;
+    })
     .join('');
   const canRelease = project.status !== 'completed' && project.status !== 'cancelled';
   return page(
@@ -1611,10 +1647,15 @@ function renderProjectDetail(
       </div>
       <section class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Readiness</p><h2>Official sources</h2></div><span class="summary-chip">${(template?.officialSources ?? []).filter((source) => source.verified).length} verified</span></div><div class="table-scroll"><table><thead><tr><th>Source</th><th>Verification</th><th>What remains</th></tr></thead><tbody>${sourceRows.length > 0 ? sourceRows : '<tr><td class="empty" colspan="3">The configuration is not available in this running console.</td></tr>'}</tbody></table></div></section>
       <section class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Durable queue</p><h2>Approved batches</h2></div></div><div class="table-scroll"><table><thead><tr><th>Batch</th><th>Stage</th><th>Status</th><th>Jobs</th><th>Pages</th><th>Issues</th><th>Approval</th></tr></thead><tbody>${batchRows.length > 0 ? batchRows : '<tr><td class="empty" colspan="7">No work has been released. Preparation alone never starts collection.</td></tr>'}</tbody></table></div></section>
+      ${policyHolds.length === 0 ? '' : `<section id="policy-holds" class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Action required</p><h2>Review held source domains</h2><p class="muted">No request was made to these sources. Inspect each source, record its policy decision, then approve a new finite batch. The failed batch will not retry itself.</p></div><span class="summary-chip">${policyHolds.length}</span></div><div class="table-scroll"><table><thead><tr><th>Domain</th><th>Hold reason</th><th>Source</th><th>Next action</th></tr></thead><tbody>${policyHoldRows}</tbody></table></div></section>`}
       <section class="project-controls"><form method="post" action="/projects/${escapeAttribute(project.id)}/status"><input type="hidden" name="status" value="${project.status === 'paused' ? 'active' : 'paused'}"><button class="secondary-button" type="submit">${project.status === 'paused' ? 'Resume approved work' : 'Pause project'}</button></form><form method="post" action="/projects/${escapeAttribute(project.id)}/status"><input type="hidden" name="status" value="completed"><button class="quiet-button" type="submit">Mark complete</button></form></section>
     </main>${appFooter(hosted)}`,
     'dashboard-page',
   );
+}
+
+function policyReturnPath(value: string | null): string {
+  return value !== null && /^\/projects\/[0-9a-f-]+$/.test(value) ? value : '/policies';
 }
 
 function appHeader(backTo: string, hosted: boolean): string {
