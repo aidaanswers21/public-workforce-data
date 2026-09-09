@@ -158,7 +158,11 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
         crawlTargetId: job.crawlTargetId,
         seedUrl: job.url,
         adapter,
-        policy: buildCrawlPolicy({ ...this.options.policy, maxPagesPerRun: job.maxPagesPerTarget }),
+        policy: buildCrawlPolicy({
+          ...this.options.policy,
+          ...(job.websiteScope === undefined ? {} : { websiteScope: job.websiteScope }),
+          maxPagesPerRun: job.maxPagesPerTarget,
+        }),
         vocabulary: rules.vocabulary,
         organizationName: job.organizationName,
         parentOrganizationName: job.parentOrganizationName,

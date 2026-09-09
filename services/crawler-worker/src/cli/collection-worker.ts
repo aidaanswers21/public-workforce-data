@@ -77,7 +77,13 @@ async function main(): Promise<void> {
             userAgent,
             beforeRequest: async (url) => {
               await queue.renewLease(job.id, job.claimToken);
-              if (!isAllowedDomain(url, job.url, basePolicy) || isExcludedUrl(url).excluded)
+              if (
+                !isAllowedDomain(url, job.url, {
+                  ...basePolicy,
+                  ...(job.websiteScope === undefined ? {} : { websiteScope: job.websiteScope }),
+                }) ||
+                isExcludedUrl(url).excluded
+              )
                 throw new Error('request is outside the approved source scope');
               const registry = await loadSourcePolicyRegistry(database);
               registry.assertCollectable(url, 'production');
@@ -141,6 +147,7 @@ async function main(): Promise<void> {
           vocabulary: rules.vocabulary,
           policy: {
             ...basePolicy,
+            ...(job.websiteScope === undefined ? {} : { websiteScope: job.websiteScope }),
             maxPagesPerRun: job.maxPagesPerTarget,
             maxDepth: 3,
           },

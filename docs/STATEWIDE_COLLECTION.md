@@ -39,6 +39,34 @@ bulk source decisions, eligible held jobs can resume under their original run,
 provided it has not expired, been cancelled or exhausted its budget. This never
 creates standing authorization for future runs.
 
+## Separate organization websites
+
+Each published website URL has its own discovery job and resulting directory jobs.
+For education, this keeps a district's central-office directory separate from each
+school's staff directory. Each job retains its own checkpoint and target request
+allowance; the state run still shares its overall approval and request budget.
+Completion or an access block on one site does not mark another site's work complete.
+
+Jobs stay on the organization's published website host (allowing its www alias)
+and, for nested websites, its path prefix. Published websites for other organizations
+on that host establish exclusions, including organizations outside the approved
+roster. Thus a district job skips a known school subdirectory, and a school job
+skips district-wide navigation and sibling sites. A subdomain is a separate website,
+even when it shares the same registrable domain. The existing domain lock still
+paces jobs sharing that domain. Scoped sitemap probes stay within the website path.
+Redirects are checked before parsing; the production transport checks every redirect
+before fetching it. Website query identifiers are retained as scope constraints.
+
+Select the district and desired schools in the roster so each published site has
+its own job. Links to unselected organizations do not expand an approved run. A
+missing school website remains a website-resolution exception; do not substitute
+the district homepage. An identical shared website URL still has one deduplicated
+fetch job: explicit published organization names are required to resolve its staff,
+and ambiguous rows remain exceptions. Website boundaries cannot identify separate
+organizations whose roster records incorrectly publish the same homepage. Shared assets or external hosting
+outside this boundary are not fetched by that job and may leave browser-rendered
+directories incomplete.
+
 ## Discovery and extraction
 
 Discovery inspects ordinary navigation before trying to select a directory

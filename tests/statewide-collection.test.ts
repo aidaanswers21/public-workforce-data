@@ -19,7 +19,12 @@ import {
   ProductionCollectionExecutor,
   CollectionWorker,
 } from '@public-workforce/crawler-worker';
-import { PermissiveRobotsProvider, contentHash } from '@public-workforce/core';
+import {
+  CrawlEngine,
+  withPolicyDefaults,
+  PermissiveRobotsProvider,
+  contentHash,
+} from '@public-workforce/core';
 import { createSilentLogger } from '@public-workforce/observability';
 import type { Fetcher } from '@public-workforce/shared-types';
 
@@ -312,6 +317,242 @@ describe('statewide collection', () => {
     expect(phoneChunks.join('')).toContain('512-555-0123');
     expect(phoneChunks.join('')).not.toContain('alex@district.example.test');
   });
+  it.each([false, true])(
+    'keeps district and school sites in separate jobs (district blocked=%s)',
+    async (districtBlocked) => {
+      const s = await setup();
+      const sites = [
+        {
+          url: root,
+          name: 'Fixture District',
+          person: 'Alex Rivera',
+          local: 'alex',
+          id: s.organizationId,
+        },
+        {
+          url: 'https://north.directory.example.test/',
+          name: 'North School',
+          person: 'Jamie North',
+          local: 'jamie',
+          id: '',
+        },
+        {
+          url: `${root}south/`,
+          name: 'South School',
+          person: 'Casey South',
+          local: 'casey',
+          id: '',
+        },
+      ];
+      const organizations = new OrganizationRepository(db);
+      for (const site of sites.slice(1)) {
+        site.id = (
+          await organizations.upsertOrganization({
+            organizationTypeCode: 'school',
+            governmentLevelCode: 'special_district',
+            sectorCode: 'education',
+            name: site.name,
+            nameNormalized: site.name.toLowerCase(),
+            websiteUrl: site.url,
+            sourceDocumentId: s.document.documentId,
+            extractionMethod: 'bulk_import',
+            confidence: 1,
+            observedAt: new Date().toISOString(),
+          })
+        ).id;
+        await db.query('insert into collection_project_organizations values($1,$2,$3,now())', [
+          s.projectId,
+          site.id,
+          'fixture school selected',
+        ]);
+      }
+      await organizations.upsertOrganization({
+        organizationTypeCode: 'school',
+        governmentLevelCode: 'special_district',
+        sectorCode: 'education',
+        name: 'Unselected School',
+        nameNormalized: 'unselected school',
+        websiteUrl: `${root}outside/`,
+        sourceDocumentId: s.document.documentId,
+        extractionMethod: 'bulk_import',
+        confidence: 1,
+        observedAt: new Date().toISOString(),
+      });
+      for (const site of sites) {
+        const links = sites
+          .map((other) => `<a href="${other.url}directory">${other.name} Staff Directory</a>`)
+          .join('');
+        s.pages.set(
+          site.url,
+          `<h1>Welcome to ${site.name}</h1>${links}<a href="${root}outside/directory">Other Staff</a>`,
+        );
+        s.pages.set(site.url.replace(/\/$/, ''), s.pages.get(site.url)!);
+        s.pages.set(
+          `${site.url}directory`,
+          listing.replaceAll('Alex Rivera', site.person).replaceAll('alex@', `${site.local}@`) +
+            links,
+        );
+      }
+      s.pages.set(`${root}outside/directory`, listing.replaceAll('Alex Rivera', 'Excluded Person'));
+      await s.projects.generateDiscoveryTargets(s.projectId, 'owner');
+      const batchId = await s.projects.createApprovedRun({
+        projectId: s.projectId,
+        approvedBy: 'owner',
+        approvalNote: 'Approve district and selected schools as independent fixture jobs',
+        expiresAt: new Date(Date.now() + 86400000).toISOString(),
+      });
+      const requests: { owner: string; url: string }[] = [];
+      const forJob = (job: { organizationId: string }): Fetcher => ({
+        key: 'scoped-fixture',
+        fetch: async (request) => {
+          requests.push({ owner: job.organizationId, url: request.url });
+          if (districtBlocked && job.organizationId === s.organizationId)
+            return {
+              ok: false,
+              failure: {
+                url: request.url,
+                errorType: 'blocked_by_source',
+                message: 'Fixture district blocks access',
+                status: 403,
+                retryable: false,
+              },
+            };
+          return s.fetcher.fetch(request);
+        },
+      });
+      const executor = new ProductionCollectionExecutor({
+        client: db,
+        fetcher: s.fetcher,
+        fetcherForJob: forJob,
+        robots: s.robots,
+        adapters: s.adapters,
+        taxonomy: s.taxonomy,
+        logger: s.logger,
+        workerId: 'fixture',
+        sleep: async () => {},
+        policy: { requestDelayMs: 0 },
+        discover: async (job) => {
+          const result = await new DiscoveryWorker({
+            client: db,
+            fetcher: forJob(job),
+            robots: s.robots,
+            adapters: s.adapters,
+            logger: s.logger,
+            vocabulary: s.rules.vocabulary,
+            collectionMode: 'fixture',
+            sourcePolicy: s.sourcePolicy,
+            policy: { requestDelayMs: 0, websiteScope: job.websiteScope! },
+          }).discover({
+            organizationId: job.organizationId,
+            jurisdictionId: job.jurisdictionId,
+            siteUrl: job.url,
+            organizationName: job.organizationName,
+            parentOrganizationName: job.parentOrganizationName,
+          });
+          return {
+            pagesProcessed: result.pagesProcessed,
+            targetsRecorded: result.targetsRecorded,
+            outcome: result.outcome,
+            detail: result.note,
+          };
+        },
+      });
+      const worker = new CollectionWorker({
+        queue: s.projects,
+        executor,
+        workerId: 'fixture',
+        logger: s.logger,
+        batchId,
+      });
+      const settled = await worker.drainApprovedBatch();
+      expect(
+        settled,
+        JSON.stringify(
+          (
+            await db.query('select kind,status,last_error from collection_jobs where batch_id=$1', [
+              batchId,
+            ])
+          ).rows,
+        ),
+      ).toEqual({ completed: districtBlocked ? 4 : 6, failed: 0, held: districtBlocked ? 1 : 0 });
+      for (const site of sites) {
+        const ownRequests = requests
+          .filter((request) => request.owner === site.id)
+          .map((request) => request.url);
+        if (!(districtBlocked && site.id === s.organizationId))
+          expect(ownRequests).toContain(`${site.url}directory`);
+        expect(
+          ownRequests.every(
+            (url) => url === site.url.replace(/\/$/, '') || url.startsWith(site.url),
+          ),
+        ).toBe(true);
+        for (const other of sites.filter((other) => other.id !== site.id))
+          expect(ownRequests).not.toContain(`${other.url}directory`);
+        const contacts = await db.query<{ full_name_published: string }>(
+          'select p.full_name_published from people p join employment_assignments e on e.person_id=p.id where e.organization_id=$1',
+          [site.id],
+        );
+        expect(contacts.rows.map((row) => row.full_name_published)).toEqual(
+          districtBlocked && site.id === s.organizationId ? [] : [site.person],
+        );
+      }
+      expect(s.fetched).not.toContain(`${root}outside/directory`);
+      expect(await db.count('people')).toBe(districtBlocked ? 2 : 3);
+      expect(await db.count('crawl_runs')).toBe(districtBlocked ? 2 : 3);
+      expect((await s.projects.listBatches(s.projectId))[0]?.status).toBe(
+        districtBlocked ? 'completed_with_errors' : 'completed',
+      );
+    },
+  );
+
+  it('does not parse a response redirected onto another organization website', async () => {
+    const s = await setup();
+    const fetcher: Fetcher = {
+      key: 'redirect-fixture',
+      fetch: async (request) => {
+        const response = await s.fetcher.fetch({ ...request, url: `${root}directory` });
+        if (!response.ok) return response;
+        return {
+          ok: true,
+          page: {
+            ...response.page,
+            url: request.url,
+            finalUrl: 'https://another.directory.example.test/directory',
+          },
+        };
+      },
+    };
+    const policy = withPolicyDefaults({
+      requestDelayMs: 0,
+      websiteScope: { websiteUrl: root, otherWebsiteUrls: [] },
+    });
+    const discovery = await new DiscoveryWorker({
+      client: db,
+      fetcher,
+      robots: s.robots,
+      adapters: s.adapters,
+      logger: s.logger,
+      vocabulary: s.rules.vocabulary,
+      policy,
+      collectionMode: 'fixture',
+    }).discover(s.target);
+    expect(discovery.targetsRecorded).toBe(0);
+    expect(discovery.note).toContain('redirect left the organization website');
+    const result = await new CrawlEngine({ fetcher, robots: s.robots, logger: s.logger }).run({
+      crawlRunId: 'fixture-redirect',
+      crawlTargetId: null,
+      seedUrl: `${root}directory`,
+      adapter: s.adapters.get('generic-html')!,
+      vocabulary: s.rules.vocabulary,
+      policy,
+      collectionMode: 'fixture',
+    });
+    expect(result.records).toHaveLength(0);
+    expect(result.pages).toHaveLength(1);
+    expect(result.pages[0]?.status).toBe('skipped');
+    expect(result.documents).toHaveLength(0);
+  });
+
   it('allows known public identity with unknown government level without inventing classification', async () => {
     const s = await setup();
     const importer = new OrganizationSpineImportRepository(db);
