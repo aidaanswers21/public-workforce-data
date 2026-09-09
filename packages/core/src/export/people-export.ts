@@ -27,7 +27,7 @@ import { renderCsv, type CsvColumn } from './csv.js';
 export interface ExportablePersonRow {
   personId: Uuid;
   assignmentId?: Uuid;
-  publishedEmails?: readonly { value: string; sourceDocumentId: Uuid }[];
+  publishedEmails?: readonly { value: string; sourceDocumentId: Uuid; sourceUrl?: string | null }[];
   workPhones?: readonly { value: string; sourceDocumentId: Uuid }[];
   firstName: string | null;
   middleName: string | null;
@@ -192,6 +192,7 @@ export function exportPeopleCsv(input: {
   at: Timestamp;
   /** Declared purpose, matched against `export_purpose` suppression entries. */
   purpose: string;
+  format?: 'full' | 'contacts';
 }): ExportResult {
   const subjectOf = (row: ExportablePersonRow): SuppressionSubject =>
     exportSubject(row, input.purpose);
@@ -289,10 +290,31 @@ export function exportPeopleCsv(input: {
     }
   }
 
-  const csv = renderCsv(PEOPLE_EXPORT_COLUMNS, allowed);
+  const contacts = allowed.flatMap((row) =>
+    (row.publishedEmails ?? []).map((email) => ({
+      firstName: row.firstName,
+      lastName: row.lastName,
+      email: email.value,
+      organization: row.organizationName,
+      sourcePage: email.sourceUrl ?? null,
+    })),
+  );
+  const csv =
+    input.format === 'contacts'
+      ? renderCsv(
+          [
+            { header: 'first_name', value: (row: (typeof contacts)[number]) => row.firstName },
+            { header: 'last_name', value: (row: (typeof contacts)[number]) => row.lastName },
+            { header: 'email', value: (row: (typeof contacts)[number]) => row.email },
+            { header: 'organization', value: (row: (typeof contacts)[number]) => row.organization },
+            { header: 'source_page', value: (row: (typeof contacts)[number]) => row.sourcePage },
+          ],
+          contacts,
+        )
+      : renderCsv(PEOPLE_EXPORT_COLUMNS, allowed);
   return {
     csv,
-    rowCount: allowed.length,
+    rowCount: input.format === 'contacts' ? contacts.length : allowed.length,
     suppressedCount: suppressedPersonIds.length,
     withheldCandidateCount: withheldCandidates,
     checksum: sha256(csv),

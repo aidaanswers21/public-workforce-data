@@ -158,6 +158,7 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
         crawlTargetId: job.crawlTargetId,
         seedUrl: job.url,
         adapter,
+        followProfiles: true,
         policy: buildCrawlPolicy({
           ...this.options.policy,
           ...(job.websiteScope === undefined ? {} : { websiteScope: job.websiteScope }),

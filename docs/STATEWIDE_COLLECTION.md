@@ -189,3 +189,28 @@ Viewing existing contacts does not start a crawl or require an export purpose.
 **Download CSV** opens Exports with the current project selected. File downloads
 retain the existing purpose approval, confirmation, audit, and suppression checks.
 An empty results page explains how to clear search and open coverage and exceptions.
+
+## Individual staff profiles and a compact contact file
+
+Production collection follows the individual profile links a directory publishes.
+Profile requests share the job's website boundary, source policy, robots checks,
+request budget, and checkpoints. A plain directory containing only named links can
+now create profile work, including opaque URLs such as `/pages/17`. A single named
+main profile can supply its published email without structured markup. Navigation
+and footer inboxes cannot supply the profile's email; ambiguous multi-person pages
+are not treated as one profile. Empty or duplicate individual profiles do not stop
+the remaining profile queue. Pagination loop and no-progress guards continue to
+apply to listing pages; all profile requests still consume the run budget.
+
+The default selection on the download form is a five-column file:
+`first_name,last_name,email,organization,source_page`. For a school-scoped project,
+organization is the school. Each row contains one published email and the actual
+page that published that email, even when the person's name was first encountered
+on a directory index. Null name parts remain blank. Inferred addresses and
+phone-only records are absent from this compact file. Published general inboxes
+remain opt-in. Full contact and provenance exports remain available from the
+Columns menu. Both formats retain SQL filtering and the final suppression recheck.
+
+A school roster entry that repeats a district homepage is not evidence of a
+school-specific staff directory. Such entries require website resolution; they
+must not be presented as a completed school collection or assigned district staff.

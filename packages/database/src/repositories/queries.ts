@@ -233,8 +233,8 @@ export class QueryRepository {
          emp.extraction_method_code, emp.confidence, emp.first_seen_at, emp.last_seen_at, emp.crawl_run_id,
          emp.source_document_id,
          unit.name as unit_name,
-         (select coalesce(jsonb_agg(jsonb_build_object('value',published.address,'sourceDocumentId',published.source_document_id) order by published.id),'[]'::jsonb)
-          from email_addresses published where published.person_id=p.id and published.status='active'
+         (select coalesce(jsonb_agg(jsonb_build_object('value',published.address,'sourceDocumentId',published.source_document_id,'sourceUrl',email_source.url) order by published.id),'[]'::jsonb)
+          from email_addresses published join source_documents email_source on email_source.id=published.source_document_id where published.person_id=p.id and published.status='active'
             and (published.organization_id is null or published.organization_id=emp.organization_id)
             and published.classification in ('published','decoded_published'${filters.includeGeneralInboxes === true ? ", 'general_inbox'" : ''})
             and ${addressSuppressionFilter('published.address_normalized', 'published.domain')}
@@ -432,6 +432,7 @@ function toExportRow(row: Record<string, unknown>): ExportablePersonRow {
     publishedEmails: (row['all_published_emails'] ?? []) as {
       value: string;
       sourceDocumentId: Uuid;
+      sourceUrl: string;
     }[],
     workPhones: (row['work_phones'] ?? []) as { value: string; sourceDocumentId: Uuid }[],
     firstName: (row['first_name'] as string | null) ?? null,

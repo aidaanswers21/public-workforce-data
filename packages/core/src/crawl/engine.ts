@@ -384,7 +384,7 @@ export class CrawlEngine {
         contentHash: page.contentHash,
       });
       if (after.stop !== null) {
-        guards.noteStop(after.stop);
+        if (task.kind !== 'profile') guards.noteStop(after.stop);
         pages.push(
           this.pageRecord(job, task, {
             status: 'skipped',
@@ -394,6 +394,7 @@ export class CrawlEngine {
             note: after.stop.reason,
           }),
         );
+        if (task.kind === 'profile') continue;
         log.info({ stop: after.stop }, 'duplicate content, stopping this branch');
         break;
       }
@@ -492,6 +493,7 @@ export class CrawlEngine {
         recordKeys: [...fingerprints.values()],
         empty,
         isFirstPage,
+        trackPaginationProgress: task.kind !== 'profile',
       });
       isFirstPage = false;
 

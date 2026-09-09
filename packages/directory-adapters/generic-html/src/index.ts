@@ -12,6 +12,7 @@ import type {
 } from '@public-workforce/shared-types';
 import {
   dedupeExtractedRecords,
+  isOrganizationLabel,
   escapeRegExp,
   resolveUrl,
   scoreDirectoryUrl,
@@ -24,6 +25,8 @@ import {
   extractFromMailtoLinks,
   extractFromTables,
   extractStructured,
+  extractProfileLinks,
+  extractSingleProfile,
 } from './extract.js';
 import { discoverPaginationFrom } from './pagination.js';
 
@@ -44,7 +47,7 @@ export const GENERIC_HTML_ADAPTER_KEY = 'generic-html';
  */
 export class GenericHtmlAdapter implements DirectoryAdapter {
   readonly key = GENERIC_HTML_ADAPTER_KEY;
-  readonly version = '2.0.1';
+  readonly version = '2.1.0';
   readonly displayName = 'Generic HTML directory';
   readonly detectionThreshold = 0.25;
   readonly requiresBrowser = false;
@@ -178,6 +181,8 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
       );
     }
 
+    if (records.length === 0) records = extractProfileLinks(input);
+
     const pagination = discoverPaginationFrom(
       $,
       page.finalUrl,
@@ -208,6 +213,7 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
 
   extractProfile(page: FetchedPage, context: AdapterContext): ExtractedPersonRecord | null {
     const $ = loadHtml(page.body);
+    $('nav, footer, aside').remove();
     const input = {
       $,
       sourceUrl: page.finalUrl,
@@ -216,13 +222,20 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
     };
 
     const structured = extractStructured(input);
-    if (structured.length > 0) return structured[0] ?? null;
+    if (structured.length > 0) return structured.length === 1 ? (structured[0] ?? null) : null;
 
     const cards = extractFromCards(input);
-    if (cards.length === 1) return cards[0] ?? null;
+    if (cards.length > 0) return cards.length === 1 ? (cards[0] ?? null) : null;
+
+    const profile = extractSingleProfile(input);
+    if (profile !== null) return profile;
 
     const mailto = extractFromMailtoLinks(input);
-    return mailto[0] ?? null;
+    const single = mailto.length === 1 ? mailto[0] : undefined;
+    return single !== undefined &&
+      !isOrganizationLabel(single.fullNamePublished, context.vocabulary.organizationLabelWords)
+      ? single
+      : null;
   }
 
   discoverPagination(page: FetchedPage, context: AdapterContext): PaginationPlan {

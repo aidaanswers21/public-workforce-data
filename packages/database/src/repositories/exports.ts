@@ -12,6 +12,7 @@ import { ComplianceRepository } from './compliance.js';
 import { QueryRepository, type ExportFilters } from './queries.js';
 
 export interface BuildExportInput {
+  format?: 'full' | 'contacts';
   name: string;
   requestedBy: string;
   /**
@@ -66,7 +67,7 @@ export class ExportRepository {
         input.name,
         input.requestedBy,
         input.purpose,
-        JSON.stringify({ ...input.filters, snapshotAt: snapshot }),
+        JSON.stringify({ ...input.filters, snapshotAt: snapshot, format: input.format ?? 'full' }),
       ],
     );
     const exportId = created.rows[0]?.id;
@@ -96,6 +97,7 @@ export class ExportRepository {
         );
         const result = exportPeopleCsv({
           rows,
+          format: input.format ?? 'full',
           suppression,
           at: nowTimestamp(this.clock),
           purpose: input.purpose,
@@ -144,7 +146,12 @@ export class ExportRepository {
     const created = await this.client.query<{ id: Uuid }>(
       `insert into exports (name, requested_by, purpose, filters, status)
        values ($1,$2,$3,$4,'building') returning id`,
-      [input.name, input.requestedBy, input.purpose, JSON.stringify(input.filters)],
+      [
+        input.name,
+        input.requestedBy,
+        input.purpose,
+        JSON.stringify({ ...input.filters, format: input.format ?? 'full' }),
+      ],
     );
     const exportId = created.rows[0]?.id;
     if (exportId === undefined) throw new Error('exports: insert returned no id');
@@ -161,7 +168,13 @@ export class ExportRepository {
         await this.compliance.loadActiveSuppressions(),
       );
       const checkedAt: Timestamp = nowTimestamp(this.clock);
-      const result = exportPeopleCsv({ rows, suppression, at: checkedAt, purpose: input.purpose });
+      const result = exportPeopleCsv({
+        rows,
+        suppression,
+        at: checkedAt,
+        purpose: input.purpose,
+        format: input.format ?? 'full',
+      });
 
       await this.client.query(
         `update exports set status = 'completed', row_count = $2, suppressed_count = $3,
