@@ -1,5 +1,10 @@
+import { SuppressionIndex, exportSubject } from '@public-workforce/core';
 import type { SqlClient } from '@public-workforce/database';
-import { QueryRepository, type CoverageSummary } from '@public-workforce/database';
+import {
+  ComplianceRepository,
+  QueryRepository,
+  type CoverageSummary,
+} from '@public-workforce/database';
 
 export interface RunSummaryRow {
   id: string;
@@ -69,6 +74,51 @@ export class AdminReports {
 
   constructor(private readonly client: SqlClient) {
     this.queries = new QueryRepository(client);
+  }
+
+  async collectedContacts(projectId: string, search: string, after?: string) {
+    const purpose = 'internal-review';
+    const rows = await this.queries.queryExportableRows(new Date().toISOString(), purpose, {
+      collectionProjectId: projectId,
+      search,
+      includePhoneOnly: true,
+      includeGeneralInboxes: true,
+      paginateByAssignment: true,
+      limit: 100,
+      ...(after === undefined ? {} : { afterAssignmentId: after }),
+    });
+    const suppression = SuppressionIndex.fromEntries(
+      await new ComplianceRepository(this.client).loadActiveSuppressions(),
+    );
+    const at = new Date().toISOString();
+    const contacts = rows.flatMap((row) => {
+      const subject = exportSubject(row, purpose);
+      if (row.status !== 'active' || suppression.isSuppressed(subject, at)) return [];
+      const emails = (row.publishedEmails ?? []).filter(
+        (email) =>
+          !suppression.isSuppressed(
+            { ...subject, emailAddress: email.value, sourceDocumentId: email.sourceDocumentId },
+            at,
+          ),
+      );
+      const phones = (row.workPhones ?? []).filter(
+        (phone) =>
+          !suppression.isSuppressed({ ...subject, sourceDocumentId: phone.sourceDocumentId }, at),
+      );
+      if (emails.length === 0 && phones.length === 0) return [];
+      return [
+        {
+          name: row.fullNamePublished,
+          organization: row.organizationName,
+          title: row.titlePublished,
+          department: row.departmentPublished,
+          emails: emails.map((email) => email.value),
+          phones: phones.map((phone) => phone.value),
+          sourceUrl: row.sourceUrl,
+        },
+      ];
+    });
+    return { contacts, next: rows.length === 100 ? rows.at(-1)?.assignmentId : undefined };
   }
 
   async recentRuns(limit = 20): Promise<RunSummaryRow[]> {

@@ -169,3 +169,23 @@ launch Chromium, so missing runtime libraries fail CI. This avoids an unrelated
 system-package mirror preventing all verification before tests can start.
 Standalone Linux deployments still need the browser and its system libraries as
 described above.
+
+## Viewing collected contacts
+
+Open **Collection projects**, choose a project, then **View contacts**. The same
+link is available beside each project's extracted-record count. The contacts page
+shows published names, organizations, titles, departments, work emails, work phones,
+and source links. Search by name, organization, title, or preferred published email;
+use **Next contacts** to continue beyond the first 100 assignments.
+
+Contacts are scoped to the project's organization membership, so an organization
+already collected in another project can have visible contacts before this project
+runs. Extracted records count observations, including repeats; they are not a count
+of unique people or email addresses. The list shows active assignments with visible
+published contact details, including general inboxes, and excludes inferred addresses.
+Suppression is checked in SQL and again before rendering for internal review.
+Viewing existing contacts does not start a crawl or require an export purpose.
+
+**Download CSV** opens Exports with the current project selected. File downloads
+retain the existing purpose approval, confirmation, audit, and suppression checks.
+An empty results page explains how to clear search and open coverage and exceptions.

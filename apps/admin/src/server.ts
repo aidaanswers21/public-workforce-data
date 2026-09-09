@@ -339,6 +339,7 @@ export function createAdminServer(options: AdminServerOptions): Server {
             collectionProjects,
             url.searchParams.get('message') ?? '',
             hosted,
+            url.searchParams.get('projectId') ?? '',
           ),
         );
         return;
@@ -727,6 +728,64 @@ export function createAdminServer(options: AdminServerOptions): Server {
             renderMessage('Collection preparation failed', errorMessage(error)),
           );
         }
+        return;
+      }
+      const contactsMatch = /^\/projects\/([0-9a-f-]+)\/contacts$/.exec(url.pathname);
+      if (request.method === 'GET' && contactsMatch !== null) {
+        const projectId = contactsMatch[1] as string;
+        const project = await projects.get(projectId);
+        if (project === null) {
+          sendHtml(
+            response,
+            404,
+            renderMessage('Project not found', 'Choose a collection project.'),
+          );
+          return;
+        }
+        const after = url.searchParams.get('after') ?? undefined;
+        if (after !== undefined && !/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(after)) {
+          sendHtml(
+            response,
+            400,
+            renderMessage('Invalid page', 'Return to the first contacts page.'),
+          );
+          return;
+        }
+        const search = (url.searchParams.get('q') ?? '').slice(0, 200);
+        const result = await reports.collectedContacts(projectId, search, after);
+        const rows = result.contacts
+          .map((contact) => {
+            let source = '';
+            try {
+              const parsed = new URL(contact.sourceUrl ?? '');
+              if (parsed.protocol === 'https:' || parsed.protocol === 'http:')
+                source = `<a href="${escapeAttribute(parsed.href)}" target="_blank" rel="noopener noreferrer">Source</a>`;
+            } catch {
+              /* Missing source URLs remain blank. */
+            }
+            return `<tr><td><strong>${escapeHtml(contact.name)}</strong></td><td>${escapeHtml(contact.organization ?? '')}</td><td>${escapeHtml(contact.title ?? '')}<span>${escapeHtml(contact.department ?? '')}</span></td><td>${contact.emails.map(escapeHtml).join('<br>')}</td><td>${contact.phones.map(escapeHtml).join('<br>')}</td><td>${source}</td></tr>`;
+          })
+          .join('');
+        const next =
+          result.next === undefined
+            ? ''
+            : `<a class="secondary-link" href="?${escapeAttribute(new URLSearchParams({ q: search, after: result.next }).toString())}">Next contacts</a>`;
+        sendHtml(
+          response,
+          200,
+          page(
+            'Collected contacts',
+            `${appHeader('/projects', hosted)}<main class="dashboard">
+          <section class="dashboard-heading"><div><h1>Collected contacts</h1><p>${escapeHtml(project.name)}</p><p class="muted">Published work contact details for organizations in this project. Shared organizations may have results from an earlier collection.</p></div><a class="primary-link" href="/exports?projectId=${escapeAttribute(projectId)}">Download CSV</a></section>
+          <a href="/projects/${escapeAttribute(projectId)}">Back to collection</a>
+          <form class="panel panel-body release-form" method="get"><label>Search name, organization, title, or email<input name="q" value="${escapeAttribute(search)}" maxlength="200"></label><button>Search contacts</button><a href="/projects/${escapeAttribute(projectId)}/contacts">Clear search</a></form>
+          <section class="panel"><div class="panel-heading"><h2>${result.contacts.length} contacts on this page</h2></div><div class="table-scroll"><table><thead><tr><th>Name</th><th>Organization</th><th>Title / department</th><th>Published email</th><th>Work phone</th><th>Evidence</th></tr></thead><tbody>${rows || '<tr><td colspan="6">No visible contacts on this page. Try clearing your search or check Coverage and exceptions for collection progress. Records without published contact details are not shown.</td></tr>'}</tbody></table></div></section>
+          <div class="button-row">${next}<a href="/projects/${escapeAttribute(projectId)}/outcomes">Coverage and exceptions</a></div>
+          <p class="muted">The extracted-record count includes repeated observations. This list combines stored contacts and omits suppressed or inactive details. General office inboxes are included when published for the person.</p>
+          </main>${appFooter(hosted)}`,
+            'dashboard-page',
+          ),
+        );
         return;
       }
       const outcomeMatch = /^\/projects\/([0-9a-f-]+)\/outcomes$/.exec(url.pathname);
@@ -1639,7 +1698,7 @@ function renderProjects(
         <td>${project.organizationsSelected.toLocaleString()}</td>
         <td>${project.sourceRecordsSelected.toLocaleString()}<span>${project.sourceRecordsHeld.toLocaleString()} held</span></td>
         <td>${project.directoriesReady.toLocaleString()}</td>
-        <td>${project.recordsCollected.toLocaleString()}</td>
+        <td>${project.recordsCollected.toLocaleString()}<span><a href="/projects/${escapeAttribute(project.id)}/contacts">View contacts</a></span></td>
         <td>${project.queuedJobs + project.runningJobs}</td>
         <td>${project.policyHolds + project.failedJobs}</td>
       </tr>`,
@@ -1669,6 +1728,7 @@ function renderExports(
   projects: readonly CollectionProjectSummary[],
   message: string,
   hosted: boolean,
+  selectedProjectId = '',
 ): string {
   const purposeOptions = purposes
     .map(
@@ -1680,7 +1740,7 @@ function renderExports(
     .filter((project) => project.status !== 'cancelled')
     .map(
       (project) =>
-        `<option value="${escapeAttribute(project.id)}">${escapeHtml(project.name)} · ${project.recordsCollected.toLocaleString()} records</option>`,
+        `<option value="${escapeAttribute(project.id)}" ${project.id === selectedProjectId ? 'selected' : ''}>${escapeHtml(project.name)} · ${project.recordsCollected.toLocaleString()} records</option>`,
     )
     .join('');
   const purposeRows = purposes
@@ -1872,8 +1932,9 @@ function renderProjectDetail(
         ${metric('Selected organizations', project.organizationsSelected, `${project.websitesAvailable} with a published website`)}
         ${metric('Source records selected', project.sourceRecordsSelected, `${project.sourceRecordsReady} ready · ${project.sourceRecordsHeld} awaiting classification`)}
         ${metric('Directories ready', project.directoriesReady, 'Discovered and awaiting a crawl batch')}
-        ${metric('Records collected', project.recordsCollected, `${project.targetsCrawled} targets completed`)}
+        ${metric('Records extracted', project.recordsCollected, 'Includes repeat observations; open View contacts for stored results')}
       </section>
+      <div class="button-row"><a class="primary-link" href="/projects/${escapeAttribute(project.id)}/contacts">View contacts</a><a class="secondary-link" href="/exports?projectId=${escapeAttribute(project.id)}">Download CSV</a></div>
       <div class="project-grid">
         <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Prepare</p><h2>Scope and targets</h2></div></div><div class="panel-body"><p>Refresh membership from the current database filters, then create discovery targets only from website URLs that sources actually published.</p><div class="button-row"><form method="post" action="/projects/${escapeAttribute(project.id)}/refresh"><button class="secondary-button" type="submit">Refresh organizations</button></form><form method="post" action="/projects/${escapeAttribute(project.id)}/generate"><button class="secondary-button" type="submit">Generate discovery work</button></form></div><dl class="limits"><div><dt>Organization types</dt><dd>${project.filters.organizationTypeCodes.length === 0 ? 'All in scope' : escapeHtml(project.filters.organizationTypeCodes.join(', '))}</dd></div><div><dt>Worker behavior</dt><dd>${project.filters.workMode === 'approved_batch_complete' ? 'Continue until approved batch is complete' : 'Stop at operator job count'}</dd></div><div><dt>Batch safety cap</dt><dd>${project.batchSize} targets</dd></div><div><dt>Per-target safety cap</dt><dd>${project.maxPagesPerTarget} pages</dd></div><div><dt>Batch circuit breaker</dt><dd>${project.maxPagesPerBatch} pages or ${project.maxErrorsPerBatch} errors</dd></div></dl></div></section>
         <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Release</p><h2>Approve one finite batch</h2></div></div><form class="panel-body release-form" method="post" action="/projects/${escapeAttribute(project.id)}/batch"><label for="kind">Work stage</label><select id="kind" name="kind"><option value="discovery">Discover directories</option><option value="crawl">Collect directory records</option></select><label for="targetLimit">Maximum targets in this release</label><input id="targetLimit" name="targetLimit" type="number" min="1" max="${project.batchSize}" value="${Math.min(10, project.batchSize)}" required><label for="approvalNote">Specific approval note</label><textarea id="approvalNote" name="approvalNote" rows="3" required placeholder="Approve a pilot of up to 10 reviewed targets"></textarea><label class="check-label"><input type="checkbox" name="approvalConfirmed" value="yes" required><span>I approve this exact batch. This approval does not carry over to another batch.</span></label><button type="submit" ${canRelease ? '' : 'disabled'}>Approve and queue batch</button><p class="field-help">The scheduler still checks source policy and robots before every request. A policy hold is never retried harder.</p></form></section>

@@ -3,6 +3,7 @@ import type { Timestamp, Uuid } from '@public-workforce/shared-types';
 import type { SqlClient } from '../client.js';
 
 export interface ExportFilters {
+  search?: string;
   governmentLevelCode?: string;
   sectorCode?: string;
   jurisdictionId?: Uuid;
@@ -157,6 +158,12 @@ export class QueryRepository {
       return `$${params.length}`;
     };
 
+    if (filters.search !== undefined && filters.search.trim().length > 0) {
+      const term = bind(filters.search.trim().toLowerCase());
+      conditions.push(
+        `strpos(lower(concat_ws(' ', p.full_name_published, org.name, emp.title_published, emp.department_published, ea.address)), ${term}) > 0`,
+      );
+    }
     if (filters.afterAssignmentId !== undefined)
       conditions.push(`emp.id > ${bind(filters.afterAssignmentId)}::uuid`);
     if (filters.snapshotAt !== undefined)

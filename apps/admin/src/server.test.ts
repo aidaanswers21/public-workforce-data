@@ -1,7 +1,12 @@
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CollectionProjectRepository, TestDatabase } from '@public-workforce/database';
+import {
+  CollectionProjectRepository,
+  IngestionRepository,
+  OrganizationRepository,
+  TestDatabase,
+} from '@public-workforce/database';
 import { createAdminServer, hashAdminPassword, type AdminServerOptions } from './server.js';
 
 const servers: Server[] = [];
@@ -509,6 +514,119 @@ describe('local admin server', () => {
     expect(reviewHtml).toContain('value="example.test"');
     expect(reviewHtml).toContain('value="html_directory"');
     expect(reviewHtml).toContain('Back to held batch');
+  });
+
+  it('browses project contacts with search, pagination, evidence, and suppression', async () => {
+    const { origin } = await start();
+    const db = databases[0]!;
+    const cookie = await login(origin);
+    const document = await new IngestionRepository(db).recordSourceDocument({
+      url: 'https://example.test/staff',
+      urlCanonical: 'https://example.test/staff',
+      urlHash: 'contact-fixture',
+      domain: 'example.test',
+      sourceTypeCode: 'html_directory',
+      httpStatus: 200,
+      contentHash: 'contact-fixture',
+      contentType: 'text/html',
+      storageKey: null,
+      robotsAllowed: true,
+      robotsPolicyNote: null,
+      crawlRunId: null,
+      retrievedAt: new Date().toISOString(),
+    });
+    const org = await new OrganizationRepository(db).upsertOrganization({
+      name: 'Contact Office',
+      nameNormalized: 'contact office',
+      organizationTypeCode: 'state_department',
+      governmentLevelCode: 'state',
+      sectorCode: 'general_government',
+      sourceDocumentId: document.documentId,
+      extractionMethod: 'bulk_import',
+      confidence: 1,
+      observedAt: new Date().toISOString(),
+    });
+    const projects = new CollectionProjectRepository(db);
+    const projectId = await projects.create({
+      key: 'contacts',
+      name: 'Contact collection',
+      jurisdictionConfigKey: template.key,
+      jurisdictionCode: template.jurisdictionCode,
+      stateCode: 'TX',
+      sectorCodes: ['general_government'],
+      governmentLevelCodes: ['state'],
+      batchSize: 10,
+      maxPagesPerTarget: 10,
+      maxPagesPerBatch: 100,
+      maxErrorsPerBatch: 5,
+      createdBy: 'owner',
+    });
+    await db.query(
+      `insert into collection_project_organizations(project_id,organization_id,selection_reason) values ($1,$2,'fixture')`,
+      [projectId, org.id],
+    );
+    await db.query(
+      `insert into people(full_name_published,identity_key,source_document_id,extraction_method_code,confidence)
+      select 'Person '||n,'contact'||n,$1,'html_table',1 from generate_series(1,105)n`,
+      [document.documentId],
+    );
+    await db.query(
+      `insert into employment_assignments(person_id,organization_id,title_published,source_document_id,extraction_method_code,confidence)
+      select id,$1,'Director',$2,'html_table',1 from people`,
+      [org.id, document.documentId],
+    );
+    await db.query(
+      `insert into email_addresses(person_id,organization_id,address,address_normalized,domain,local_part,classification,source_document_id,extraction_method_code,confidence)
+      select id,$1,identity_key||'@example.test',identity_key||'@example.test','example.test',identity_key,'published',$2,'html_table',1 from people`,
+      [org.id, document.documentId],
+    );
+    await db.query(
+      `insert into suppression_entries(scope,value,reason,source,created_by) values ('email','contact1@example.test','Fixture suppression','manual_review','owner')`,
+    );
+    await db.query(
+      `update email_addresses set status='inactive',classification='invalid' where address='contact2@example.test'`,
+    );
+    const path = `/projects/${projectId}/contacts`;
+    expect((await fetch(origin + path, { redirect: 'manual' })).status).toBe(303);
+    const response = await fetch(origin + path, { headers: { cookie } });
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain('100 contacts on this page');
+    expect(html).toContain('https://example.test/staff');
+    expect(html).not.toContain('contact1@example.test');
+    expect(html).not.toContain('contact2@example.test');
+    const next = html.match(/href="(\?[^"]+)">Next contacts/)!;
+    expect(next).not.toBeNull();
+    const nextHtml = await (
+      await fetch(origin + path + next[1]!.replaceAll('&amp;', '&'), { headers: { cookie } })
+    ).text();
+    expect(nextHtml).toContain('3 contacts on this page');
+    expect(nextHtml).not.toContain('Next contacts');
+    const search = await (
+      await fetch(origin + path + '?q=contact105%40example.test', { headers: { cookie } })
+    ).text();
+    expect(search).toContain('1 contacts on this page');
+    expect(search).toContain('Person 105');
+    const empty = await (await fetch(origin + path + '?q=absent', { headers: { cookie } })).text();
+    expect(empty).toContain('No visible contacts');
+    expect((await fetch(origin + path + '?after=invalid', { headers: { cookie } })).status).toBe(
+      400,
+    );
+    expect(
+      (
+        await fetch(origin + '/projects/00000000-0000-0000-0000-000000000000/contacts', {
+          headers: { cookie },
+        })
+      ).status,
+    ).toBe(404);
+    const exportHtml = await (
+      await fetch(origin + `/exports?projectId=${projectId}`, { headers: { cookie } })
+    ).text();
+    expect(exportHtml).toContain(`value="${projectId}" selected`);
+    await db.query(`delete from collection_project_organizations where project_id=$1`, [projectId]);
+    expect(await (await fetch(origin + path, { headers: { cookie } })).text()).not.toContain(
+      'contact105@example.test',
+    );
   });
 
   it('approves a named purpose and downloads an audited project CSV', async () => {
