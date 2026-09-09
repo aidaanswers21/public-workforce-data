@@ -85,6 +85,12 @@ batches, but it cannot create or approve a batch and it still evaluates source
 policy before claiming each target. `WORKER_POLL_INTERVAL_MS` controls the idle
 poll interval from 1 to 60,000 milliseconds.
 
+When a batch encounters an unreviewed domain, the worker makes no request and
+moves that job to `policy_hold`. The project page lists each held domain with an
+external inspection link and a prefilled policy-review action. After a person
+records the decision, the operator must approve a new finite batch. The failed
+batch remains immutable audit evidence and never retries itself.
+
 The Render Blueprint runs a private operator web service and one daemon in
 Oregon on Starter instances, with automatic deploys disabled. The web service
 has a 30-second shutdown window and `/health` returns success only when its

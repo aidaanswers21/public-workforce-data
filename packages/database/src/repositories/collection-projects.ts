@@ -95,6 +95,15 @@ export interface CollectionBatchSummary {
   createdAt: string;
 }
 
+export interface CollectionPolicyHold {
+  domain: string;
+  targetUrl: string;
+  sourceTypeCode: string;
+  organizationName: string;
+  reason: string;
+  jobCount: number;
+}
+
 export interface CreateApprovedBatchInput {
   projectId: Uuid;
   kind: CollectionJobKind;
@@ -232,6 +241,33 @@ export class CollectionProjectRepository {
       [projectId],
     );
     return result.rows.map(mapBatch);
+  }
+
+  /** Lists actionable held domains without weakening the policy gate. */
+  async listPolicyHolds(projectId: Uuid): Promise<CollectionPolicyHold[]> {
+    const result = await this.client.query<Record<string, unknown>>(
+      `select j.domain_key,
+              min(t.url) as target_url,
+              min(t.source_type_code) as source_type_code,
+              min(o.name) as organization_name,
+              min(j.last_error) as reason,
+              count(*)::int as job_count
+       from collection_jobs j
+       join crawl_targets t on t.id = j.crawl_target_id
+       join organizations o on o.id = t.organization_id
+       where j.project_id = $1 and j.status = 'policy_hold'
+       group by j.domain_key
+       order by j.domain_key`,
+      [projectId],
+    );
+    return result.rows.map((row) => ({
+      domain: String(row['domain_key']),
+      targetUrl: String(row['target_url']),
+      sourceTypeCode: String(row['source_type_code']),
+      organizationName: String(row['organization_name']),
+      reason: String(row['reason']),
+      jobCount: Number(row['job_count']),
+    }));
   }
 
   /** Refreshes the materialized scope without removing anything already released. */

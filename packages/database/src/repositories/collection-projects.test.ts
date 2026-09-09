@@ -90,6 +90,17 @@ describe('collection project control plane', () => {
     expect(await setup.projects.claimNextJob('worker-one')).toBeNull();
     expect(await setup.projects.get(projectId)).toMatchObject({ policyHolds: 1 });
     expect((await setup.projects.listBatches(projectId))[0]?.status).toBe('completed_with_errors');
+    expect(await setup.projects.listPolicyHolds(projectId)).toEqual([
+      {
+        domain: 'example.test',
+        targetUrl: 'https://district.example.test/',
+        sourceTypeCode: 'html_directory',
+        organizationName: 'Fixture School',
+        reason:
+          'no source policy on record; a person must review this source before production collection',
+        jobCount: 1,
+      },
+    ]);
   });
 
   it('does not claim approved jobs while the project is paused', async () => {
