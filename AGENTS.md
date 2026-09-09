@@ -52,6 +52,11 @@ Every one of these, every time:
 - **Change access**: credentials, permissions, repository settings, branch
   protection.
 
+A single explicit run approval may cover discovery and extraction together for
+one frozen organization roster, expiry and budget. Internal queue chunks and stage
+transitions inside that approved run do not need separate approvals. New runs,
+expanded rosters and unapproved source policies still require human decisions.
+
 Approval is a person saying so in words. A test passing is not approval. A green
 review is not approval. A task description that mentions a step is not approval
 to take it.

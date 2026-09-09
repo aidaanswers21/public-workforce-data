@@ -55,6 +55,11 @@ The server listens on this computer only. This local login does not provide
 production authentication and does not make the unauthenticated API safe to
 deploy.
 
+Use **Collection projects → Collect by state** to prepare district and school
+rosters across selected states and run discovery and scraping under one finite
+approval. See [Statewide collection](docs/STATEWIDE_COLLECTION.md) for source
+review, browser rendering, coverage, and complete contact exports.
+
 The console also has a **Collection projects** area. It turns a configured
 jurisdiction and taxonomy-backed sector and organization-type selections into
 explicit organization membership, discovery targets, and finite approved

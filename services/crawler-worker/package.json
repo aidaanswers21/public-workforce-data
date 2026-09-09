@@ -32,6 +32,7 @@
     "@public-workforce/sector-federal": "workspace:*",
     "@public-workforce/sector-state-local": "workspace:*",
     "@public-workforce/shared-types": "workspace:*",
-    "@public-workforce/taxonomy": "workspace:*"
+    "@public-workforce/taxonomy": "workspace:*",
+    "playwright": "1.63.0"
   }
 }

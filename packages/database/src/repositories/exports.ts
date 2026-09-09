@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   SuppressionIndex,
   exportPeopleCsv,
@@ -46,6 +47,88 @@ export class ExportRepository {
   ) {
     this.queries = new QueryRepository(client);
     this.compliance = new ComplianceRepository(client);
+  }
+
+  /** Bounded memory and a stable assignment cursor let downloads span an entire collection. */
+  async streamPeopleExport(
+    input: BuildExportInput,
+    write: (chunk: string) => Promise<void>,
+  ): Promise<{ exportId: Uuid; rowCount: number; checksum: string }> {
+    const snapshot = nowTimestamp(this.clock);
+    const purpose = await this.client.query(
+      'select code from export_purposes where code=$1 and active and retired_at is null',
+      [input.purpose],
+    );
+    if (purpose.rows.length === 0) throw new Error('export purpose is not active and approved');
+    const created = await this.client.query<{ id: Uuid }>(
+      `insert into exports(name,requested_by,purpose,filters,status) values ($1,$2,$3,$4,'building') returning id`,
+      [
+        input.name,
+        input.requestedBy,
+        input.purpose,
+        JSON.stringify({ ...input.filters, snapshotAt: snapshot }),
+      ],
+    );
+    const exportId = created.rows[0]?.id;
+    if (exportId === undefined) throw new Error('export insert failed');
+    let cursor = input.filters.afterAssignmentId;
+    let rowCount = 0;
+    let suppressedCount = 0;
+    let withheld = 0;
+    let header = true;
+    const hash = createHash('sha256');
+    try {
+      for (;;) {
+        const rows = await this.queries.queryExportableRows(
+          nowTimestamp(this.clock),
+          input.purpose,
+          {
+            ...input.filters,
+            includePhoneOnly: input.filters.includePhoneOnly ?? true,
+            limit: 2000,
+            paginateByAssignment: true,
+            snapshotAt: input.filters.snapshotAt ?? snapshot,
+            ...(cursor === undefined ? {} : { afterAssignmentId: cursor }),
+          },
+        );
+        const suppression = SuppressionIndex.fromEntries(
+          await this.compliance.loadActiveSuppressions(),
+        );
+        const result = exportPeopleCsv({
+          rows,
+          suppression,
+          at: nowTimestamp(this.clock),
+          purpose: input.purpose,
+        });
+        const chunk = header ? result.csv : result.csv.slice(result.csv.indexOf('\r\n') + 2);
+        header = false;
+        hash.update(chunk);
+        await write(chunk);
+        rowCount += result.rowCount;
+        suppressedCount += result.suppressedCount;
+        withheld += result.withheldCandidateCount;
+        if (rows.length < 2000) break;
+        const next = rows.at(-1)?.assignmentId;
+        if (next === undefined || next === cursor) throw new Error('export cursor did not advance');
+        cursor = next;
+      }
+      const checksum = hash.digest('hex');
+      await this.client.query(
+        `update exports set status='completed',row_count=$2,suppressed_count=$3,withheld_candidate_count=$4,checksum=$5,suppression_checked_at=now(),completed_at=now() where id=$1`,
+        [exportId, rowCount, suppressedCount, withheld, checksum],
+      );
+      await this.compliance.appendAudit({
+        actor: input.requestedBy,
+        action: 'export.completed',
+        entityType: 'export',
+        entityId: exportId,
+        payload: { rowCount, checksum, filters: input.filters, snapshotAt: snapshot },
+      });
+      return { exportId, rowCount, checksum };
+    } catch (error) {
+      await this.client.query(`update exports set status='failed' where id=$1`, [exportId]);
+      throw error;
+    }
   }
 
   async buildPeopleExport(input: BuildExportInput): Promise<BuiltExport> {

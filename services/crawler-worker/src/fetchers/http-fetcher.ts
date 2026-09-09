@@ -3,6 +3,7 @@ import { contentHash } from '@public-workforce/core';
 
 export interface HttpFetcherOptions {
   userAgent: string;
+  beforeRequest?: (url: string) => Promise<void>;
   /** Hard ceiling on a single response body. Protects a worker from a huge file. */
   maxBodyBytes?: number;
   defaultTimeoutMs?: number;
@@ -28,20 +29,40 @@ export class HttpFetcher implements Fetcher {
     const timeoutMs = request.timeoutMs ?? this.options.defaultTimeoutMs ?? 20_000;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
 
+    let checkingPolicy = false;
     try {
-      const response = await fetch(request.url, {
-        method: request.method ?? 'GET',
-        headers: {
-          'user-agent': this.options.userAgent,
-          accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
-          'accept-language': 'en-US,en;q=0.9',
-          ...request.headers,
-        },
-        ...(request.body === undefined ? {} : { body: request.body }),
-        redirect: 'follow',
-        signal: controller.signal,
-      });
+      let currentUrl = request.url;
+      let response: Response;
+      let redirects = 0;
+      for (;;) {
+        checkingPolicy = true;
+        await this.options.beforeRequest?.(currentUrl);
+        checkingPolicy = false;
+        response = await fetch(currentUrl, {
+          method: request.method ?? 'GET',
+          headers: {
+            'user-agent': this.options.userAgent,
+            accept: 'text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8',
+            'accept-language': 'en-US,en;q=0.9',
+            ...request.headers,
+          },
+          ...(request.body === undefined ? {} : { body: request.body }),
+          redirect: 'manual',
+          signal: controller.signal,
+        });
 
+        if ([301, 302, 303, 307, 308].includes(response.status)) {
+          const location = response.headers.get('location');
+          if (location === null || ++redirects > 5)
+            throw new Error('invalid or excessive source redirects');
+          currentUrl = new URL(location, currentUrl).href;
+          if (!['http:', 'https:'].includes(new URL(currentUrl).protocol))
+            throw new Error('unsupported redirect protocol');
+          await response.body?.cancel();
+          continue;
+        }
+        break;
+      }
       // 401, 403 and 429 are the source telling us to stop. They are not
       // retried and never worked around.
       if (response.status === 401 || response.status === 403) {
@@ -110,7 +131,7 @@ export class HttpFetcher implements Fetcher {
         ok: true,
         page: {
           url: request.url,
-          finalUrl: response.url.length > 0 ? response.url : request.url,
+          finalUrl: response.url.length > 0 ? response.url : currentUrl,
           status: response.status,
           headers: Object.fromEntries(response.headers.entries()),
           body,
@@ -121,6 +142,7 @@ export class HttpFetcher implements Fetcher {
         },
       };
     } catch (error) {
+      if (checkingPolicy) throw error;
       const aborted = error instanceof Error && error.name === 'AbortError';
       return {
         ok: false,

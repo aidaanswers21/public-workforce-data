@@ -426,7 +426,7 @@ not cause it to be mislabeled as suppressed, although the row is still omitted.
 Candidates in the `rejected` and `suppressed` states never reach an export at
 all: the SQL excludes both before the in-memory re-check ever sees them.
 
-The CSV export carries 33 columns: first name, middle name, last name, full
+The CSV export carries 35 columns: first name, middle name, last name, full
 published name, title, normalized title, role category, job family, seniority,
 department, organization, organization type, parent organization, government
 level, sector, jurisdiction, duty location city, duty location county, duty
@@ -436,3 +436,8 @@ seen, last seen, crawl run, extraction method, confidence, assignment status,
 record status.
 
 Published and inferred addresses are separate columns and are never merged.
+
+Migration 0020 allows an unknown organization government level to remain null,
+adds frozen run membership and provenance-bearing shared-target associations,
+and stores discovery checkpoints on jobs. The CSV also includes all eligible
+published email addresses and public work phones. See `STATEWIDE_COLLECTION.md`.

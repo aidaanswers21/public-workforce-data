@@ -132,8 +132,10 @@ export function normalizeUnitName(
 
 /** Digits-only US phone, formatted, or null when the input is not a usable number. */
 export function normalizePhone(raw: string): string | null {
-  const digits = raw.replace(/\D/g, '');
+  const extension = /(?:ext(?:ension)?\.?|x|#)\s*(\d+)\s*$/i.exec(raw);
+  const base = extension === null ? raw : raw.slice(0, extension.index);
+  const digits = base.replace(/\D/g, '');
   const national = digits.length === 11 && digits.startsWith('1') ? digits.slice(1) : digits;
   if (national.length !== 10) return null;
-  return `${national.slice(0, 3)}-${national.slice(3, 6)}-${national.slice(6)}`;
+  return `${national.slice(0, 3)}-${national.slice(3, 6)}-${national.slice(6)}${extension === null ? '' : ` ext ${extension[1]}`}`;
 }

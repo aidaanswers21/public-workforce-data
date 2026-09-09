@@ -26,6 +26,7 @@ const job: ClaimedCollectionJob = {
 describe('collection worker', () => {
   it('executes and completes one leased approved job', async () => {
     const queue = {
+      batchHasPendingWork: vi.fn().mockResolvedValue(false),
       claimNextJob: vi.fn().mockResolvedValue(job),
       markJobRunning: vi.fn().mockResolvedValue(undefined),
       completeJob: vi.fn().mockResolvedValue(undefined),
@@ -59,6 +60,7 @@ describe('collection worker', () => {
 
   it('records a failure and never exceeds the local drain ceiling', async () => {
     const queue = {
+      batchHasPendingWork: vi.fn().mockResolvedValue(false),
       claimNextJob: vi.fn().mockResolvedValueOnce(job).mockResolvedValue(null),
       markJobRunning: vi.fn().mockResolvedValue(undefined),
       completeJob: vi.fn().mockResolvedValue(undefined),
@@ -81,6 +83,7 @@ describe('collection worker', () => {
   it('continues until one approved batch queue is empty', async () => {
     const secondJob = { ...job, id: 'job-two', claimToken: 'claim-two' };
     const queue = {
+      batchHasPendingWork: vi.fn().mockResolvedValue(false),
       claimNextJob: vi
         .fn()
         .mockResolvedValueOnce(job)

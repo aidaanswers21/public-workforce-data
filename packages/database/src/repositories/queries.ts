@@ -14,8 +14,12 @@ export interface ExportFilters {
   roleCategoryCodes?: readonly string[];
   assignmentStatuses?: readonly string[];
   includeInferredOnly?: boolean;
+  includePhoneOnly?: boolean;
   includeGeneralInboxes?: boolean;
   limit?: number;
+  afterAssignmentId?: Uuid;
+  snapshotAt?: Timestamp;
+  paginateByAssignment?: boolean;
 }
 
 /**
@@ -153,6 +157,10 @@ export class QueryRepository {
       return `$${params.length}`;
     };
 
+    if (filters.afterAssignmentId !== undefined)
+      conditions.push(`emp.id > ${bind(filters.afterAssignmentId)}::uuid`);
+    if (filters.snapshotAt !== undefined)
+      conditions.push(`emp.created_at <= ${bind(filters.snapshotAt)}::timestamptz`);
     if (filters.governmentLevelCode !== undefined) {
       conditions.push(`org.government_level_code = ${bind(filters.governmentLevelCode)}`);
     }
@@ -199,23 +207,34 @@ export class QueryRepository {
       // whose published address was withheld may still export a separately
       // permitted candidate because the source did publish an address for them.
       conditions.push(
-        `exists (select 1 from email_addresses source_ea where source_ea.person_id = p.id)`,
+        `(exists (select 1 from email_addresses source_ea where source_ea.person_id = p.id) ${filters.includePhoneOnly === true ? `or exists(select 1 from contact_points cp where cp.person_id=p.id and cp.contact_point_type_code='work_phone' and cp.status='active')` : ''})`,
       );
     }
-    conditions.push(`(ea.id is not null or ec.id is not null)`);
+    conditions.push(
+      `(ea.id is not null or ec.id is not null ${filters.includePhoneOnly === true ? `or exists(select 1 from contact_points cp where cp.person_id=p.id and cp.contact_point_type_code='work_phone' and cp.status='active' and (cp.organization_id is null or cp.organization_id=emp.organization_id) and not exists(select 1 from active_suppressions ps where ps.scope='source' and ps.source_document_id=cp.source_document_id))` : ''})`,
+    );
 
     const limitClause = filters.limit === undefined ? '' : `limit ${Number(filters.limit)}`;
 
     const result = await this.client.query<Record<string, unknown>>(
       `with recursive ${ORG_ANCESTRY_CTE}, ${SUPPRESSED_SUBTREES_CTE}
        select
-         p.id as person_id, p.first_name, p.middle_name, p.last_name, p.full_name_published,
+         emp.id as assignment_id, p.id as person_id, p.first_name, p.middle_name, p.last_name, p.full_name_published,
          p.status as person_status,
          emp.title_published, emp.title_normalized, emp.role_category_code, emp.job_family_code,
          emp.seniority_code, emp.department_published, emp.assignment_status,
          emp.extraction_method_code, emp.confidence, emp.first_seen_at, emp.last_seen_at, emp.crawl_run_id,
          emp.source_document_id,
          unit.name as unit_name,
+         (select coalesce(jsonb_agg(jsonb_build_object('value',published.address,'sourceDocumentId',published.source_document_id) order by published.id),'[]'::jsonb)
+          from email_addresses published where published.person_id=p.id and published.status='active'
+            and (published.organization_id is null or published.organization_id=emp.organization_id)
+            and published.classification in ('published','decoded_published'${filters.includeGeneralInboxes === true ? ", 'general_inbox'" : ''})
+            and ${addressSuppressionFilter('published.address_normalized', 'published.domain')}
+            and not exists(select 1 from active_suppressions ps where ps.scope='source' and ps.source_document_id=published.source_document_id)) as all_published_emails,
+         (select coalesce(jsonb_agg(jsonb_build_object('value',coalesce(cp.source_value,cp.value),'sourceDocumentId',cp.source_document_id) order by cp.id),'[]'::jsonb)
+          from contact_points cp where cp.status='active' and cp.person_id=p.id and (cp.organization_id is null or cp.organization_id=emp.organization_id) and cp.contact_point_type_code='work_phone'
+            and not exists(select 1 from active_suppressions ps where ps.scope='source' and ps.source_document_id=cp.source_document_id)) as work_phones,
          org.id as organization_id, org.name as organization_name,
          org.organization_type_code, org.government_level_code, org.sector_code, org.jurisdiction_id,
          j.name as jurisdiction_name,
@@ -273,7 +292,7 @@ export class QueryRepository {
        ) ec on true
        left join source_documents sd on sd.id = emp.source_document_id
        where ${conditions.join(' and ')}
-       order by p.last_name nulls last, p.first_name nulls last, p.id
+       order by ${filters.paginateByAssignment === true ? 'emp.id' : 'p.last_name nulls last, p.first_name nulls last, p.id'}
        ${limitClause}`,
       params,
     );
@@ -398,6 +417,12 @@ function toExportRow(row: Record<string, unknown>): ExportablePersonRow {
   const areaId = (row['geographic_area_id'] as Uuid | null) ?? null;
   return {
     personId: row['person_id'] as Uuid,
+    assignmentId: row['assignment_id'] as Uuid,
+    publishedEmails: (row['all_published_emails'] ?? []) as {
+      value: string;
+      sourceDocumentId: Uuid;
+    }[],
+    workPhones: (row['work_phones'] ?? []) as { value: string; sourceDocumentId: Uuid }[],
     firstName: (row['first_name'] as string | null) ?? null,
     middleName: (row['middle_name'] as string | null) ?? null,
     lastName: (row['last_name'] as string | null) ?? null,

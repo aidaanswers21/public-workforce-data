@@ -662,6 +662,29 @@ describe('local admin server', () => {
     expect(blocked.headers.get('retry-after')).toBe('900');
   });
 
+  it('offers state collection and refuses to imply coverage when its official roster is missing', async () => {
+    const { origin } = await start();
+    const cookie = await login(origin);
+    const form = await fetch(`${origin}/collections/new`, { headers: { cookie } });
+    expect(form.status).toBe(200);
+    const html = await form.text();
+    expect(html).toContain('Collect by state');
+    expect(html).toContain('name="states" multiple');
+    expect(html).toContain('Fixture organizations');
+    const response = await fetch(`${origin}/collections`, {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        name: 'State collection',
+        states: 'TX',
+        presets: 'fixture-organizations',
+      }),
+    });
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain('No loaded source records');
+    expect(await databases[0]?.count('collection_projects')).toBe(0);
+  });
+
   it('reports database readiness through the health endpoint', async () => {
     const { origin } = await start();
     const response = await fetch(`${origin}/health`);

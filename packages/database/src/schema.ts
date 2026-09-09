@@ -49,6 +49,8 @@ export const TABLE_NAMES = [
   'collection_projects',
   'collection_project_organizations',
   'collection_project_source_records',
+  'collection_batch_organizations',
+  'crawl_target_organizations',
   'collection_batches',
   'collection_jobs',
   'suppression_entries',

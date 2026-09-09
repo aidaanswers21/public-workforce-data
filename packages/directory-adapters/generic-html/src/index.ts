@@ -164,11 +164,11 @@ export class GenericHtmlAdapter implements DirectoryAdapter {
     let records: ExtractedPersonRecord[] = [];
     let usedStrategy = 'none';
     for (const [name, run] of strategies) {
+      if (name === 'mailto' && records.length > 0) continue;
       const produced = run();
       if (produced.length > 0) {
-        records = dedupeExtractedRecords(produced);
+        records = dedupeExtractedRecords([...records, ...produced]);
         usedStrategy = name;
-        break;
       }
     }
 

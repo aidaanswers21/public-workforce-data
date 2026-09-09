@@ -116,3 +116,7 @@ separate approval.
 - `policy_text_hash` matches what the page says today.
 - The crawler's user agent points at a reachable page describing the crawl and
   how to ask to be removed.
+
+The state collection run screen also records bulk human source decisions and
+resumes eligible held work under an unexpired finite authorization. Each source
+keeps its own review and approval row. See `STATEWIDE_COLLECTION.md`.
