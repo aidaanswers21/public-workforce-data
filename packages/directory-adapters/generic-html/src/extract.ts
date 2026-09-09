@@ -4,6 +4,7 @@ import {
   classifyHeader,
   cloudflareEncodedValues,
   emailAttributeValues,
+  emailTextOf,
   parseTable,
   selectorFor,
   snippetOf,
@@ -174,7 +175,8 @@ export function extractFromCards(input: ExtractInput): ExtractedPersonRecord[] {
       const attributeEmails = emailAttributeValues($, node.get(0));
       const cfEmails = collectCfEmails($, html);
       const text = textOf($, node);
-      const inlineEmails = /@/.test(text) ? [text] : [];
+      const emailText = emailTextOf($, node);
+      const inlineEmails = /@/.test(emailText) ? [emailText] : [];
 
       const hasContact =
         emailSources.length > 0 ||
@@ -238,7 +240,7 @@ export function extractFromDefinitionLists(input: ExtractInput): ExtractedPerson
         fullNamePublished: name,
         titlePublished: firstTitleLike(text, input.vocabulary),
         phonePublished: guessPhoneWithin(text),
-        emailSources: [...collectHrefEmails($, html), text],
+        emailSources: [...collectHrefEmails($, html), emailTextOf($, definition)],
         cloudflareEncoded: collectCfEmails($, html),
         vocabulary: input.vocabulary,
         extractionMethod: 'html_definition_list',

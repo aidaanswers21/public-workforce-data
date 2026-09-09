@@ -15,6 +15,22 @@ different tables. See `DATA_MODEL.md`.
 **Never treat a normalization as truth.** The published title is preserved
 untouched, and every normalization records how it was produced.
 
+## HTML field boundaries and rejected addresses
+
+Generic HTML email extraction separates neighboring elements before decoding addresses.
+This prevents a department label or phone number from being joined onto an address
+when the page has no whitespace between tags. Explicit mailto and email attributes
+remain evidence sources. Split inline formatting that cannot be decoded confidently
+may yield no address; the parser does not guess a missing local part.
+
+Both the preferred export email and the complete email list require active,
+published or decoded-published addresses associated with the assignment's organization
+(or no organization). General inboxes require the corresponding export option.
+Invalid or inactive addresses are excluded, and source and address suppressions
+apply to both fields. When an extraction defect is confirmed, deactivate the bad
+parsed address and classify it as invalid, append an audit event, and preserve
+its original source observations and document evidence.
+
 ## Normalization provenance
 
 `normalizeTitle` runs against a rule set composed from the neutral base plus

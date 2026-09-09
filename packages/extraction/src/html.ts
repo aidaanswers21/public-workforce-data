@@ -14,6 +14,20 @@ export function textOf($: Html, element: AnyNode | cheerio.Cheerio<AnyNode>): st
   const node = isCheerio(element) ? element : $(element);
   const clone = node.clone();
   clone.find('script, style, noscript').remove();
+  clone
+    .find(
+      'address, article, br, dd, div, dl, dt, h1, h2, h3, h4, h5, h6, li, p, section, td, th, a',
+    )
+    .before(' ')
+    .after(' ');
+  return collapseWhitespace(clone.text());
+}
+
+/** Keep neighboring fields from becoming part of a published email address. */
+export function emailTextOf($: Html, element: AnyNode | cheerio.Cheerio<AnyNode>): string {
+  const clone = (isCheerio(element) ? element : $(element)).clone();
+  clone.find('script, style, noscript').remove();
+  clone.find('*').before(' ').after(' ');
   return collapseWhitespace(clone.text());
 }
 
@@ -142,7 +156,7 @@ export function parseTable(
     cells: $(row)
       .find('td, th')
       .toArray()
-      .map((cell) => textOf($, cell)),
+      .map((cell, index) => (columns[index] === 'email' ? emailTextOf($, cell) : textOf($, cell))),
     html: $.html($(row)) ?? '',
     selector: selectorFor($, row),
   }));
