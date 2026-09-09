@@ -75,6 +75,51 @@ describe('collection project control plane', () => {
     expect(batches[0]).toMatchObject({ status: 'completed', completedJobs: 1 });
   });
 
+  it.each([false, true])(
+    'persists a worker failure and releases its lease (retryable=%s)',
+    async (retryable) => {
+      const setup = await fixture({ policy: 'permitted' });
+      const projectId = await setup.projects.create(projectInput());
+      await setup.projects.generateDiscoveryTargets(projectId, 'owner@example.test');
+      const batchId = await setup.projects.createApprovedBatch({
+        projectId,
+        kind: 'discovery',
+        targetLimit: 1,
+        approvedBy: 'owner@example.test',
+        approvalNote: 'Approve one fixture target for failure handling.',
+      });
+      const job = await setup.projects.claimNextJob('worker-one');
+      expect(job).not.toBeNull();
+      await setup.projects.markJobRunning(job!.id, job!.claimToken, null);
+      await setup.projects.failJob({
+        jobId: job!.id,
+        claimToken: job!.claimToken,
+        error: 'target request budget reached; collection is partial',
+        retryable,
+      });
+      const result = await database!.query<{
+        status: string;
+        claim_token: string | null;
+        finished_at: string | null;
+        last_error: string;
+      }>('select status,claim_token,finished_at,last_error from collection_jobs where id=$1', [
+        job!.id,
+      ]);
+      expect(result.rows[0]).toMatchObject({
+        status: retryable ? 'queued' : 'failed',
+        claim_token: null,
+        last_error: 'target request budget reached; collection is partial',
+      });
+      expect(result.rows[0]?.finished_at === null).toBe(retryable);
+      const batch = await database!.query<{ errors_encountered: number; status: string }>(
+        'select errors_encountered,status from collection_batches where id=$1',
+        [batchId],
+      );
+      expect(batch.rows[0]?.errors_encountered).toBe(1);
+      if (!retryable) expect(batch.rows[0]?.status).toBe('completed_with_errors');
+    },
+  );
+
   it('moves unreviewed sources to a policy hold without returning work', async () => {
     const setup = await fixture();
     const projectId = await setup.projects.create(projectInput());

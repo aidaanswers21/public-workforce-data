@@ -89,6 +89,16 @@ shared run and target budgets. Robots retrieval uses its separate cached provide
 it is not included in the content-request count. This differs from legacy batch
 page accounting. A budget stop is a partial result, not complete directory coverage.
 The configured crawler identity is used for robots matching and requests.
+Worker failures persist their terminal or retryable state, clear the claim, count
+the error and release already-discovered directories into the same approved run.
+This includes target-budget exceptions; a database parameter-type conflict must
+not leave these jobs stuck until their leases expire.
+
+During a deployment that corrects extraction quality, pause active projects first.
+A new deployment being live does not prove the previous worker has stopped.
+Confirm the previous instance has stopped (or its full configured shutdown grace
+period has elapsed) before resuming. Keep the original batch, roster, expiry,
+request counters and checkpoints when resuming.
 
 Existing deployments must apply migrations 0020 and 0021 and deploy the updated application
 and worker before using this workflow. Remote migrations and deployment remain
