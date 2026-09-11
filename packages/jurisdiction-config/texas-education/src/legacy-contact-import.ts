@@ -329,7 +329,7 @@ export function prepareLegacyContact(
   };
 }
 
-function isApprovedHost(hostname: string, approvedDomains: ReadonlySet<string>): boolean {
+export function isApprovedHost(hostname: string, approvedDomains: ReadonlySet<string>): boolean {
   const host = hostname
     .toLowerCase()
     .replace(/^www\./, '')

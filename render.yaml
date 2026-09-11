@@ -60,6 +60,8 @@ services:
         value: '5000'
       - key: WORKER_CONCURRENCY
         value: '1'
+      - key: STARTUP_LEGACY_CONTACT_IMPORT_ARTIFACT_ID
+        sync: false
       - key: CRAWLER_RENDER_BROWSER_DOMAINS
         sync: false
       - key: CRAWLER_RENDER_BROWSER_MAX_SUBRESOURCES
