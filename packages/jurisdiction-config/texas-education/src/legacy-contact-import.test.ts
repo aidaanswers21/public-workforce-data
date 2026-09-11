@@ -153,6 +153,39 @@ describe('Texas legacy accepted-contact import', () => {
       expect(result.record.organizationId).toBe('wylie-taylor-high');
   });
 
+  it('does not treat a shared parent host as proof of a tenant domain', () => {
+    const ambiguous = new TexasEducationOrganizationIndex([
+      {
+        organizationId: 'tenant-school',
+        districtName: 'Example ISD',
+        schoolName: 'Example H S',
+        primaryDomains: ['district.vendor.com'],
+      },
+      {
+        organizationId: 'other-school',
+        districtName: 'Example ISD',
+        schoolName: 'Example H S',
+        primaryDomains: ['other.example'],
+      },
+    ]);
+    const result = prepareLegacyContact(
+      {
+        ...row,
+        district: 'Example Isd',
+        school: 'Example H S',
+        email: 'teacher@vendor.com',
+        directory_url: 'https://vendor.com/staff',
+      },
+      ambiguous,
+      'batch-2',
+      1,
+    );
+    expect(result).toEqual({
+      status: 'quarantined',
+      reason: 'Texas district and school match is ambiguous',
+    });
+  });
+
   it('requires a checksummed Texas manifest', () => {
     expect(
       validateLegacyContactManifest({
