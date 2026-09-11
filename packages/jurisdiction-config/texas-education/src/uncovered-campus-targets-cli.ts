@@ -118,8 +118,22 @@ async function verifyAndCountArtifactRecords(
     });
     if (hash.digest('hex') !== file.sha256.toLowerCase())
       throw new Error(`manifest sha256 does not match input: ${path}`);
-    for await (const { line } of streamLegacyContactLines(path))
-      if (line.trim().length > 0) count += 1;
+    const exclusions = new Map((file.exclusions ?? []).map((value) => [value.lineNumber, value]));
+    const exclusionsSeen = new Set<number>();
+    for await (const { lineNumber, line } of streamLegacyContactLines(path)) {
+      if (line.trim().length === 0) continue;
+      const exclusion = exclusions.get(lineNumber);
+      if (exclusion !== undefined) {
+        const lineSha256 = createHash('sha256').update(line).digest('hex');
+        if (lineSha256 !== exclusion.lineSha256.toLowerCase())
+          throw new Error(`manifest exclusion sha256 does not match ${file.path}:${lineNumber}`);
+        exclusionsSeen.add(lineNumber);
+        continue;
+      }
+      count += 1;
+    }
+    if (exclusionsSeen.size !== exclusions.size)
+      throw new Error(`manifest artifact is missing a declared exclusion in ${file.path}`);
   }
   if (count < 1) throw new Error('manifest artifact contains no records');
   return count;

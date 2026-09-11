@@ -24,16 +24,21 @@ from openpyxl import load_workbook
 
 APPROVED_WORKBOOK_SHA256 = "99618834a0664ff63af63e757eb1537076799e8109a076da3696e58875be5510"
 
-EMAIL_RE = re.compile(r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$", re.I)
+EMAIL_LOCAL_RE = re.compile(r"^[A-Z0-9!#$%&'*+/=?^_`{|}~.-]+$", re.I)
+EMAIL_DOMAIN_RE = re.compile(
+    r"^(?:[A-Z0-9](?:[A-Z0-9-]*[A-Z0-9])?\.)+[A-Z]{2,}$",
+    re.I,
+)
 NAME_TOKEN_RE = re.compile(r"[^\W\d_]+(?:[-'][^\W\d_]+)*", re.UNICODE)
 CONSUMER_DOMAINS = frozenset(
     {
         "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "rocketmail.com",
         "hotmail.com", "outlook.com", "live.com", "msn.com", "icloud.com", "me.com",
-        "mac.com", "aol.com", "proton.me", "protonmail.com", "pm.me", "gmx.com",
-        "gmx.net", "mail.com", "zoho.com", "fastmail.com", "hey.com", "tutanota.com",
-        "tuta.com", "comcast.net", "sbcglobal.net", "att.net", "bellsouth.net",
-        "charter.net", "cox.net", "spectrum.net", "verizon.net", "earthlink.net",
+        "mac.com", "aol.com", "aim.com", "proton.me", "protonmail.com", "pm.me",
+        "gmx.com", "gmx.net", "mail.com", "zoho.com", "yandex.com", "fastmail.com",
+        "comcast.net", "sbcglobal.net", "att.net", "bellsouth.net", "charter.net",
+        "cox.net", "verizon.net", "earthlink.net", "juno.com", "roadrunner.com",
+        "optonline.net", "windstream.net", "frontier.com", "me.co", "inbox.com",
     }
 )
 GENERIC_NAME_TOKENS = frozenset(
@@ -138,9 +143,25 @@ def name_reason(value: str) -> str | None:
 
 def email_reason(value: str) -> str | None:
     e = email_key(value)
-    if not EMAIL_RE.fullmatch(e):
+    if not e or len(e) > 254:
         return "invalid_email"
-    domain = e.rsplit("@", 1)[1]
+    parts = e.split("@")
+    if len(parts) != 2:
+        return "invalid_email"
+    local, domain = parts
+    if (
+        not local
+        or len(local) > 64
+        or not domain
+        or local.startswith(".")
+        or local.endswith(".")
+        or ".." in local
+        or EMAIL_LOCAL_RE.fullmatch(local) is None
+        or EMAIL_DOMAIN_RE.fullmatch(domain) is None
+        or ".." in domain
+        or domain.startswith("-")
+    ):
+        return "invalid_email"
     if domain in CONSUMER_DOMAINS:
         return "consumer_email_domain"
     return None
@@ -460,6 +481,9 @@ def main():
         "counts": {
             "input_rows": sum(input_counts.values()),
             "accepted_rows": len(accepted),
+            "immutable_artifact_rows": len(accepted),
+            "production_exclusions": 0,
+            "production_importable_rows": len(accepted),
             "quarantine_rows": len(quarantine),
             "accepted_distinct_emails": len(emails),
             "accepted_campuses": len(campuses),

@@ -358,9 +358,17 @@ describe('Texas legacy contact persistence', () => {
         email: 'jordan.rivera@killeenisd.org',
         canonical_source_row: 18,
       };
+      const excludedRaw = {
+        ...raw,
+        record_id: 'fixture-record-invalid',
+        full_name: 'Invalid Address',
+        email: 'invalid.@killeenisd.org',
+        canonical_source_row: 19,
+      };
+      const excludedLine = JSON.stringify(excludedRaw);
       await fs.writeFile(
         artifactPath,
-        gzipSync(`${JSON.stringify(raw)}\n${JSON.stringify(secondRaw)}\n`),
+        gzipSync(`${JSON.stringify(raw)}\n${JSON.stringify(secondRaw)}\n${excludedLine}\n`),
       );
       const partialArtifactBytes = await fs.readFile(artifactPath);
       const partialArtifactSha256 = createHash('sha256').update(partialArtifactBytes).digest('hex');
@@ -370,6 +378,13 @@ describe('Texas legacy contact persistence', () => {
           path: 'accepted_contacts.jsonl.gz',
           sha256: partialArtifactSha256,
           archiveStorageKey: 'fixtures/accepted_contacts.jsonl.gz',
+          exclusions: [
+            {
+              lineNumber: 3,
+              lineSha256: createHash('sha256').update(excludedLine).digest('hex'),
+              reason: 'email is invalid',
+            },
+          ],
         },
       ];
       await fs.writeFile(manifestPath, `${JSON.stringify(startupManifest)}\n`);

@@ -74,13 +74,27 @@ export async function runStartupLegacyContactImport(options: {
     const sha256 = await sha256File(path);
     if (sha256 !== file.sha256.toLowerCase())
       throw new Error(`manifest sha256 does not match input: ${path}`);
+    const exclusions = new Map((file.exclusions ?? []).map((value) => [value.lineNumber, value]));
+    const exclusionsSeen = new Set<number>();
     for await (const { lineNumber, line } of streamLegacyContactLines(path)) {
       if (line.trim().length === 0) continue;
       const prepared = prepareLine(line, index, manifest, lineNumber, approvedDomains);
-      if (prepared.status === 'quarantined')
+      const exclusion = exclusions.get(lineNumber);
+      if (prepared.status === 'quarantined') {
+        if (
+          exclusion !== undefined &&
+          exclusion.reason === prepared.reason &&
+          exclusion.lineSha256.toLowerCase() === sha256Text(line)
+        ) {
+          exclusionsSeen.add(lineNumber);
+          continue;
+        }
         throw new Error(
           `startup import preflight rejected ${file.path}:${lineNumber}: ${prepared.reason}`,
         );
+      }
+      if (exclusion !== undefined)
+        throw new Error(`declared exclusion is no longer rejected: ${file.path}:${lineNumber}`);
       expectedRecords += 1;
       reportProgress(options.onProgress, progressInterval, {
         phase: 'preflight',
@@ -89,6 +103,8 @@ export async function runStartupLegacyContactImport(options: {
         skipped: 0,
       });
     }
+    if (exclusionsSeen.size !== exclusions.size)
+      throw new Error(`startup import did not find every declared exclusion in ${file.path}`);
     verifiedFiles.push({ path, sha256, file });
   }
   if (expectedRecords === 0) throw new Error('startup import bundle contains no accepted records');
@@ -151,8 +167,19 @@ export async function runStartupLegacyContactImport(options: {
         total: expectedRecords,
       });
     };
+    const exclusions = new Map(
+      (verified.file.exclusions ?? []).map((value) => [value.lineNumber, value]),
+    );
     for await (const { lineNumber, line } of streamLegacyContactLines(verified.path)) {
       if (line.trim().length === 0) continue;
+      const exclusion = exclusions.get(lineNumber);
+      if (exclusion !== undefined) {
+        if (exclusion.lineSha256.toLowerCase() !== sha256Text(line))
+          throw new Error(
+            `declared exclusion changed during import at ${verified.file.path}:${lineNumber}`,
+          );
+        continue;
+      }
       const prepared = prepareLine(line, index, manifest, lineNumber, approvedDomains);
       if (prepared.status === 'quarantined')
         throw new Error(
@@ -303,6 +330,10 @@ async function sha256File(path: string): Promise<string> {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
   return hash.digest('hex');
+}
+
+function sha256Text(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 async function runTransaction<T>(
