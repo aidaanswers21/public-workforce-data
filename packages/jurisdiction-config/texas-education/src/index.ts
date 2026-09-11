@@ -1,8 +1,10 @@
 import type { ColumnMapping, JurisdictionConfig } from '@public-workforce/jurisdiction-kit';
 
 export * from './legacy-contact-import.js';
+export * from './legacy-contact-startup-import.js';
 export * from './legacy-contact-persistence.js';
 export * from './staff-directory-export.js';
+export * from './uncovered-campus-targets.js';
 
 /**
  * Texas public education, the first jurisdiction onboarded.

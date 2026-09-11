@@ -33,7 +33,7 @@ services:
     branch: main
     autoDeployTrigger: off
     buildCommand: corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm --filter @public-workforce/crawler-worker exec playwright install --with-deps chromium && pnpm build
-    startCommand: pnpm collection:daemon
+    startCommand: pnpm texas:legacy-contacts:startup && pnpm collection:daemon
     maxShutdownDelaySeconds: 300
     envVars:
       - key: NODE_VERSION
@@ -60,6 +60,8 @@ services:
         value: '5000'
       - key: WORKER_CONCURRENCY
         value: '1'
+      - key: STARTUP_LEGACY_CONTACT_IMPORT_ARTIFACT_ID
+        sync: false
       - key: CRAWLER_RENDER_BROWSER_DOMAINS
         sync: false
       - key: CRAWLER_RENDER_BROWSER_MAX_SUBRESOURCES

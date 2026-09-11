@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -22,6 +23,7 @@ import {
   recordLegacyArtifact,
   seedLegacyRevalidationTarget,
 } from './legacy-contact-persistence.js';
+import { runStartupLegacyContactImport } from './legacy-contact-startup-import.js';
 
 const OBSERVED_AT = '2026-09-11T17:05:13.503Z';
 const ARTIFACT_CREATED_AT = '2026-09-11T19:13:35.000Z';
@@ -233,6 +235,78 @@ describe('Texas legacy contact persistence', () => {
       ]);
       expect(await database.count('source_observations', "field = 'context'")).toBe(0);
 
+      const allowlistPath = join(directory, 'approved_domains.txt');
+      const allowlist = 'killeenisd.org\n';
+      await fs.writeFile(allowlistPath, allowlist);
+      const artifactBytes = await fs.readFile(artifactPath);
+      const artifactSha256 = createHash('sha256').update(artifactBytes).digest('hex');
+      const manifestPath = join(directory, 'legacy-contact-manifest.json');
+      await fs.writeFile(
+        manifestPath,
+        `${JSON.stringify({
+          schemaVersion: 1,
+          artifactId: 'fixture-artifact',
+          createdAt: ARTIFACT_CREATED_AT,
+          contentCutoffAt: OBSERVED_AT,
+          jurisdiction: 'texas-education',
+          workbookSha256: 'b'.repeat(64),
+          approvedDomainAllowlistPath: 'approved_domains.txt',
+          approvedDomainAllowlistSha256: createHash('sha256').update(allowlist).digest('hex'),
+          files: [
+            {
+              path: 'accepted_contacts.jsonl.gz',
+              sha256: artifactSha256,
+              archiveStorageKey: 'fixtures/accepted_contacts.jsonl.gz',
+            },
+          ],
+        })}\n`,
+      );
+      await expect(
+        runStartupLegacyContactImport({
+          client: database,
+          manifestPath,
+          requestedArtifactId: 'wrong-artifact',
+        }),
+      ).rejects.toThrow('does not match');
+      await expect(
+        runStartupLegacyContactImport({
+          client: database,
+          manifestPath,
+          requestedArtifactId: 'fixture-artifact',
+        }),
+      ).resolves.toEqual({
+        status: 'already_complete',
+        artifactId: 'fixture-artifact',
+        expectedRecords: 1,
+        recordsPresentBefore: 1,
+      });
+      const startupManifest = JSON.parse(await fs.readFile(manifestPath, 'utf8')) as Record<
+        string,
+        unknown
+      >;
+      startupManifest['artifactId'] = 'startup-fixture-artifact';
+      await fs.writeFile(manifestPath, `${JSON.stringify(startupManifest)}\n`);
+      await expect(
+        runStartupLegacyContactImport({
+          client: database,
+          manifestPath,
+          requestedArtifactId: 'startup-fixture-artifact',
+        }),
+      ).resolves.toEqual({
+        status: 'completed',
+        artifactId: 'startup-fixture-artifact',
+        expectedRecords: 1,
+        recordsPresentBefore: 0,
+      });
+      await expect(
+        runStartupLegacyContactImport({
+          client: database,
+          manifestPath,
+          requestedArtifactId: 'startup-fixture-artifact',
+        }),
+      ).resolves.toMatchObject({ status: 'already_complete', recordsPresentBefore: 1 });
+      expect(await database.count('source_observations', "field = 'context'")).toBe(0);
+
       await new ExportPurposeRepository(database).approve({
         code: PURPOSE,
         description: 'Verify legacy fixture export behavior.',
@@ -276,6 +350,91 @@ describe('Texas legacy contact persistence', () => {
           sectorCode: 'education',
         }),
       ).toHaveLength(0);
+
+      const secondRaw = {
+        ...raw,
+        record_id: 'fixture-record-2',
+        full_name: 'Jordan Rivera',
+        email: 'jordan.rivera@killeenisd.org',
+        canonical_source_row: 18,
+      };
+      await fs.writeFile(
+        artifactPath,
+        gzipSync(`${JSON.stringify(raw)}\n${JSON.stringify(secondRaw)}\n`),
+      );
+      const partialArtifactBytes = await fs.readFile(artifactPath);
+      const partialArtifactSha256 = createHash('sha256').update(partialArtifactBytes).digest('hex');
+      startupManifest['artifactId'] = 'partial-fixture-artifact';
+      startupManifest['files'] = [
+        {
+          path: 'accepted_contacts.jsonl.gz',
+          sha256: partialArtifactSha256,
+          archiveStorageKey: 'fixtures/accepted_contacts.jsonl.gz',
+        },
+      ];
+      await fs.writeFile(manifestPath, `${JSON.stringify(startupManifest)}\n`);
+      const partialIndex = new TexasEducationOrganizationIndex([
+        {
+          organizationId: school.id,
+          districtName: 'Killeen Independent School District',
+          schoolName: 'Alice W Douse Elementary School',
+        },
+      ]);
+      const firstPartial = prepareLegacyContact(
+        raw,
+        partialIndex,
+        'partial-fixture-artifact',
+        1,
+        new Set(['killeenisd.org']),
+      );
+      if (firstPartial.status !== 'accepted') throw new Error(firstPartial.reason);
+      const partialArtifact = await recordLegacyArtifact(
+        database,
+        {
+          path: 'accepted_contacts.jsonl.gz',
+          sha256: partialArtifactSha256,
+          archiveStorageKey: 'fixtures/accepted_contacts.jsonl.gz',
+        },
+        'partial-fixture-artifact',
+        partialArtifactSha256,
+        ARTIFACT_CREATED_AT,
+      );
+      await database.transaction((tx) =>
+        importPreparedLegacyContact(tx, firstPartial.record, partialArtifact, {
+          artifactId: 'partial-fixture-artifact',
+          archiveReference: 'fixtures/accepted_contacts.jsonl.gz',
+          sha256: partialArtifactSha256,
+        }),
+      );
+      const progress: Array<{
+        phase: string;
+        processed: number;
+        imported: number;
+        skipped: number;
+      }> = [];
+      await expect(
+        runStartupLegacyContactImport({
+          client: database,
+          manifestPath,
+          requestedArtifactId: 'partial-fixture-artifact',
+          batchSize: 1,
+          progressInterval: 1,
+          onProgress: (event) => progress.push(event),
+        }),
+      ).resolves.toEqual({
+        status: 'completed',
+        artifactId: 'partial-fixture-artifact',
+        expectedRecords: 2,
+        recordsPresentBefore: 1,
+      });
+      expect(progress).toContainEqual({
+        phase: 'import',
+        processed: 2,
+        imported: 1,
+        skipped: 1,
+        total: 2,
+      });
+      expect(await database.count('source_observations', "field = 'context'")).toBe(0);
     } finally {
       await fs.rm(directory, { recursive: true, force: true });
     }

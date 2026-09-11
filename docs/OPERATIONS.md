@@ -386,6 +386,25 @@ The manifest also binds the originating workbook checksum and a deterministic
 approved-domain allowlist checksum. Import refuses a directory URL outside that
 allowlist, even when the district and school names match exactly.
 
+For a one-time hosted import when the worker has no interactive shell, set the
+collector's non-secret `STARTUP_LEGACY_CONTACT_IMPORT_ARTIFACT_ID` environment
+variable to the manifest's exact `artifactId`. The worker start command runs the
+startup importer before the crawl daemon. An absent or empty value disables it;
+boolean-like values and IDs for any other artifact fail closed.
+
+The startup path verifies the manifest, accepted artifact hash, approved-domain
+allowlist hash, durable archive reference, every row, and every exact
+organization match before its first write. It does not create quarantine or
+checkpoint files. Instead, it counts the artifact's append-only
+`legacy_artifact_id` observations in PostgreSQL. A matching count skips an
+already completed import, while an interrupted import safely replays
+idempotent batches and verifies the same database count before the crawler may
+start. Partial restarts load only the completed record keys for that exact
+artifact and skip them instead of replaying their writes. The worker logs
+aggregate preflight and import progress without names, emails, or other row
+content. After a successful import, remove the environment variable and redeploy
+so ordinary restarts do not spend time re-reading the bundle.
+
 The bundle's organization website, campus location label, city, county, state,
 and grade range fields come from the exact matched row of that approved
 workbook. `location_published` is the canonical campus name because the source
@@ -408,3 +427,23 @@ python data/texas/legacy-contacts/build_import_bundle.py \
   --output data/texas/legacy-contacts \
   --artifact-created-at 2026-09-11T19:29:39Z
 ```
+
+After the accepted artifact is imported, prepare the remaining school websites
+inside an existing Texas education collection project with a dry run first:
+
+```bash
+DATABASE_URL=... pnpm texas:seed-uncovered-campuses -- \
+  data/texas/legacy-contacts/legacy-contact-manifest.json \
+  <collection-project-uuid>
+```
+
+The plan counts schools as covered only when that school has a person carrying
+this manifest's exact `legacy_artifact_id` observation. Before applying, it
+verifies the checksummed artifact files and refuses to seed unless PostgreSQL
+contains exactly the same number of observations for that artifact. It rejects missing or malformed
+websites and every hostname outside the checksummed workbook allowlist. Applying
+the plan requires `--apply --actor <operator>` and creates only idempotent
+`pending` organization-site targets with the website source document as
+provenance. It does not create or approve a batch, approve a source policy,
+enqueue work, start a worker, or contact a website. Review the resulting source
+manifest and use the normal finite-run approval screen before collection.
