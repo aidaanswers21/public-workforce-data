@@ -34,10 +34,11 @@ CONSUMER_DOMAINS = frozenset(
     {
         "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "rocketmail.com",
         "hotmail.com", "outlook.com", "live.com", "msn.com", "icloud.com", "me.com",
-        "mac.com", "aol.com", "proton.me", "protonmail.com", "pm.me", "gmx.com",
-        "gmx.net", "mail.com", "zoho.com", "fastmail.com", "hey.com", "tutanota.com",
-        "tuta.com", "comcast.net", "sbcglobal.net", "att.net", "bellsouth.net",
-        "charter.net", "cox.net", "spectrum.net", "verizon.net", "earthlink.net",
+        "mac.com", "aol.com", "aim.com", "proton.me", "protonmail.com", "pm.me",
+        "gmx.com", "gmx.net", "mail.com", "zoho.com", "yandex.com", "fastmail.com",
+        "comcast.net", "sbcglobal.net", "att.net", "bellsouth.net", "charter.net",
+        "cox.net", "verizon.net", "earthlink.net", "juno.com", "roadrunner.com",
+        "optonline.net", "windstream.net", "frontier.com", "me.co", "inbox.com",
     }
 )
 GENERIC_NAME_TOKENS = frozenset(
