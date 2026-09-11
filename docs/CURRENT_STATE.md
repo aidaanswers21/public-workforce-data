@@ -83,9 +83,12 @@ production crawl run.
   The project builder can narrow a national configuration by state. Federal and
   state general-government rows remain held until their authoritative hierarchy
   or source is reconciled; the console does not present those as ready.
-- **Optional browser rendering is implemented.** Set `CRAWLER_RENDER_BROWSER=true`
-  after installing Chromium. All browser requests use the guarded transport.
-  See `STATEWIDE_COLLECTION.md`.
+- **Optional browser rendering is implemented for targeted Render worker jobs.**
+  Its build installs Chromium, but rendering remains off unless
+  `CRAWLER_RENDER_BROWSER_DOMAINS` explicitly selects approved exact hostnames.
+  `WORKER_CONCURRENCY=1` limits browser memory pressure. The queue and checkpoints
+  remain PostgreSQL-backed; no Redis service is required. See
+  `STATEWIDE_COLLECTION.md` for transport boundaries and the cost caveat.
 - **No AI extraction.** The contract for it is in `BACKLOG.md`, unimplemented.
 - **No public or multi-user admin application.** The browser console is a
   private single-operator service with its own hashed-password login. It can

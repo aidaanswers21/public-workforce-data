@@ -1,11 +1,17 @@
 import { chromium, type Browser } from 'playwright';
 import { contentHash } from '@public-workforce/core';
-import type {
-  Fetcher,
-  FetchRequest,
-  FetchOutcome,
-  FetchFailure,
-} from '@public-workforce/shared-types';
+import type { Fetcher, FetchRequest, FetchOutcome } from '@public-workforce/shared-types';
+import type { Route } from 'playwright';
+
+export interface BrowserFetcherLimits {
+  maxSubresourceRequests: number;
+  renderDeadlineMs: number;
+}
+
+const DEFAULT_LIMITS: BrowserFetcherLimits = {
+  maxSubresourceRequests: 50,
+  renderDeadlineMs: 20_000,
+};
 
 /** Render public content through the same guarded, archived transport as ordinary requests. */
 export class BrowserFetcher implements Fetcher {
@@ -14,7 +20,12 @@ export class BrowserFetcher implements Fetcher {
   constructor(
     private readonly transport: Fetcher,
     private readonly userAgent: string,
-  ) {}
+    private readonly resourceTransport: Fetcher = transport,
+    private readonly limits: BrowserFetcherLimits = DEFAULT_LIMITS,
+  ) {
+    assertPositiveInteger(limits.maxSubresourceRequests, 'maxSubresourceRequests');
+    assertPositiveInteger(limits.renderDeadlineMs, 'renderDeadlineMs');
+  }
 
   async fetch(request: FetchRequest): Promise<FetchOutcome> {
     const initial = await this.transport.fetch(request);
@@ -32,14 +43,33 @@ export class BrowserFetcher implements Fetcher {
       serviceWorkers: 'block',
       acceptDownloads: false,
     });
-    let failure: FetchFailure | null = null;
-    const transportState: { error?: Error } = {};
+    const deadlineAt = Date.now() + this.limits.renderDeadlineMs;
+    let deadlineExpired = false;
+    let acceptingSubresources = true;
+    let subresourceRequests = 0;
     const pending = new Set<Promise<void>>();
+    const activeRoutes = new Set<Route>();
+    let expireDeadline: (() => void) | undefined;
+    const deadlineReached = new Promise<void>((resolve) => {
+      expireDeadline = resolve;
+    });
+    const deadlineTimer = setTimeout(() => {
+      deadlineExpired = true;
+      for (const route of activeRoutes) void route.abort().catch(() => undefined);
+      expireDeadline?.();
+    }, this.limits.renderDeadlineMs);
     try {
       await context.routeWebSocket('**', (route) => route.close());
       await context.route('**/*', async (route) => {
+        activeRoutes.add(route);
         const operation = (async () => {
           const incoming = route.request();
+          const isInitialNavigation =
+            incoming.url() === initial.page.finalUrl && incoming.isNavigationRequest();
+          if (deadlineExpired || Date.now() >= deadlineAt) {
+            await route.abort();
+            return;
+          }
           if (['image', 'font', 'media', 'websocket'].includes(incoming.resourceType())) {
             await route.abort();
             return;
@@ -49,18 +79,30 @@ export class BrowserFetcher implements Fetcher {
             await route.abort();
             return;
           }
-          const response =
-            incoming.url() === initial.page.finalUrl && incoming.isNavigationRequest()
-              ? initial
-              : await this.transport.fetch({
+          if (
+            !isInitialNavigation &&
+            (!acceptingSubresources || subresourceRequests >= this.limits.maxSubresourceRequests)
+          ) {
+            await route.abort();
+            return;
+          }
+          if (!isInitialNavigation) subresourceRequests += 1;
+          const response = isInitialNavigation
+            ? initial
+            : await beforeDeadline(
+                this.resourceTransport.fetch({
                   url: incoming.url(),
                   method,
                   ...(incoming.postData() === null ? {} : { body: incoming.postData() as string }),
                   headers: { 'content-type': incoming.headers()['content-type'] ?? 'text/plain' },
-                  timeoutMs: request.timeoutMs ?? 20000,
-                });
+                  timeoutMs: Math.min(
+                    request.timeoutMs ?? 20_000,
+                    Math.max(1, deadlineAt - Date.now()),
+                  ),
+                }),
+                deadlineAt,
+              );
           if (!response.ok) {
-            failure = response.failure;
             await route.abort();
             return;
           }
@@ -73,28 +115,47 @@ export class BrowserFetcher implements Fetcher {
         pending.add(operation);
         try {
           await operation;
-        } catch (error) {
-          transportState.error = error instanceof Error ? error : new Error(String(error));
+        } catch {
+          // A refused optional script or API is not permission to fail or widen
+          // the approved top-level page. Aborting leaves missing content visible
+          // to coverage review instead of converting it into a transport error.
           await route.abort().catch(() => undefined);
         } finally {
           pending.delete(operation);
+          activeRoutes.delete(route);
         }
       });
       const page = await context.newPage();
-      await page.goto(initial.page.finalUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: request.timeoutMs ?? 20000,
+      await beforeDeadline(
+        page.goto(initial.page.finalUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: Math.max(1, deadlineAt - Date.now()),
+        }),
+        deadlineAt,
+      ).catch((error: unknown) => {
+        if (!(error instanceof BrowserRenderDeadlineError) && Date.now() < deadlineAt) throw error;
       });
-      await page.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => undefined);
-      await Promise.all([...pending]);
-      if (transportState.error !== undefined) throw transportState.error;
-      if (failure !== null) return { ok: false, failure };
-      const body = await page.content();
+      if (!deadlineExpired) {
+        await beforeDeadline(
+          page.waitForLoadState('networkidle', {
+            timeout: Math.min(5000, Math.max(1, deadlineAt - Date.now())),
+          }),
+          deadlineAt,
+        ).catch(() => undefined);
+      }
+      await Promise.race([Promise.allSettled([...pending]), deadlineReached]);
+      acceptingSubresources = false;
+      for (const route of activeRoutes) await route.abort().catch(() => undefined);
+      const body = deadlineExpired
+        ? initial.page.body
+        : await beforeDeadline(page.content(), deadlineAt).catch(() => initial.page.body);
       return {
         ok: true,
         page: { ...initial.page, body, contentHash: contentHash(body), storageKey: null },
       };
     } finally {
+      clearTimeout(deadlineTimer);
+      for (const route of activeRoutes) await route.abort().catch(() => undefined);
       await context.close();
     }
   }
@@ -104,4 +165,30 @@ export class BrowserFetcher implements Fetcher {
       this.browser = null;
     }
   }
+}
+
+class BrowserRenderDeadlineError extends Error {
+  constructor() {
+    super('browser render deadline reached');
+  }
+}
+
+async function beforeDeadline<T>(operation: Promise<T>, deadlineAt: number): Promise<T> {
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) throw new BrowserRenderDeadlineError();
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new BrowserRenderDeadlineError()), remaining);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function assertPositiveInteger(value: number, name: string): void {
+  if (!Number.isInteger(value) || value < 1) throw new Error(`${name} must be a positive integer`);
 }

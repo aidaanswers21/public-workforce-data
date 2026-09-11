@@ -5,6 +5,7 @@ import {
   nowTimestamp,
   type Clock,
   type ExportResult,
+  type PeopleExportFormat,
 } from '@public-workforce/core';
 import type { Timestamp, Uuid } from '@public-workforce/shared-types';
 import type { SqlClient } from '../client.js';
@@ -12,7 +13,9 @@ import { ComplianceRepository } from './compliance.js';
 import { QueryRepository, type ExportFilters } from './queries.js';
 
 export interface BuildExportInput {
-  format?: 'full' | 'contacts';
+  format?: PeopleExportFormat;
+  roleCategoryFlagCode?: string;
+  roleCategoryFlagHeader?: string;
   name: string;
   requestedBy: string;
   /**
@@ -67,7 +70,13 @@ export class ExportRepository {
         input.name,
         input.requestedBy,
         input.purpose,
-        JSON.stringify({ ...input.filters, snapshotAt: snapshot, format: input.format ?? 'full' }),
+        JSON.stringify({
+          ...input.filters,
+          snapshotAt: snapshot,
+          format: input.format ?? 'full',
+          roleCategoryFlagCode: input.roleCategoryFlagCode,
+          roleCategoryFlagHeader: input.roleCategoryFlagHeader,
+        }),
       ],
     );
     const exportId = created.rows[0]?.id;
@@ -99,6 +108,8 @@ export class ExportRepository {
         const result = exportPeopleCsv({
           rows,
           format: input.format ?? 'full',
+          roleCategoryFlagCode: input.roleCategoryFlagCode,
+          roleCategoryFlagHeader: input.roleCategoryFlagHeader,
           seenContactKeys,
           suppression,
           at: nowTimestamp(this.clock),
@@ -152,7 +163,12 @@ export class ExportRepository {
         input.name,
         input.requestedBy,
         input.purpose,
-        JSON.stringify({ ...input.filters, format: input.format ?? 'full' }),
+        JSON.stringify({
+          ...input.filters,
+          format: input.format ?? 'full',
+          roleCategoryFlagCode: input.roleCategoryFlagCode,
+          roleCategoryFlagHeader: input.roleCategoryFlagHeader,
+        }),
       ],
     );
     const exportId = created.rows[0]?.id;
@@ -176,6 +192,8 @@ export class ExportRepository {
         at: checkedAt,
         purpose: input.purpose,
         format: input.format ?? 'full',
+        roleCategoryFlagCode: input.roleCategoryFlagCode,
+        roleCategoryFlagHeader: input.roleCategoryFlagHeader,
       });
 
       await this.client.query(

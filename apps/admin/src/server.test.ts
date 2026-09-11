@@ -29,6 +29,10 @@ const template = {
     },
   ],
   notes: [],
+  exportPresentation: {
+    roleCategoryFlagCode: 'fixture_role',
+    roleCategoryFlagHeader: 'is_fixture_role',
+  },
 };
 const nationalTemplate = {
   ...template,
@@ -675,6 +679,7 @@ describe('local admin server', () => {
       body: new URLSearchParams({
         projectId,
         purpose: 'pilot-review',
+        format: 'staff_directory',
         limit: '100',
         exportConfirmed: 'yes',
       }),
@@ -683,7 +688,10 @@ describe('local admin server', () => {
     expect(download.headers.get('content-type')).toContain('text/csv');
     expect(download.headers.get('content-disposition')).toContain('export-fixture');
     expect(download.headers.get('x-export-id')).toMatch(/^[0-9a-f-]{36}$/);
-    expect(await download.text()).toContain('full_name_published');
+    const csv = await download.text();
+    expect(csv).toContain('full_name_published');
+    expect(csv).toContain('is_fixture_role');
+    expect(csv).not.toContain('role_category_flag');
     expect(await databases[0]?.count('exports', "status = 'completed'")).toBe(1);
   });
 

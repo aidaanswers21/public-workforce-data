@@ -142,6 +142,10 @@ export interface CollectionProjectTemplate {
   }[];
   notes: readonly string[];
   defaultMaxPagesPerTarget?: number;
+  exportPresentation?: {
+    roleCategoryFlagCode: string;
+    roleCategoryFlagHeader: string;
+  };
 }
 
 interface DashboardData {
@@ -379,6 +383,9 @@ export function createAdminServer(options: AdminServerOptions): Server {
           return;
         }
         const purpose = form.get('purpose') ?? '';
+        const exportPresentation = projectTemplates.find(
+          (template) => template.key === project.jurisdictionConfigKey,
+        )?.exportPresentation;
         const limit = formInteger(form, 'limit', 50_000);
         if (limit < 1 || limit > 50_000) {
           redirect(response, '/exports?message=Export+limit+must+be+between+1+and+50000');
@@ -392,7 +399,14 @@ export function createAdminServer(options: AdminServerOptions): Server {
                 name: `${project.name} ${now().toISOString()}`,
                 requestedBy: authenticatedEmail,
                 purpose,
-                format: form.get('format') === 'contacts' ? 'contacts' : 'full',
+                roleCategoryFlagCode: exportPresentation?.roleCategoryFlagCode,
+                roleCategoryFlagHeader: exportPresentation?.roleCategoryFlagHeader,
+                format:
+                  form.get('format') === 'contacts'
+                    ? 'contacts'
+                    : form.get('format') === 'staff_directory'
+                      ? 'staff_directory'
+                      : 'full',
                 filters: {
                   collectionProjectId: projectId,
                   includeGeneralInboxes: form.get('includeGeneralInboxes') === 'yes',
@@ -439,7 +453,14 @@ export function createAdminServer(options: AdminServerOptions): Server {
             name: `${project.name} ${now().toISOString()}`,
             requestedBy: authenticatedEmail,
             purpose,
-            format: form.get('format') === 'contacts' ? 'contacts' : 'full',
+            roleCategoryFlagCode: exportPresentation?.roleCategoryFlagCode,
+            roleCategoryFlagHeader: exportPresentation?.roleCategoryFlagHeader,
+            format:
+              form.get('format') === 'contacts'
+                ? 'contacts'
+                : form.get('format') === 'staff_directory'
+                  ? 'staff_directory'
+                  : 'full',
             filters: {
               collectionProjectId: projectId,
               includeGeneralInboxes: form.get('includeGeneralInboxes') === 'yes',
@@ -1764,7 +1785,7 @@ function renderExports(
       ${message.length === 0 ? '' : `<div class="flash" role="status">${escapeHtml(message)}</div>`}
       <div class="project-grid">
         <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Approval</p><h2>Approve an export purpose</h2></div></div><form class="panel-body release-form" method="post" action="/export-purposes"><label for="purposeCode">Purpose code</label><input id="purposeCode" name="code" pattern="[a-z][a-z0-9_-]{1,63}" placeholder="internal-review" required><label for="purposeDescription">Specific permitted use</label><textarea id="purposeDescription" name="description" rows="3" minlength="8" required placeholder="Internal review of the selected collection pilot"></textarea><label class="check-label"><input type="checkbox" name="approvalConfirmed" value="yes" required><span>I approve this named use of exported records.</span></label><button type="submit">Approve export purpose</button></form></section>
-        <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Download</p><h2>Create a governed CSV</h2></div></div><form class="panel-body release-form" method="post" action="/exports/download"><label class="check-label"><input type="checkbox" name="downloadAll" value="yes" checked><span>Download the complete collection, including all pages</span></label><label for="exportFormat">Columns</label><select id="exportFormat" name="format"><option value="contacts" selected>First name, last name, email, organization, source page</option><option value="full">Full contact details and provenance</option></select><label for="exportProject">Collection project</label><select id="exportProject" name="projectId" required><option value="">Choose a project</option>${projectOptions}</select><label for="exportPurpose">Approved purpose</label><select id="exportPurpose" name="purpose" required><option value="">Choose an approved purpose</option>${purposeOptions}</select><label for="exportLimit">Maximum rows</label><input id="exportLimit" name="limit" type="number" min="1" max="50000" value="50000" required><label class="check-label"><input type="checkbox" name="includeGeneralInboxes" value="yes"><span>Include published general office inboxes.</span></label><label class="check-label"><input type="checkbox" name="exportConfirmed" value="yes" required><span>I approve this exact export for the selected purpose.</span></label><button type="submit" ${canExport ? '' : 'disabled'}>Download suppression-checked CSV</button><p class="field-help">Inferred candidates remain separate from published addresses. This repository does not send email.</p></form></section>
+        <section class="panel action-panel"><div class="panel-heading"><div><p class="eyebrow">Download</p><h2>Create a governed CSV</h2></div></div><form class="panel-body release-form" method="post" action="/exports/download"><label class="check-label"><input type="checkbox" name="downloadAll" value="yes" checked><span>Download the complete collection, including all pages</span></label><label for="exportFormat">Columns</label><select id="exportFormat" name="format"><option value="staff_directory" selected>One row per published email, with staff and source fields</option><option value="contacts">First name, last name, email, organization, source page</option><option value="full">Full contact details and provenance</option></select><label for="exportProject">Collection project</label><select id="exportProject" name="projectId" required><option value="">Choose a project</option>${projectOptions}</select><label for="exportPurpose">Approved purpose</label><select id="exportPurpose" name="purpose" required><option value="">Choose an approved purpose</option>${purposeOptions}</select><label for="exportLimit">Maximum rows</label><input id="exportLimit" name="limit" type="number" min="1" max="50000" value="50000" required><label class="check-label"><input type="checkbox" name="includeGeneralInboxes" value="yes"><span>Include published general office inboxes.</span></label><label class="check-label"><input type="checkbox" name="exportConfirmed" value="yes" required><span>I approve this exact export for the selected purpose.</span></label><button type="submit" ${canExport ? '' : 'disabled'}>Download suppression-checked CSV</button><p class="field-help">The staff-directory format contains published addresses only. Full exports keep inferred candidates separate. This repository does not send email.</p></form></section>
       </div>
       <section class="panel project-section"><div class="panel-heading"><div><p class="eyebrow">Controlled uses</p><h2>Active export purposes</h2></div><span class="summary-chip">${purposes.length}</span></div><div class="table-scroll"><table><thead><tr><th>Purpose</th><th>Owner</th><th>Approval</th></tr></thead><tbody>${purposeRows.length > 0 ? purposeRows : '<tr><td class="empty" colspan="3">No export purpose has been approved.</td></tr>'}</tbody></table></div></section>
     </main>${appFooter(hosted)}`,
@@ -2353,6 +2374,7 @@ async function main(): Promise<void> {
       officialSources: config.officialSources,
       notes: config.notes,
       defaultMaxPagesPerTarget: config.crawlPolicy.maxPagesPerRun,
+      exportPresentation: config.exportPresentation,
     }));
   const server = createAdminServer({
     database,

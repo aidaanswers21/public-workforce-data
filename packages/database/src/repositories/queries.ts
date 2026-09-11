@@ -229,20 +229,93 @@ export class QueryRepository {
          emp.id as assignment_id, p.id as person_id, p.first_name, p.middle_name, p.last_name, p.full_name_published,
          p.status as person_status,
          emp.title_published, emp.title_normalized, emp.role_category_code, emp.job_family_code,
-         emp.seniority_code, emp.department_published, emp.assignment_status,
+         emp.seniority_code, emp.specialty, emp.department_published, emp.assignment_status,
          emp.extraction_method_code, emp.confidence, emp.first_seen_at, emp.last_seen_at, emp.crawl_run_id,
          emp.source_document_id,
          unit.name as unit_name,
-         (select coalesce(jsonb_agg(jsonb_build_object('value',published.address,'sourceDocumentId',published.source_document_id,'sourceUrl',email_source.url) order by published.id),'[]'::jsonb)
-          from email_addresses published join source_documents email_source on email_source.id=published.source_document_id where published.person_id=p.id and published.status='active'
+         (select coalesce(jsonb_agg(jsonb_build_object(
+            'value',published.address,
+            'classification',published.classification,
+            'validationStatus',published.validation_status,
+            'obfuscationKind',published.obfuscation_kind_code,
+            'sourceDocumentId',coalesce(email_evidence.source_document_id,published.source_document_id),
+            'sourceUrl',coalesce(
+              (select value_normalized from source_observations metadata
+               where metadata.source_document_version_id=email_evidence.source_document_version_id
+                 and metadata.record_key=email_evidence.record_key and metadata.field='source_page_url'
+               order by metadata.observed_at desc limit 1),
+              email_evidence.url,email_source.url),
+            'sourceTypeCode',coalesce(email_evidence.source_type_code,email_source.source_type_code),
+            'sourceVersion',email_evidence.version,
+            'sourceRetrievedAt',email_evidence.retrieved_at,
+            'firstSeenAt',published.first_seen_at,
+            'lastSeenAt',published.last_seen_at,
+            'crawlRunId',published.crawl_run_id,
+            'extractionMethod',published.extraction_method_code,
+            'confidence',published.confidence,
+            'identityConflict',(select count(distinct conflict.person_id)>1 from email_addresses conflict
+              where conflict.organization_id is not distinct from published.organization_id
+                and conflict.address_normalized=published.address_normalized and conflict.status='active'),
+            'gradeRangePublished',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='grade_range_published' limit 1),
+            'organizationWebsitePublished',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='organization_website_published' limit 1),
+            'locationPublished',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='location_published' limit 1),
+            'cityPublished',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='city_published' limit 1),
+            'countyPublished',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='county_published' limit 1),
+            'statePublished',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='state_published' limit 1),
+            'emailSourceDescription',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='email_source_description' limit 1),
+            'sourceDataset',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='source_dataset' limit 1),
+            'sourceFile',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='source_file' limit 1),
+            'sourceLine',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='source_line' limit 1),
+            'qaIdentityMethod',(select value_normalized from source_observations metadata
+              where metadata.source_document_version_id=email_evidence.source_document_version_id
+                and metadata.record_key=email_evidence.record_key and metadata.field='qa_identity_method' limit 1)
+          ) order by published.id),'[]'::jsonb)
+          from email_addresses published
+          join source_documents email_source on email_source.id=published.source_document_id
+          left join lateral (
+            select email_observation.record_key, email_observation.source_document_version_id,
+              evidence_version.source_document_id, evidence_version.version,
+              evidence_version.retrieved_at, evidence_source.url, evidence_source.source_type_code
+            from source_observations email_observation
+            join source_document_versions evidence_version
+              on evidence_version.id=email_observation.source_document_version_id
+            join source_documents evidence_source on evidence_source.id=evidence_version.source_document_id
+            where email_observation.entity_type='person'
+              and email_observation.entity_id=published.person_id
+              and email_observation.evidence_class='contact'
+              and email_observation.field like 'email_published:%'
+              and email_observation.value_normalized=published.address_normalized
+            order by email_observation.observed_at desc limit 1
+          ) email_evidence on true
+          where published.person_id=p.id and published.status='active'
             and (published.organization_id is null or published.organization_id=emp.organization_id)
             and published.classification in ('published','decoded_published'${filters.includeGeneralInboxes === true ? ", 'general_inbox'" : ''})
             and ${addressSuppressionFilter('published.address_normalized', 'published.domain')}
-            and not exists(select 1 from active_suppressions ps where ps.scope='source' and ps.source_document_id=published.source_document_id)) as all_published_emails,
+            and not exists(select 1 from active_suppressions ps where ps.scope='source' and ps.source_document_id=coalesce(email_evidence.source_document_id,published.source_document_id))) as all_published_emails,
          (select coalesce(jsonb_agg(jsonb_build_object('value',coalesce(cp.source_value,cp.value),'sourceDocumentId',cp.source_document_id) order by cp.id),'[]'::jsonb)
           from contact_points cp where cp.status='active' and cp.person_id=p.id and (cp.organization_id is null or cp.organization_id=emp.organization_id) and cp.contact_point_type_code='work_phone'
             and not exists(select 1 from active_suppressions ps where ps.scope='source' and ps.source_document_id=cp.source_document_id)) as work_phones,
-         org.id as organization_id, org.name as organization_name,
+         org.id as organization_id, org.name as organization_name, org.website_url as organization_website_url,
          org.organization_type_code, org.government_level_code, org.sector_code, org.jurisdiction_id,
          j.name as jurisdiction_name,
          parent_org.id as parent_organization_id, parent_org.name as parent_organization_name,
@@ -429,11 +502,7 @@ function toExportRow(row: Record<string, unknown>): ExportablePersonRow {
   return {
     personId: row['person_id'] as Uuid,
     assignmentId: row['assignment_id'] as Uuid,
-    publishedEmails: (row['all_published_emails'] ?? []) as {
-      value: string;
-      sourceDocumentId: Uuid;
-      sourceUrl: string;
-    }[],
+    publishedEmails: (row['all_published_emails'] ?? []) as ExportablePersonRow['publishedEmails'],
     workPhones: (row['work_phones'] ?? []) as { value: string; sourceDocumentId: Uuid }[],
     firstName: (row['first_name'] as string | null) ?? null,
     middleName: (row['middle_name'] as string | null) ?? null,
@@ -444,10 +513,12 @@ function toExportRow(row: Record<string, unknown>): ExportablePersonRow {
     roleCategoryCode: (row['role_category_code'] as string | null) ?? 'unknown',
     jobFamilyCode: (row['job_family_code'] as string | null) ?? 'unknown',
     seniorityCode: (row['seniority_code'] as string | null) ?? 'unknown',
+    specialty: (row['specialty'] as string | null) ?? null,
     departmentPublished: (row['department_published'] as string | null) ?? null,
     organizationalUnitName: (row['unit_name'] as string | null) ?? null,
     organizationId: (row['organization_id'] as Uuid | null) ?? null,
     organizationName: (row['organization_name'] as string | null) ?? null,
+    organizationWebsiteUrl: (row['organization_website_url'] as string | null) ?? null,
     organizationTypeCode: (row['organization_type_code'] as string | null) ?? null,
     governmentLevelCode: (row['government_level_code'] as string | null) ?? null,
     sectorCode: (row['sector_code'] as string | null) ?? null,

@@ -90,13 +90,36 @@ Optional browser rendering handles public JavaScript content. Install Chromium:
 pnpm --filter @public-workforce/crawler-worker exec playwright install --with-deps chromium
 ```
 
-Set `CRAWLER_RENDER_BROWSER=true` on the worker to enable it. Browser requests go
-through the same source-policy checks, robots checks, domain scope, serialized
-transport, pacing, request budget and response archive. Service workers and
-WebSockets are disabled. Images, fonts and media are not fetched. The raw response
-and the rendered document are archived separately. Login and challenge pages are
-not bypassed. An unapproved external script/API remains an exception; browser
-rendering does not grant permission to contact new domains.
+Set `CRAWLER_RENDER_BROWSER_DOMAINS` to a comma-separated list of explicitly
+selected approved exact hostnames, such as `directory.district.example.gov`.
+Subdomains must be listed separately; schemes, ports, paths and wildcards are
+rejected. Empty or unset means rendering is off. This is only a transport
+selection. It does not approve the source or expand the job's domain scope.
+
+Browser requests go through the same source-policy checks, robots checks, domain
+scope, serialized transport, pacing and response archive. Only the top-level
+directory page consumes the campus page budget. Optional script and API
+subresources use a separate guarded transport; a disallowed third-party resource
+is aborted without failing the approved main page. Service workers and WebSockets
+are disabled. Images, fonts and media are not fetched. The raw response and the
+rendered document are archived separately. Login and challenge pages are not
+bypassed. Browser rendering does not grant permission to contact new domains.
+
+`CRAWLER_RENDER_BROWSER_MAX_SUBRESOURCES` defaults to 50 attempts per page and
+`CRAWLER_RENDER_BROWSER_DEADLINE_MS` defaults to a 20,000-millisecond browser
+phase. Production accepts maxima of 250 and 60,000 respectively. Requests beyond
+the cap and routes still active at the deadline are aborted. A deadline returns
+the already fetched static page, so one script cannot hold the durable job open
+indefinitely. These browser limits do not change the approved campus page budget.
+
+The Render worker Blueprint performs this Chromium installation during its
+build, exposes the dashboard-managed domain list and fixes
+`WORKER_CONCURRENCY=1`. Chromium increases build time and image size for every
+worker build, but browser memory is used only for matching jobs. Monitor the
+Starter worker for out-of-memory restarts before increasing concurrency. A larger
+paid worker plan may be required for heavier rendered directories. The work
+queue, leases and checkpoints live in PostgreSQL; this deployment does not use
+Redis or Render Key Value.
 
 There are no platform-specific adapters yet. Rendering is not a guarantee that a
 search-only directory can be fully enumerated. Coverage is measured from actual
@@ -111,12 +134,14 @@ checkpoints and ingestion check ownership. An expired or cancelled claim cannot
 start a new request or complete a job. Continue-until-complete waits for temporarily
 unclaimable jobs rather than treating another worker's domain lock as completion.
 
-For full collection runs, each guarded transport attempt, including redirects,
-retries and browser resource requests, is charged before transport against the
-shared run and target budgets. Robots retrieval uses its separate cached provider;
-it is not included in the content-request count. This differs from legacy batch
-page accounting. A budget stop is a partial result, not complete directory coverage.
-The configured crawler identity is used for robots matching and requests.
+For full collection runs, each top-level guarded page transport attempt,
+including redirects and retries, is charged before transport against the shared
+run and target page budgets. Browser script and API subresources are guarded,
+paced and archived but do not consume the campus page allowance. Robots retrieval
+uses its separate cached provider; it is not included in the content-request
+count. This differs from legacy batch page accounting. A budget stop is a partial
+result, not complete directory coverage. The configured crawler identity is used
+for robots matching and requests.
 Worker failures persist their terminal or retryable state, clear the claim, count
 the error and release already-discovered directories into the same approved run.
 This includes target-budget exceptions; a database parameter-type conflict must
@@ -130,8 +155,9 @@ request counters and checkpoints when resuming.
 
 Existing deployments must apply migrations 0020 and 0021 and deploy the updated application
 and worker before using this workflow. Remote migrations and deployment remain
-separate operator actions. Browser-enabled deployments also need Chromium and its
-system libraries. Rollback refuses if new nullable classifications or duplicate
+separate operator actions. The Render Blueprint installs Chromium and its system
+libraries during the worker build. Other browser-enabled deployment environments
+must install them separately. Rollback refuses if new nullable classifications or duplicate
 per-kind jobs cannot fit the previous schema; reconcile or remove only the specific
 new run data under an approved rollback plan before reverting.
 

@@ -1,5 +1,9 @@
 import type { ColumnMapping, JurisdictionConfig } from '@public-workforce/jurisdiction-kit';
 
+export * from './legacy-contact-import.js';
+export * from './legacy-contact-persistence.js';
+export * from './staff-directory-export.js';
+
 /**
  * Texas public education, the first jurisdiction onboarded.
  *
@@ -227,6 +231,11 @@ export const texasEducationJurisdiction: JurisdictionConfig = {
     '/(taa|tapr|txschools|accountability)(/|$)',
     '/(board-?docs|boarddocs)(/|$)',
   ],
+
+  exportPresentation: {
+    roleCategoryFlagCode: 'teacher',
+    roleCategoryFlagHeader: 'is_teacher',
+  },
 
   notes: [
     'No official source is marked verified for production. The importer refuses to run until the owner confirms each inspected URL and column mapping.',

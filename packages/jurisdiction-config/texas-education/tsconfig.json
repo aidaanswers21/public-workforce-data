@@ -8,6 +8,12 @@
   "exclude": ["src/**/*.test.ts", "dist"],
   "references": [
     {
+      "path": "../../core"
+    },
+    {
+      "path": "../../database"
+    },
+    {
       "path": "../../shared-types"
     },
     {

@@ -196,6 +196,21 @@ them overwrites another.
 `contact_points` holds work phone numbers, office addresses and similar
 professional contact details, typed by `contact_point_types`.
 
+The staff-directory export flattens this normalized model to one row per
+published work email. Each row retains the published and parsed name, assignment
+and role fields, organization and direct parent, duty location, and the email's
+own human-viewable source URL and provenance. Inferred email candidates are not
+eligible for this format. Suppression is still applied by the database query and
+re-checked in memory immediately before CSV rendering.
+
+An imported row can cite a human source page without pretending that page was
+archived. The CSV displays its allowlisted `source_page_url` observation and
+retains the artifact document and version identifiers as provenance. The
+neutral exporter can expose a caller-selected role-category flag; the Texas
+education wrapper selects its teacher category and may supply published grade
+attributes from the education extension. Conflicting identities sharing one
+organization email are flagged rather than silently collapsed.
+
 ### Title normalization is recorded, not assumed
 
 `title_published` is the exact string the source displayed and is never

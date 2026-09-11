@@ -1,0 +1,277 @@
+{
+  "accepted_field_nonempty_counts": {
+    "canonical_campus_key": 96078,
+    "canonical_source_row": 96078,
+    "city_published": 96078,
+    "collected_at_utc": 96078,
+    "county_published": 96078,
+    "department": 32168,
+    "directory_url": 96078,
+    "district": 96078,
+    "email": 96078,
+    "email_source": 96078,
+    "full_name": 96078,
+    "grade_range_published": 96078,
+    "location_published": 96078,
+    "organization_website_published": 96078,
+    "qa_identity_method": 96078,
+    "record_id": 96078,
+    "school": 96078,
+    "source_dataset": 96078,
+    "state_published": 96078,
+    "title": 84564
+  },
+  "accepted_fields": [
+    "record_id",
+    "district",
+    "school",
+    "directory_url",
+    "full_name",
+    "title",
+    "department",
+    "email",
+    "email_source",
+    "collected_at_utc",
+    "organization_website_published",
+    "location_published",
+    "city_published",
+    "county_published",
+    "state_published",
+    "grade_range_published",
+    "canonical_source_row",
+    "canonical_campus_key",
+    "qa_identity_method",
+    "source_dataset"
+  ],
+  "accepted_mapping_method_counts": {
+    "claimed_canonical_workbook_row": 17370,
+    "exact_workbook_district_school": 54928,
+    "unique_controlled_tea_name_alias": 23780
+  },
+  "approved_domain_allowlist": {
+    "domains": 2553,
+    "file": "approved_domains.txt",
+    "matching_rule": "lowercase host after removing a leading www.; exact host or subdomain of an approved workbook host",
+    "sha256": "d1182e9cb70351147ce87e6bf158845e265e48840d7468bd6b8a81bece46210e"
+  },
+  "artifact_created_at": "2026-09-11T19:29:39Z",
+  "campus_match_method_counts_before_other_filters": {
+    "claimed_canonical_workbook_row": 17379,
+    "exact_workbook_district_school": 55324,
+    "unique_controlled_tea_name_alias": 23786
+  },
+  "comparison_to_reported_prior_audit": {
+    "current_accepted_delta": -262,
+    "current_quarantine_delta": 262,
+    "explanation": "The prior manifest artifact was not present for a row-level comparison. The current bundle explicitly quarantines malformed or generic names and requires a unique workbook campus after only controlled TEA school-type aliases.",
+    "reported_accepted_rows": 96340,
+    "reported_quarantine_rows": 11691,
+    "row_level_diff_available": false
+  },
+  "content_cutoff_at": "2026-09-11T17:05:13.503205Z",
+  "counts": {
+    "accepted_campuses": 1425,
+    "accepted_distinct_emails": 95407,
+    "accepted_districts": 71,
+    "accepted_rows": 96078,
+    "input_rows": 108031,
+    "malformed_json_lines": 0,
+    "quarantine_rows": 11953
+  },
+  "counts_by_dataset": {
+    "batch1": {
+      "accepted_rows": 69834,
+      "input_rows": 81729,
+      "quarantine_rows": 11895
+    },
+    "batch2": {
+      "accepted_rows": 26244,
+      "input_rows": 26302,
+      "quarantine_rows": 58
+    }
+  },
+  "inputs": {
+    "batch1": {
+      "file": "staff_records.jsonl",
+      "rows": 81729,
+      "sha256": "443bf2a764f933ca78601cb643d3033262081e4345e3f0426a066794558a2861"
+    },
+    "batch2": {
+      "file": "accepted_records.jsonl",
+      "rows": 26302,
+      "sha256": "be1fc08827111a79a4bf9b8baa3ca7998f5f75bb28312bdcbf5889183f4334ff"
+    }
+  },
+  "quarantine_reason_counts": {
+    "generic_person_name": 13,
+    "invalid_email": 1,
+    "malformed_person_name": 330,
+    "no_unique_workbook_campus_match_after_controlled_aliases": 11542,
+    "person_name_fewer_than_two_words": 70
+  },
+  "quarantine_reason_counts_by_dataset": {
+    "batch1": {
+      "generic_person_name": 1,
+      "invalid_email": 1,
+      "malformed_person_name": 284,
+      "no_unique_workbook_campus_match_after_controlled_aliases": 11542,
+      "person_name_fewer_than_two_words": 70
+    },
+    "batch2": {
+      "generic_person_name": 12,
+      "malformed_person_name": 46
+    }
+  },
+  "quarantine_rows_with_multiple_reasons": 3,
+  "schema_version": "1.0.0",
+  "selection_policy": {
+    "campus_mapping": "claimed canonical row must match district+school; otherwise exact match first, then a unique controlled TEA school-type alias match (Elementary/El, High School/H S, Junior High/J H, Middle School/Middle, Intermediate/Int); no fuzzy matching",
+    "dedupe_key": "normalized district + normalized school + lowercase email",
+    "dedupe_precedence": "batch1 then batch2, stable input line order",
+    "email": "syntactically valid non-consumer work email whose evidence begins Published, Rendered, Decoded, Publicly displayed, or Public campus directory entry; missing, unsupported, inferred, and generated evidence rejected",
+    "organization_fields": "organization website, campus location label, city, county, state, and grade range are copied from the matched row of the approved workbook; missing workbook values stay empty",
+    "person_name": "at least two lexical name tokens; generic-only labels rejected",
+    "source_url": "HTTP(S) human-viewable directory URL; API, GraphQL, AJAX endpoints, JSON, and XML rejected"
+  },
+  "top_unresolved_campus_labels": [
+    {
+      "district": "North East Isd",
+      "rows": 1044,
+      "source_school_label": "District Office"
+    },
+    {
+      "district": "Alvin Isd",
+      "rows": 1029,
+      "source_school_label": "Alvin Independent School District"
+    },
+    {
+      "district": "Frisco Isd",
+      "rows": 736,
+      "source_school_label": "CENTRAL ADMIN BLDG"
+    },
+    {
+      "district": "Conroe Isd",
+      "rows": 666,
+      "source_school_label": "Transportation Department"
+    },
+    {
+      "district": "Conroe Isd",
+      "rows": 578,
+      "source_school_label": "Custodial Department"
+    },
+    {
+      "district": "Humble Isd",
+      "rows": 397,
+      "source_school_label": "Humble ISD"
+    },
+    {
+      "district": "Conroe Isd",
+      "rows": 368,
+      "source_school_label": "Child Nutrition Department"
+    },
+    {
+      "district": "Conroe Isd",
+      "rows": 220,
+      "source_school_label": "Special Education Department"
+    },
+    {
+      "district": "Frisco Isd",
+      "rows": 212,
+      "source_school_label": "TRANS STADIUM"
+    },
+    {
+      "district": "North East Isd",
+      "rows": 203,
+      "source_school_label": "LEE High School"
+    },
+    {
+      "district": "Humble Isd",
+      "rows": 176,
+      "source_school_label": "Community Learning Center"
+    },
+    {
+      "district": "Frisco Isd",
+      "rows": 167,
+      "source_school_label": "TRANS WEST"
+    },
+    {
+      "district": "Frisco Isd",
+      "rows": 157,
+      "source_school_label": "SAM CARTER SERVICE CENTER"
+    },
+    {
+      "district": "Galena Park Isd",
+      "rows": 155,
+      "source_school_label": "North Shore 10th Grade Center"
+    },
+    {
+      "district": "Conroe Isd",
+      "rows": 150,
+      "source_school_label": "Maintenance Department"
+    },
+    {
+      "district": "Katy Isd",
+      "rows": 134,
+      "source_school_label": "King Elementary"
+    },
+    {
+      "district": "Frisco Isd",
+      "rows": 132,
+      "source_school_label": "ADMIN BUILDING II"
+    },
+    {
+      "district": "Katy Isd",
+      "rows": 127,
+      "source_school_label": "Cross Elementary"
+    },
+    {
+      "district": "Katy Isd",
+      "rows": 119,
+      "source_school_label": "Beck Junior High"
+    },
+    {
+      "district": "Katy Isd",
+      "rows": 118,
+      "source_school_label": "Winborn Elementary"
+    },
+    {
+      "district": "Katy Isd",
+      "rows": 110,
+      "source_school_label": "Fielder Elementary"
+    },
+    {
+      "district": "Katy Isd",
+      "rows": 110,
+      "source_school_label": "Wolman Elementary"
+    },
+    {
+      "district": "Katy Isd",
+      "rows": 109,
+      "source_school_label": "Williams Elementary"
+    },
+    {
+      "district": "Katy Isd",
+      "rows": 106,
+      "source_school_label": "Kilpatrick Elementary"
+    },
+    {
+      "district": "Katy Isd",
+      "rows": 101,
+      "source_school_label": "Hutsell Elementary"
+    }
+  ],
+  "validation": {
+    "accepted_dedupe_keys_unique": true,
+    "accepted_record_ids_unique": true,
+    "accepted_schema_exact": true,
+    "gzip_deterministic_mtime_zero": true,
+    "input_rows_reconciled": true,
+    "positive_publication_evidence_only": true,
+    "post_write_reread_ok": true
+  },
+  "workbook": {
+    "campus_rows": 9682,
+    "file": "TX_School_Websites_by_Location.xlsx",
+    "sha256": "99618834a0664ff63af63e757eb1537076799e8109a076da3696e58875be5510"
+  }
+}

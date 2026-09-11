@@ -27,7 +27,7 @@ import { renderCsv, type CsvColumn } from './csv.js';
 export interface ExportablePersonRow {
   personId: Uuid;
   assignmentId?: Uuid;
-  publishedEmails?: readonly { value: string; sourceDocumentId: Uuid; sourceUrl?: string | null }[];
+  publishedEmails?: readonly PublishedEmailExportValue[];
   workPhones?: readonly { value: string; sourceDocumentId: Uuid }[];
   firstName: string | null;
   middleName: string | null;
@@ -39,11 +39,13 @@ export interface ExportablePersonRow {
   roleCategoryCode: string;
   jobFamilyCode: string;
   seniorityCode: string;
+  specialty: string | null;
   departmentPublished: string | null;
   organizationalUnitName: string | null;
 
   organizationId: Uuid | null;
   organizationName: string | null;
+  organizationWebsiteUrl: string | null;
   organizationTypeCode: string | null;
   governmentLevelCode: string | null;
   sectorCode: string | null;
@@ -83,6 +85,38 @@ export interface ExportablePersonRow {
   status: RecordStatus;
 }
 
+/** Provenance carried by each address so directory exports can be one row per observation. */
+export interface PublishedEmailExportValue {
+  value: string;
+  classification: EmailClassification;
+  validationStatus: EmailValidationStatus;
+  obfuscationKind?: string | null;
+  sourceDocumentId: Uuid;
+  sourceUrl?: string | null;
+  sourceTypeCode?: string | null;
+  sourceVersion?: number | null;
+  sourceRetrievedAt?: Timestamp | null;
+  firstSeenAt?: Timestamp | null;
+  lastSeenAt?: Timestamp | null;
+  crawlRunId?: Uuid | null;
+  extractionMethod?: ExtractionMethod | null;
+  confidence?: number | null;
+  identityConflict?: boolean;
+  gradeRangePublished?: string | null;
+  organizationWebsitePublished?: string | null;
+  locationPublished?: string | null;
+  cityPublished?: string | null;
+  countyPublished?: string | null;
+  statePublished?: string | null;
+  emailSourceDescription?: string | null;
+  sourceDataset?: string | null;
+  sourceFile?: string | null;
+  sourceLine?: string | null;
+  qaIdentityMethod?: string | null;
+}
+
+export type PeopleExportFormat = 'full' | 'contacts' | 'staff_directory';
+
 export const PEOPLE_EXPORT_COLUMNS: readonly CsvColumn<ExportablePersonRow>[] = [
   { header: 'first_name', value: (row) => row.firstName },
   { header: 'middle_name', value: (row) => row.middleName },
@@ -93,8 +127,10 @@ export const PEOPLE_EXPORT_COLUMNS: readonly CsvColumn<ExportablePersonRow>[] = 
   { header: 'role_category', value: (row) => row.roleCategoryCode },
   { header: 'job_family', value: (row) => row.jobFamilyCode },
   { header: 'seniority', value: (row) => row.seniorityCode },
+  { header: 'specialty', value: (row) => row.specialty },
   { header: 'department', value: (row) => row.organizationalUnitName ?? row.departmentPublished },
   { header: 'organization', value: (row) => row.organizationName },
+  { header: 'organization_website', value: (row) => row.organizationWebsiteUrl },
   { header: 'organization_type', value: (row) => row.organizationTypeCode },
   { header: 'parent_organization', value: (row) => row.parentOrganizationName },
   { header: 'government_level', value: (row) => row.governmentLevelCode },
@@ -125,6 +161,96 @@ export const PEOPLE_EXPORT_COLUMNS: readonly CsvColumn<ExportablePersonRow>[] = 
   { header: 'confidence', value: (row) => row.confidence },
   { header: 'assignment_status', value: (row) => row.assignmentStatus },
   { header: 'status', value: (row) => row.status },
+];
+
+interface StaffDirectoryExportRow {
+  firstName: string | null;
+  middleName: string | null;
+  lastName: string | null;
+  fullNamePublished: string;
+  titlePublished: string | null;
+  titleNormalized: string | null;
+  department: string | null;
+  organizationName: string | null;
+  parentOrganizationName: string | null;
+  organizationWebsiteUrl: string | null;
+  email: string;
+  emailClassification: EmailClassification;
+  emailValidationStatus: EmailValidationStatus;
+  emailObfuscationKind: string | null;
+  emailIdentityConflict: boolean;
+  roleCategoryCode: string;
+  jobFamilyCode: string;
+  seniorityCode: string;
+  specialty: string | null;
+  roleCategoryFlag: boolean | null;
+  gradeRangePublished: string | null;
+  locationPublished: string | null;
+  dutyLocationCity: string | null;
+  dutyLocationCountyName: string | null;
+  dutyLocationStateCode: string | null;
+  sourceUrl: string | null;
+  sourceTypeCode: string | null;
+  sourceDocumentId: Uuid;
+  sourceVersion: number | null;
+  sourceRetrievedAt: Timestamp | null;
+  emailFirstSeenAt: Timestamp | null;
+  emailLastSeenAt: Timestamp | null;
+  assignmentFirstSeenAt: Timestamp;
+  assignmentLastSeenAt: Timestamp;
+  crawlRunId: Uuid | null;
+  extractionMethod: ExtractionMethod | null;
+  confidence: number | null;
+  importSourceDataset: string | null;
+  importSourceFile: string | null;
+  importSourceLine: string | null;
+  importQaIdentityMethod: string | null;
+  emailSourceDescription: string | null;
+}
+
+const STAFF_DIRECTORY_EXPORT_COLUMNS: readonly CsvColumn<StaffDirectoryExportRow>[] = [
+  { header: 'first_name', value: (row) => row.firstName },
+  { header: 'middle_name', value: (row) => row.middleName },
+  { header: 'last_name', value: (row) => row.lastName },
+  { header: 'full_name_published', value: (row) => row.fullNamePublished },
+  { header: 'title', value: (row) => row.titlePublished },
+  { header: 'title_normalized', value: (row) => row.titleNormalized },
+  { header: 'department', value: (row) => row.department },
+  { header: 'organization', value: (row) => row.organizationName },
+  { header: 'parent_organization', value: (row) => row.parentOrganizationName },
+  { header: 'organization_website', value: (row) => row.organizationWebsiteUrl },
+  { header: 'email', value: (row) => row.email },
+  { header: 'email_classification', value: (row) => row.emailClassification },
+  { header: 'email_validation_status', value: (row) => row.emailValidationStatus },
+  { header: 'email_obfuscation_kind', value: (row) => row.emailObfuscationKind },
+  { header: 'email_identity_conflict', value: (row) => row.emailIdentityConflict },
+  { header: 'role_category', value: (row) => row.roleCategoryCode },
+  { header: 'job_family', value: (row) => row.jobFamilyCode },
+  { header: 'seniority', value: (row) => row.seniorityCode },
+  { header: 'specialty', value: (row) => row.specialty },
+  { header: 'role_category_flag', value: (row) => row.roleCategoryFlag },
+  { header: 'grade_range_published', value: (row) => row.gradeRangePublished },
+  { header: 'location_published', value: (row) => row.locationPublished },
+  { header: 'duty_location_city', value: (row) => row.dutyLocationCity },
+  { header: 'duty_location_county', value: (row) => row.dutyLocationCountyName },
+  { header: 'duty_location_state', value: (row) => row.dutyLocationStateCode },
+  { header: 'email_source_url', value: (row) => row.sourceUrl },
+  { header: 'email_source_type', value: (row) => row.sourceTypeCode },
+  { header: 'email_source_document_id', value: (row) => row.sourceDocumentId },
+  { header: 'email_source_version', value: (row) => row.sourceVersion },
+  { header: 'email_source_retrieved_at', value: (row) => row.sourceRetrievedAt },
+  { header: 'email_first_seen_at', value: (row) => row.emailFirstSeenAt },
+  { header: 'email_last_seen_at', value: (row) => row.emailLastSeenAt },
+  { header: 'assignment_first_seen_at', value: (row) => row.assignmentFirstSeenAt },
+  { header: 'assignment_last_seen_at', value: (row) => row.assignmentLastSeenAt },
+  { header: 'crawl_run_id', value: (row) => row.crawlRunId },
+  { header: 'extraction_method', value: (row) => row.extractionMethod },
+  { header: 'confidence', value: (row) => row.confidence },
+  { header: 'import_source_dataset', value: (row) => row.importSourceDataset },
+  { header: 'import_source_file', value: (row) => row.importSourceFile },
+  { header: 'import_source_line', value: (row) => row.importSourceLine },
+  { header: 'import_qa_identity_method', value: (row) => row.importQaIdentityMethod },
+  { header: 'email_source_description', value: (row) => row.emailSourceDescription },
 ];
 
 export interface ExportResult {
@@ -186,15 +312,21 @@ export function exportSubject(row: ExportablePersonRow, purpose: string): Suppre
  * is not a way around suppression: a person, organization, source, purpose or
  * other record-level scope was already evaluated in step one.
  */
-export function exportPeopleCsv(input: {
+export interface ExportPeopleCsvInput {
   rows: readonly ExportablePersonRow[];
   suppression: SuppressionIndex;
   at: Timestamp;
   /** Declared purpose, matched against `export_purpose` suppression entries. */
   purpose: string;
-  format?: 'full' | 'contacts';
+  format?: PeopleExportFormat;
+  /** Optional sector-owned role code surfaced as a neutral boolean flag. */
+  roleCategoryFlagCode?: string;
+  /** Optional sector-owned CSV header for the neutral role-category flag. */
+  roleCategoryFlagHeader?: string;
   seenContactKeys?: Set<string>;
-}): ExportResult {
+}
+
+export function exportPeopleCsv(input: ExportPeopleCsvInput): ExportResult {
   const subjectOf = (row: ExportablePersonRow): SuppressionSubject =>
     exportSubject(row, input.purpose);
 
@@ -292,7 +424,16 @@ export function exportPeopleCsv(input: {
   }
 
   const seenContactKeys = input.seenContactKeys ?? new Set<string>();
-  const contacts = allowed.flatMap((row) =>
+  const emailIdentityCounts = new Map<string, Set<Uuid>>();
+  for (const row of allowed) {
+    for (const email of row.publishedEmails ?? []) {
+      const key = JSON.stringify([row.organizationId, email.value.toLowerCase()]);
+      const identities = emailIdentityCounts.get(key) ?? new Set<Uuid>();
+      identities.add(row.personId);
+      emailIdentityCounts.set(key, identities);
+    }
+  }
+  const contacts = (input.format === 'contacts' ? allowed : []).flatMap((row) =>
     (row.publishedEmails ?? [])
       .filter((email) => {
         const key = JSON.stringify([row.organizationId, email.value.toLowerCase()]);
@@ -308,6 +449,66 @@ export function exportPeopleCsv(input: {
         sourcePage: email.sourceUrl ?? null,
       })),
   );
+  const staffDirectory = (input.format === 'staff_directory' ? allowed : []).flatMap((row) =>
+    (row.publishedEmails ?? [])
+      .filter((email) => {
+        const key = JSON.stringify([row.personId, row.organizationId, email.value.toLowerCase()]);
+        if (seenContactKeys.has(key)) return false;
+        seenContactKeys.add(key);
+        return true;
+      })
+      .map((email): StaffDirectoryExportRow => ({
+        firstName: row.firstName,
+        middleName: row.middleName,
+        lastName: row.lastName,
+        fullNamePublished: row.fullNamePublished,
+        titlePublished: row.titlePublished,
+        titleNormalized: row.titleNormalized,
+        department: row.organizationalUnitName ?? row.departmentPublished,
+        organizationName: row.organizationName,
+        parentOrganizationName: row.parentOrganizationName,
+        organizationWebsiteUrl:
+          row.organizationWebsiteUrl ?? email.organizationWebsitePublished ?? null,
+        email: email.value,
+        emailClassification: email.classification,
+        emailValidationStatus: email.validationStatus,
+        emailObfuscationKind: email.obfuscationKind ?? null,
+        emailIdentityConflict:
+          email.identityConflict === true ||
+          (emailIdentityCounts.get(JSON.stringify([row.organizationId, email.value.toLowerCase()]))
+            ?.size ?? 0) > 1,
+        roleCategoryCode: row.roleCategoryCode,
+        jobFamilyCode: row.jobFamilyCode,
+        seniorityCode: row.seniorityCode,
+        specialty: row.specialty,
+        roleCategoryFlag:
+          input.roleCategoryFlagCode === undefined
+            ? null
+            : row.roleCategoryCode === input.roleCategoryFlagCode,
+        gradeRangePublished: email.gradeRangePublished ?? null,
+        locationPublished: email.locationPublished ?? null,
+        dutyLocationCity: row.dutyLocationCity ?? email.cityPublished ?? null,
+        dutyLocationCountyName: row.dutyLocationCountyName ?? email.countyPublished ?? null,
+        dutyLocationStateCode: row.dutyLocationStateCode ?? email.statePublished ?? null,
+        sourceUrl: email.sourceUrl ?? null,
+        sourceTypeCode: email.sourceTypeCode ?? null,
+        sourceDocumentId: email.sourceDocumentId,
+        sourceVersion: email.sourceVersion ?? null,
+        sourceRetrievedAt: email.sourceRetrievedAt ?? null,
+        emailFirstSeenAt: email.firstSeenAt ?? null,
+        emailLastSeenAt: email.lastSeenAt ?? null,
+        assignmentFirstSeenAt: row.firstSeenAt,
+        assignmentLastSeenAt: row.lastSeenAt,
+        crawlRunId: email.crawlRunId ?? row.crawlRunId,
+        extractionMethod: email.extractionMethod ?? row.extractionMethod,
+        confidence: email.confidence ?? row.confidence,
+        importSourceDataset: email.sourceDataset ?? null,
+        importSourceFile: email.sourceFile ?? null,
+        importSourceLine: email.sourceLine ?? null,
+        importQaIdentityMethod: email.qaIdentityMethod ?? null,
+        emailSourceDescription: email.emailSourceDescription ?? null,
+      })),
+  );
   const csv =
     input.format === 'contacts'
       ? renderCsv(
@@ -320,10 +521,29 @@ export function exportPeopleCsv(input: {
           ],
           contacts,
         )
-      : renderCsv(PEOPLE_EXPORT_COLUMNS, allowed);
+      : input.format === 'staff_directory'
+        ? renderCsv(
+            STAFF_DIRECTORY_EXPORT_COLUMNS.map((column) =>
+              column.header === 'role_category_flag' && input.roleCategoryFlagHeader !== undefined
+                ? {
+                    ...column,
+                    header: /^[a-z][a-z0-9_]{1,63}$/.test(input.roleCategoryFlagHeader)
+                      ? input.roleCategoryFlagHeader
+                      : 'role_category_flag',
+                  }
+                : column,
+            ),
+            staffDirectory,
+          )
+        : renderCsv(PEOPLE_EXPORT_COLUMNS, allowed);
   return {
     csv,
-    rowCount: input.format === 'contacts' ? contacts.length : allowed.length,
+    rowCount:
+      input.format === 'contacts'
+        ? contacts.length
+        : input.format === 'staff_directory'
+          ? staffDirectory.length
+          : allowed.length,
     suppressedCount: suppressedPersonIds.length,
     withheldCandidateCount: withheldCandidates,
     checksum: sha256(csv),

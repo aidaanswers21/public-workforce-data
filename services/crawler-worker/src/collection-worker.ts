@@ -9,7 +9,7 @@ import {
   type SqlClient,
 } from '@public-workforce/database';
 import { CrawlEngine, type CrawlPolicy } from '@public-workforce/core';
-import type { Fetcher, RobotsProvider } from '@public-workforce/shared-types';
+import type { CrawlCheckpoint, Fetcher, RobotsProvider } from '@public-workforce/shared-types';
 import type { AdapterRegistry } from '@public-workforce/adapter-kit';
 import type { Taxonomy } from '@public-workforce/taxonomy';
 import { IngestionPipeline } from './pipeline.js';
@@ -19,7 +19,7 @@ export interface CollectionJobResult {
   crawlRunId: string | null;
   pagesProcessed: number;
   recordsCollected: number;
-  outcome: 'completed' | 'policy_hold' | 'blocked' | 'failed';
+  outcome: 'completed' | 'continuation' | 'policy_hold' | 'blocked' | 'failed';
   retryable?: boolean;
   detail: string | null;
 }
@@ -56,6 +56,8 @@ export interface ProductionCollectionExecutorOptions {
   policy?: Partial<CrawlPolicy>;
   fetcherForJob?: (job: ClaimedCollectionJob) => Fetcher;
 }
+
+const CHECKPOINT_SLICE_PAGES = 250;
 
 /** Runs a claimed job through the existing discovery or ingestion pipeline. */
 export class ProductionCollectionExecutor implements CollectionJobExecutor {
@@ -125,6 +127,16 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
       governmentLevelCode: job.governmentLevelCode,
       sectorCode: job.sectorCode,
     });
+    const ingestContext = {
+      organizationId: job.organizationId,
+      organizationName: job.organizationName,
+      governmentLevelCode: job.governmentLevelCode,
+      sectorCode: job.sectorCode,
+      jurisdictionId: job.jurisdictionId,
+      sourceTypeCode: job.sourceTypeCode,
+      vocabulary: rules.vocabulary,
+      titleRules: rules.titleRules,
+    };
     let crawlRunId = job.crawlRunId;
     if (crawlRunId === null) {
       crawlRunId = await crawl.startRun({
@@ -143,13 +155,60 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
     }
 
     const resumeFrom = await crawl.loadCheckpoint(crawlRunId, job.crawlTargetId);
+    const priorIngestion = resumeFrom?.ingestionSummary ?? {
+      peopleSeen: 0,
+      pipelineErrors: 0,
+      boundaryDrops: 0,
+    };
+    const pageLimitForThisSlice = Math.min(
+      job.maxPagesPerTarget,
+      (resumeFrom?.pagesFetched ?? 0) + CHECKPOINT_SLICE_PAGES,
+    );
     const sourcePolicy = await loadSourcePolicyRegistry(this.options.client);
+    const ingested = {
+      pages: 0,
+      documents: 0,
+      records: 0,
+      crawlErrors: 0,
+      peopleSeen: 0,
+      pipelineErrors: 0,
+      boundaryDrops: 0,
+    };
     const engine = new CrawlEngine({
       fetcher: this.options.fetcherForJob?.(job) ?? this.options.fetcher,
       robots: this.options.robots,
       logger: this.options.logger,
       ...(this.options.sleep === undefined ? {} : { sleep: this.options.sleep }),
-      onCheckpoint: (checkpoint) => crawl.saveCheckpoint(checkpoint),
+      onCheckpoint: async (checkpoint, delta) => {
+        const summary = await pipeline.ingestRun(
+          {
+            crawlRunId,
+            seedUrl: job.url,
+            adapterKey: adapter.key,
+            adapterVersion: adapter.version,
+            ...delta,
+            stops: [],
+            stats: emptyRunStats(),
+            checkpoint,
+          },
+          ingestContext,
+          { saveCheckpoint: false },
+        );
+        ingested.pages += delta.pages.length;
+        ingested.documents += delta.documents.length;
+        ingested.records += delta.records.length;
+        ingested.crawlErrors += delta.errors.length;
+        ingested.peopleSeen += summary.peopleSeen;
+        ingested.pipelineErrors += summary.errors;
+        ingested.boundaryDrops += summary.boundaryDrops;
+        await crawl.saveCheckpoint(
+          withIngestionSummary(checkpoint, priorIngestion, {
+            peopleSeen: ingested.peopleSeen,
+            pipelineErrors: ingested.pipelineErrors,
+            boundaryDrops: ingested.boundaryDrops,
+          }),
+        );
+      },
     });
 
     try {
@@ -162,7 +221,11 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
         policy: buildCrawlPolicy({
           ...this.options.policy,
           ...(job.websiteScope === undefined ? {} : { websiteScope: job.websiteScope }),
-          maxPagesPerRun: job.maxPagesPerTarget,
+          maxPagesPerRun: pageLimitForThisSlice,
+          maxPagesPerDomain: Math.max(
+            this.options.policy?.maxPagesPerDomain ?? 0,
+            job.maxPagesPerTarget,
+          ),
         }),
         vocabulary: rules.vocabulary,
         organizationName: job.organizationName,
@@ -172,36 +235,70 @@ export class ProductionCollectionExecutor implements CollectionJobExecutor {
         ...(resumeFrom === null ? {} : { resumeFrom }),
       });
       await new CollectionProjectRepository(this.options.client).renewLease(job.id, job.claimToken);
-      const summary = await pipeline.ingestRun(result, {
-        organizationId: job.organizationId,
-        organizationName: job.organizationName,
-        governmentLevelCode: job.governmentLevelCode,
-        sectorCode: job.sectorCode,
-        jurisdictionId: job.jurisdictionId,
-        sourceTypeCode: job.sourceTypeCode,
-        vocabulary: rules.vocabulary,
-        titleRules: rules.titleRules,
-      });
-      const outcome = crawlOutcome(result.stops.map((stop) => stop.reason));
-      const partial =
-        result.checkpoint.pendingTasks.length > 0 || result.errors.length > 0 || summary.errors > 0;
-      await crawl.finishRun(
-        crawlRunId,
-        outcome === 'completed'
-          ? result.errors.length > 0
-            ? 'completed_with_errors'
-            : 'completed'
-          : 'cancelled',
-        result.stats,
-        new Date().toISOString(),
+      const summary = await pipeline.ingestRun(
+        {
+          ...result,
+          pages: result.pages.slice(ingested.pages),
+          documents: result.documents.slice(ingested.documents),
+          records: result.records.slice(ingested.records),
+          errors: result.errors.slice(ingested.crawlErrors),
+        },
+        ingestContext,
+        { saveCheckpoint: false },
       );
+      const currentIngestion = {
+        peopleSeen: ingested.peopleSeen + summary.peopleSeen,
+        pipelineErrors: ingested.pipelineErrors + summary.errors,
+        boundaryDrops: ingested.boundaryDrops + summary.boundaryDrops,
+      };
+      const totalIngestion = {
+        peopleSeen: priorIngestion.peopleSeen + currentIngestion.peopleSeen,
+        pipelineErrors: priorIngestion.pipelineErrors + currentIngestion.pipelineErrors,
+        boundaryDrops: priorIngestion.boundaryDrops + currentIngestion.boundaryDrops,
+      };
+      await crawl.saveCheckpoint({ ...result.checkpoint, ingestionSummary: totalIngestion });
+      const stopReasons = result.stops.map((stop) => stop.reason);
+      const mayContinue =
+        result.checkpoint.pendingTasks.length > 0 &&
+        stopReasons.includes('page_budget_exhausted') &&
+        result.checkpoint.pagesFetched < job.maxPagesPerTarget;
+      const terminalOutcome = crawlOutcome(stopReasons);
+      const outcome = mayContinue
+        ? 'continuation'
+        : result.checkpoint.pendingTasks.length > 0 && terminalOutcome === 'completed'
+          ? 'failed'
+          : terminalOutcome;
+      const partial =
+        result.checkpoint.pendingTasks.length > 0 ||
+        result.errors.length > 0 ||
+        totalIngestion.pipelineErrors > 0 ||
+        totalIngestion.boundaryDrops > 0;
+      if (outcome !== 'continuation') {
+        await crawl.finishRun(
+          crawlRunId,
+          outcome === 'completed'
+            ? result.errors.length > 0 ||
+              totalIngestion.pipelineErrors > 0 ||
+              totalIngestion.boundaryDrops > 0
+              ? 'completed_with_errors'
+              : 'completed'
+            : 'cancelled',
+          result.stats,
+          new Date().toISOString(),
+        );
+      }
       return {
         crawlRunId,
         pagesProcessed: result.stats.pagesFetched,
-        recordsCollected: summary.peopleSeen,
+        recordsCollected: currentIngestion.peopleSeen,
         outcome,
+        retryable: mayContinue,
         detail: partial
-          ? `partial collection: ${result.stops.at(-1)?.detail ?? 'errors or unfinished pages'}`
+          ? collectionDetail(
+              result.stops.at(-1)?.detail,
+              totalIngestion.pipelineErrors,
+              totalIngestion.boundaryDrops,
+            )
           : result.records.length === 0
             ? 'no public contacts extracted'
             : null,
@@ -250,7 +347,7 @@ export interface CollectionWorkerOptions {
 export class CollectionWorker {
   constructor(private readonly options: CollectionWorkerOptions) {}
 
-  async runNext(): Promise<'completed' | 'failed' | 'held' | 'empty'> {
+  async runNext(): Promise<'completed' | 'continued' | 'failed' | 'held' | 'empty'> {
     const job = await this.options.queue.claimNextJob(
       this.options.workerId,
       this.options.leaseSeconds,
@@ -286,6 +383,26 @@ export class CollectionWorker {
           retryable: result.retryable ?? false,
         });
         return 'failed';
+      }
+      if (result.outcome === 'continuation') {
+        if (result.crawlRunId === null || result.retryable !== true) {
+          await this.options.queue.failJob({
+            jobId: job.id,
+            claimToken: job.claimToken,
+            error: result.detail ?? 'collection checkpoint cannot continue safely',
+            retryable: false,
+          });
+          return 'failed';
+        }
+        await this.options.queue.continueJob({
+          jobId: job.id,
+          claimToken: job.claimToken,
+          crawlRunId: result.crawlRunId,
+          pagesProcessed: result.pagesProcessed,
+          recordsCollected: result.recordsCollected,
+          detail: result.detail ?? 'collection checkpoint has pending pages',
+        });
+        return 'continued';
       }
       if (result.outcome !== 'completed') {
         await this.options.queue.blockJob({
@@ -350,7 +467,7 @@ export class CollectionWorker {
       if (result === 'empty') break;
       if (result === 'completed') completed += 1;
       else if (result === 'failed') failed += 1;
-      else held += 1;
+      else if (result === 'held') held += 1;
     }
     return { completed, failed, held };
   }
@@ -383,15 +500,65 @@ export class CollectionWorker {
       }
       if (result === 'completed') completed += 1;
       else if (result === 'failed') failed += 1;
-      else held += 1;
+      else if (result === 'held') held += 1;
     }
   }
 }
 
-function crawlOutcome(reasons: readonly string[]): 'completed' | 'policy_hold' | 'blocked' {
+function crawlOutcome(
+  reasons: readonly string[],
+): 'completed' | 'policy_hold' | 'blocked' | 'failed' {
   if (reasons.includes('blocked_by_source_policy')) return 'policy_hold';
   if (reasons.some((reason) => ['blocked_by_robots', 'blocked_by_source'].includes(reason))) {
     return 'blocked';
   }
+  if (
+    reasons.some((reason) => ['page_budget_exhausted', 'domain_budget_exhausted'].includes(reason))
+  ) {
+    return 'failed';
+  }
   return 'completed';
+}
+
+function emptyRunStats() {
+  return {
+    pagesFetched: 0,
+    pagesSkipped: 0,
+    pagesFailed: 0,
+    recordsExtracted: 0,
+    recordsNew: 0,
+    recordsUpdated: 0,
+    errors: 0,
+    bytesFetched: 0,
+    durationMs: 0,
+  };
+}
+
+function collectionDetail(
+  stopDetail: string | undefined,
+  pipelineErrors: number,
+  boundaryDrops: number,
+): string {
+  const counts = [
+    pipelineErrors > 0 ? `${pipelineErrors} ingestion error${pipelineErrors === 1 ? '' : 's'}` : '',
+    boundaryDrops > 0 ? `${boundaryDrops} boundary drop${boundaryDrops === 1 ? '' : 's'}` : '',
+  ].filter((value) => value.length > 0);
+  const reason =
+    stopDetail ?? (counts.length > 0 ? counts.join(', ') : 'errors or unfinished pages');
+  return `partial collection: ${reason}${stopDetail !== undefined && counts.length > 0 ? `; ${counts.join(', ')}` : ''}`;
+}
+
+function withIngestionSummary(
+  checkpoint: CrawlCheckpoint,
+  prior: NonNullable<CrawlCheckpoint['ingestionSummary']>,
+  current: NonNullable<CrawlCheckpoint['ingestionSummary']>,
+): CrawlCheckpoint {
+  return {
+    ...checkpoint,
+    ingestionSummary: {
+      peopleSeen: prior.peopleSeen + current.peopleSeen,
+      pipelineErrors: prior.pipelineErrors + current.pipelineErrors,
+      boundaryDrops: prior.boundaryDrops + current.boundaryDrops,
+    },
+  };
 }
