@@ -168,10 +168,7 @@ export class TexasEducationOrganizationIndex {
       (candidate.primaryDomains ?? []).some((candidateDomain) => {
         const normalizedCandidate = normalizeDomain(candidateDomain);
         return normalizedHints.some(
-          (hint) =>
-            hint === normalizedCandidate ||
-            hint.endsWith(`.${normalizedCandidate}`) ||
-            normalizedCandidate.endsWith(`.${hint}`),
+          (hint) => hint === normalizedCandidate || hint.endsWith(`.${normalizedCandidate}`),
         );
       }),
     );
