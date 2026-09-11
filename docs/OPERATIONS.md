@@ -168,8 +168,9 @@ that login before redeploying it.
 The **Exports** page creates controlled purposes and downloads a CSV for one
 selected collection project. Creating a purpose and producing a file each
 require an explicit signed-in confirmation. The repository rejects inactive or
-unknown purposes, supports a limited sample or a complete streaming download, applies suppression in
-SQL, re-checks it immediately before rendering, and records the export checksum
+unknown purposes, supports a limited sample or a complete streaming download, applies suppression
+in SQL, re-checks it immediately before rendering, and records the export
+checksum
 and audit event. This repository does not send the file or perform outreach.
 
 The staff-directory CSV is one row per published work email. It includes the
@@ -442,14 +443,14 @@ DATABASE_URL=... pnpm texas:seed-uncovered-campuses -- \
 The plan counts schools as covered only when that school has a person carrying
 this manifest's exact `legacy_artifact_id` observation. Before applying, it
 verifies the checksummed artifact files and refuses to seed unless PostgreSQL
-contains exactly the same number of observations for that artifact. It rejects missing or malformed
-websites and every hostname outside the checksummed workbook allowlist. Applying
+contains exactly the same number of observations for that artifact. It rejects
+missing or malformed websites and every hostname outside the checksummed
+workbook allowlist. Applying
 the plan requires `--apply --actor <operator>` and creates only idempotent
 `pending` organization-site targets with the website source document as
 provenance. It does not create or approve a batch, approve a source policy,
 enqueue work, start a worker, or contact a website. Review the resulting source
 manifest and use the normal finite-run approval screen before collection.
-
 
 ### One-time hosted collection release
 
