@@ -449,3 +449,19 @@ the plan requires `--apply --actor <operator>` and creates only idempotent
 provenance. It does not create or approve a batch, approve a source policy,
 enqueue work, start a worker, or contact a website. Review the resulting source
 manifest and use the normal finite-run approval screen before collection.
+
+
+### One-time hosted collection release
+
+A hosted worker can create one approved, expiring collection run at startup when
+interactive console access is unavailable. Set all four values on the worker:
+
+- `STARTUP_COLLECTION_PROJECT_ID`: exact collection project UUID.
+- `STARTUP_COLLECTION_APPROVED_BY`: named human approver.
+- `STARTUP_COLLECTION_APPROVAL_NOTE`: unique, specific approval note.
+- `STARTUP_COLLECTION_EXPIRES_AT`: ISO timestamp within the next 31 days.
+
+The worker uses the normal `createApprovedRun` path, snapshots the project scope,
+creates finite jobs, and writes the existing collection approval audit event. A
+restart with the same project and approval note reuses the existing batch rather
+than creating duplicate work. Clear the four variables after the batch exists.
