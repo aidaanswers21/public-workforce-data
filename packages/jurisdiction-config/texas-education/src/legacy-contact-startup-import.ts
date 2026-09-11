@@ -268,10 +268,14 @@ async function loadTexasOrganizations(
     district_name: string;
     school_primary_domain: string | null;
     district_primary_domain: string | null;
+    school_email_domains: string[] | null;
+    district_email_domains: string[] | null;
   }>(
     `select distinct school.id as organization_id, school.name as school_name, district.name as district_name,
                      school.primary_domain as school_primary_domain,
-                     district.primary_domain as district_primary_domain
+                     district.primary_domain as district_primary_domain,
+                     school.email_domains as school_email_domains,
+                     district.email_domains as district_email_domains
        from organizations school
        join organization_relationships relationship
          on relationship.child_organization_id = school.id
@@ -291,9 +295,12 @@ async function loadTexasOrganizations(
     organizationId: row.organization_id,
     schoolName: row.school_name,
     districtName: row.district_name,
-    primaryDomains: [row.school_primary_domain, row.district_primary_domain].filter(
-      (value): value is string => value !== null,
-    ),
+    primaryDomains: [
+      row.school_primary_domain,
+      row.district_primary_domain,
+      ...(row.school_email_domains ?? []),
+      ...(row.district_email_domains ?? []),
+    ].filter((value): value is string => value !== null),
   }));
 }
 
