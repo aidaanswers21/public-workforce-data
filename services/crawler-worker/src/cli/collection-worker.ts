@@ -84,6 +84,7 @@ async function main(): Promise<void> {
 
   try {
     const queue = new CollectionProjectRepository(database);
+    await createStartupCollectionRun(queue, database, logger);
     const renderers = new Map<string, BrowserFetcher[]>();
     const rawFetcherForJob = (job: ClaimedCollectionJob, chargePageBudget = true) => {
       let nextRequestAt = 0;
@@ -252,6 +253,41 @@ async function main(): Promise<void> {
   } finally {
     await database.close();
   }
+}
+
+async function createStartupCollectionRun(
+  queue: CollectionProjectRepository,
+  database: PostgresClient,
+  logger: ReturnType<typeof createLogger>,
+): Promise<void> {
+  const projectId = process.env['STARTUP_COLLECTION_PROJECT_ID']?.trim();
+  if (projectId === undefined || projectId.length === 0) return;
+  const approvedBy = requiredEnvironment('STARTUP_COLLECTION_APPROVED_BY');
+  const approvalNote = requiredEnvironment('STARTUP_COLLECTION_APPROVAL_NOTE');
+  const expiresAt = requiredEnvironment('STARTUP_COLLECTION_EXPIRES_AT');
+  const existing = await database.query<{ id: string }>(
+    `select id from collection_batches
+      where project_id = $1 and approval_note = $2
+      order by created_at desc limit 1`,
+    [projectId, approvalNote],
+  );
+  if (existing.rows[0] !== undefined) {
+    logger.info(
+      { event: 'startup_collection_run_exists', projectId, batchId: existing.rows[0].id },
+      'approved startup collection run already exists',
+    );
+    return;
+  }
+  const startupBatchId = await queue.createApprovedRun({
+    projectId,
+    approvedBy,
+    approvalNote,
+    expiresAt,
+  });
+  logger.info(
+    { event: 'startup_collection_run_created', projectId, batchId: startupBatchId, expiresAt },
+    'approved startup collection run created',
+  );
 }
 
 function delay(milliseconds: number): Promise<void> {
