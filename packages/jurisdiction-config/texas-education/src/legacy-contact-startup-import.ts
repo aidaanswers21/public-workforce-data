@@ -167,9 +167,19 @@ export async function runStartupLegacyContactImport(options: {
         total: expectedRecords,
       });
     };
+    const exclusions = new Map(
+      (verified.file.exclusions ?? []).map((value) => [value.lineNumber, value]),
+    );
     for await (const { lineNumber, line } of streamLegacyContactLines(verified.path)) {
       if (line.trim().length === 0) continue;
-      if (verified.file.exclusions?.some((value) => value.lineNumber === lineNumber)) continue;
+      const exclusion = exclusions.get(lineNumber);
+      if (exclusion !== undefined) {
+        if (exclusion.lineSha256.toLowerCase() !== sha256Text(line))
+          throw new Error(
+            `declared exclusion changed during import at ${verified.file.path}:${lineNumber}`,
+          );
+        continue;
+      }
       const prepared = prepareLine(line, index, manifest, lineNumber, approvedDomains);
       if (prepared.status === 'quarantined')
         throw new Error(

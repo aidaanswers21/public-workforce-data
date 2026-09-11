@@ -24,7 +24,11 @@ from openpyxl import load_workbook
 
 APPROVED_WORKBOOK_SHA256 = "99618834a0664ff63af63e757eb1537076799e8109a076da3696e58875be5510"
 
-EMAIL_RE = re.compile(r"^[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?(?:\.[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?)+$", re.I)
+EMAIL_LOCAL_RE = re.compile(r"^[A-Z0-9!#$%&'*+/=?^_`{|}~.-]+$", re.I)
+EMAIL_DOMAIN_RE = re.compile(
+    r"^(?:[A-Z0-9](?:[A-Z0-9-]*[A-Z0-9])?\.)+[A-Z]{2,}$",
+    re.I,
+)
 NAME_TOKEN_RE = re.compile(r"[^\W\d_]+(?:[-'][^\W\d_]+)*", re.UNICODE)
 CONSUMER_DOMAINS = frozenset(
     {
@@ -138,15 +142,21 @@ def name_reason(value: str) -> str | None:
 
 def email_reason(value: str) -> str | None:
     e = email_key(value)
-    if not EMAIL_RE.fullmatch(e):
+    if not e or len(e) > 254:
         return "invalid_email"
-    local, domain = e.rsplit("@", 1)
+    parts = e.split("@")
+    if len(parts) != 2:
+        return "invalid_email"
+    local, domain = parts
     if (
-        len(e) > 254
+        not local
         or len(local) > 64
+        or not domain
         or local.startswith(".")
         or local.endswith(".")
         or ".." in local
+        or EMAIL_LOCAL_RE.fullmatch(local) is None
+        or EMAIL_DOMAIN_RE.fullmatch(domain) is None
         or ".." in domain
         or domain.startswith("-")
     ):
@@ -470,6 +480,9 @@ def main():
         "counts": {
             "input_rows": sum(input_counts.values()),
             "accepted_rows": len(accepted),
+            "immutable_artifact_rows": len(accepted),
+            "production_exclusions": 0,
+            "production_importable_rows": len(accepted),
             "quarantine_rows": len(quarantine),
             "accepted_distinct_emails": len(emails),
             "accepted_campuses": len(campuses),

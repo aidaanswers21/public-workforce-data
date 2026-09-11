@@ -74,8 +74,11 @@
     "accepted_distinct_emails": 95407,
     "accepted_districts": 71,
     "accepted_rows": 96078,
+    "immutable_artifact_rows": 96078,
     "input_rows": 108031,
     "malformed_json_lines": 0,
+    "production_exclusions": 1,
+    "production_importable_rows": 96077,
     "quarantine_rows": 11953
   },
   "counts_by_dataset": {
