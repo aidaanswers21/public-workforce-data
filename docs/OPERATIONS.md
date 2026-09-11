@@ -364,10 +364,14 @@ jurisdiction, and one or more `{ path, sha256 }` file entries.
 Inputs may be `.jsonl` or streaming `.jsonl.gz`; compressed artifacts are
 recorded as `application/gzip`. The default is a dry run. It verifies each file's
 hash, exact-matches the published district and school pair to the organization
-spine, and writes separate quarantine and revalidation NDJSON files. Personal,
-malformed, inferred, unnamed, out-of-state, unmatched, and ambiguous rows never
-enter the people tables. A checkpoint is replaced atomically after each line,
-so the same command resumes rather than starting the file over.
+spine, and writes separate quarantine and revalidation NDJSON files. When Texas
+has duplicate exact district and school names, the importer narrows candidates
+only when the published staff-page host or work-email domain belongs to exactly
+one candidate's recorded school or district domain. Unresolved ambiguity,
+personal or malformed email, inferred evidence, unnamed people, out-of-state
+rows, and unmatched organizations never enter the people tables. A checkpoint
+is replaced atomically after each line, so the same command resumes rather than
+starting the file over.
 
 `--seed-revalidation` creates idempotent pending crawl targets for the accepted
 rows' human-viewable directory URLs. It does not run those targets. A live crawl
