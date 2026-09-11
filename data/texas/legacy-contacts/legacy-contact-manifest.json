@@ -7,6 +7,13 @@
   "files": [
     {
       "archiveUrl": "https://api.github.com/repos/aidaanswers21/public-workforce-data/git/blobs/6ec6fc3ec32fc37a78719d78db63a87aed056f19",
+      "exclusions": [
+        {
+          "lineNumber": 47065,
+          "lineSha256": "d885522ce9562be43c26ad2edd570c93790bd7dffc0ed8887c489dfcb422d147",
+          "reason": "email is invalid"
+        }
+      ],
       "path": "accepted_contacts.jsonl.gz",
       "sha256": "d0152d69f8c242e4312451c8638f7d8ac9661eeb10dd54243050dd8df71cf5f6"
     }

@@ -140,7 +140,17 @@ def email_reason(value: str) -> str | None:
     e = email_key(value)
     if not EMAIL_RE.fullmatch(e):
         return "invalid_email"
-    domain = e.rsplit("@", 1)[1]
+    local, domain = e.rsplit("@", 1)
+    if (
+        len(e) > 254
+        or len(local) > 64
+        or local.startswith(".")
+        or local.endswith(".")
+        or ".." in local
+        or ".." in domain
+        or domain.startswith("-")
+    ):
+        return "invalid_email"
     if domain in CONSUMER_DOMAINS:
         return "consumer_email_domain"
     return None

@@ -22,6 +22,12 @@ export interface LegacyContactManifestFile {
   archiveStorageKey?: string;
   /** Immutable public archive location, such as a GitHub git-blob API URL. */
   archiveUrl?: string;
+  /** Exact rows retained in an immutable artifact but excluded by production validation. */
+  exclusions?: Array<{
+    lineNumber: number;
+    lineSha256: string;
+    reason: string;
+  }>;
 }
 
 export interface LegacyContactManifest {
@@ -202,6 +208,18 @@ export function validateLegacyContactManifest(value: unknown): LegacyContactMani
       throw new Error(
         `manifest file archiveUrl is not an immutable GitHub git-blob URL: ${file.path}`,
       );
+    const exclusionLines = new Set<number>();
+    for (const exclusion of file.exclusions ?? []) {
+      if (!Number.isSafeInteger(exclusion.lineNumber) || exclusion.lineNumber < 1)
+        throw new Error(`manifest file has invalid exclusion line: ${file.path}`);
+      if (!/^[a-f0-9]{64}$/i.test(exclusion.lineSha256))
+        throw new Error(`manifest file has invalid exclusion sha256: ${file.path}`);
+      if (exclusion.reason.trim().length === 0)
+        throw new Error(`manifest file has empty exclusion reason: ${file.path}`);
+      if (exclusionLines.has(exclusion.lineNumber))
+        throw new Error(`manifest file repeats an exclusion line: ${file.path}`);
+      exclusionLines.add(exclusion.lineNumber);
+    }
   }
   return manifest as LegacyContactManifest;
 }

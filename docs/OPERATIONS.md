@@ -410,10 +410,12 @@ and grade range fields come from the exact matched row of that approved
 workbook. `location_published` is the canonical campus name because the source
 workbook contains no street-address field. Missing workbook values stay empty.
 
-The checked Texas bundle is in `data/texas/legacy-contacts`. It contains 96,078
-accepted rows from Batch 1 and Batch 2, a ten-row fixture, its deterministic
-builder, approved-domain allowlist, summary, checksums, and the ready-to-run
-manifest. No quarantined contact rows are checked into that directory.
+The checked Texas bundle is in `data/texas/legacy-contacts`. It contains 96,077
+production-accepted rows from Batch 1 and Batch 2, a ten-row fixture, its
+deterministic builder, approved-domain allowlist, summary, checksums, and the
+ready-to-run manifest. One malformed address retained in the immutable source
+artifact is excluded by exact line hash. No quarantined contact rows are checked
+into that directory.
 
 Rebuild it only from the approved workbook and audited inputs, supplying the
 actual artifact creation time explicitly. Reuse the same value only when
