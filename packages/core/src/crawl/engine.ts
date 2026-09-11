@@ -108,6 +108,13 @@ export interface CrawlRunResult {
   checkpoint: CrawlCheckpoint;
 }
 
+export interface CrawlCheckpointDelta {
+  pages: CrawlPageRecord[];
+  documents: FetchedDocument[];
+  records: HarvestedRecord[];
+  errors: CrawlErrorRecord[];
+}
+
 export interface CrawlEngineDeps {
   fetcher: Fetcher;
   robots: RobotsProvider;
@@ -115,7 +122,7 @@ export interface CrawlEngineDeps {
   clock?: Clock;
   /** Injectable so tests do not spend real time honouring the crawl delay. */
   sleep?: (milliseconds: number) => Promise<void>;
-  onCheckpoint?: (checkpoint: CrawlCheckpoint) => Promise<void> | void;
+  onCheckpoint?: (checkpoint: CrawlCheckpoint, delta: CrawlCheckpointDelta) => Promise<void> | void;
 }
 
 /**
@@ -161,6 +168,10 @@ export class CrawlEngine {
     const errors: CrawlErrorRecord[] = [];
     const documents: FetchedDocument[] = [];
     const harvested: HarvestedRecord[] = [];
+    let persistedPages = 0;
+    let persistedDocuments = 0;
+    let persistedRecords = 0;
+    let persistedErrors = 0;
     const log = this.deps.logger.child({ crawlRunId: job.crawlRunId, adapter: job.adapter.key });
 
     const seed = canonicalizeUrl(job.seedUrl);
@@ -581,7 +592,16 @@ export class CrawlEngine {
       if (loopDetected) break;
 
       const checkpoint = this.buildCheckpoint(job, queue, guards);
-      await this.deps.onCheckpoint?.(checkpoint);
+      await this.deps.onCheckpoint?.(checkpoint, {
+        pages: pages.slice(persistedPages),
+        documents: documents.slice(persistedDocuments),
+        records: harvested.slice(persistedRecords),
+        errors: errors.slice(persistedErrors),
+      });
+      persistedPages = pages.length;
+      persistedDocuments = documents.length;
+      persistedRecords = harvested.length;
+      persistedErrors = errors.length;
     }
 
     if (guards.stopSignals.length === 0) {

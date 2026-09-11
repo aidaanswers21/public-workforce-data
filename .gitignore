@@ -12,3 +12,5 @@ tmp/
 out/
 exports/
 *.log
+__pycache__/
+*.pyc

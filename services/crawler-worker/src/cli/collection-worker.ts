@@ -11,6 +11,7 @@ import { HttpRobotsProvider } from '@public-workforce/core';
 import { createLogger } from '@public-workforce/observability';
 import { DiscoveryWorker, type DiscoveryState } from '@public-workforce/discovery-worker';
 import { CollectionWorker, ProductionCollectionExecutor } from '../collection-worker.js';
+import { parseBrowserRenderDomains, shouldRenderWithBrowser } from '../browser-rendering.js';
 import { ArchivingFetcher, S3ResponseArchive } from '../fetchers/archiving-fetcher.js';
 import { SerialFetcher } from '../fetchers/serial-fetcher.js';
 import { BrowserFetcher } from '../fetchers/browser-fetcher.js';
@@ -27,6 +28,21 @@ async function main(): Promise<void> {
   const databaseUrl = requiredEnvironment('DATABASE_URL');
   const userAgent = requiredEnvironment('CRAWLER_USER_AGENT');
   const contactUrl = requiredEnvironment('CRAWLER_CONTACT_URL');
+  const browserRenderDomains = parseBrowserRenderDomains(
+    process.env['CRAWLER_RENDER_BROWSER_DOMAINS'],
+  );
+  const browserFetcherLimits = {
+    maxSubresourceRequests: positiveInteger(
+      process.env['CRAWLER_RENDER_BROWSER_MAX_SUBRESOURCES'] ?? '50',
+      'CRAWLER_RENDER_BROWSER_MAX_SUBRESOURCES',
+      250,
+    ),
+    renderDeadlineMs: positiveInteger(
+      process.env['CRAWLER_RENDER_BROWSER_DEADLINE_MS'] ?? '20000',
+      'CRAWLER_RENDER_BROWSER_DEADLINE_MS',
+      60_000,
+    ),
+  };
   const daemon = process.argv.includes('--daemon');
   const batchId = daemon ? undefined : requiredArgument('--batch-id');
   const untilBatchComplete = process.argv.includes('--until-batch-complete');
@@ -69,7 +85,7 @@ async function main(): Promise<void> {
   try {
     const queue = new CollectionProjectRepository(database);
     const renderers = new Map<string, BrowserFetcher[]>();
-    const rawFetcherForJob = (job: ClaimedCollectionJob) => {
+    const rawFetcherForJob = (job: ClaimedCollectionJob, chargePageBudget = true) => {
       let nextRequestAt = 0;
       return new SerialFetcher(
         new ArchivingFetcher(
@@ -90,7 +106,7 @@ async function main(): Promise<void> {
               const decision = await robots.check(url, userAgent);
               if (!decision.allowed) throw new Error(`robots.txt refuses ${url}`);
               await delay(Math.max(0, nextRequestAt - Date.now()));
-              await queue.reserveRequest(job.id, job.claimToken);
+              if (chargePageBudget) await queue.reserveRequest(job.id, job.claimToken);
               nextRequestAt =
                 Date.now() +
                 Math.max(basePolicy.requestDelayMs, (decision.crawlDelaySeconds ?? 0) * 1000);
@@ -108,8 +124,13 @@ async function main(): Promise<void> {
     };
     const fetcherForJob = (job: ClaimedCollectionJob) => {
       const transport = rawFetcherForJob(job);
-      if (process.env['CRAWLER_RENDER_BROWSER'] !== 'true') return transport;
-      const renderer = new BrowserFetcher(transport, userAgent);
+      if (!shouldRenderWithBrowser(job.url, browserRenderDomains)) return transport;
+      const renderer = new BrowserFetcher(
+        transport,
+        userAgent,
+        rawFetcherForJob(job, false),
+        browserFetcherLimits,
+      );
       renderers.set(job.id, [...(renderers.get(job.id) ?? []), renderer]);
       return new ArchivingFetcher(
         renderer,

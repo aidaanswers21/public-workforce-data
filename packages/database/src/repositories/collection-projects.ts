@@ -156,6 +156,15 @@ export interface FailCollectionJobInput {
   retryable: boolean;
 }
 
+export interface ContinueCollectionJobInput {
+  jobId: Uuid;
+  claimToken: Uuid;
+  crawlRunId: Uuid;
+  pagesProcessed: number;
+  recordsCollected: number;
+  detail: string;
+}
+
 export interface BlockCollectionJobInput {
   jobId: Uuid;
   claimToken: Uuid;
@@ -941,7 +950,8 @@ export class CollectionProjectRepository {
       }>(
         `update collection_jobs
          set status = 'completed', crawl_run_id = coalesce($3, crawl_run_id),
-             pages_processed = $4, records_collected = $5, finished_at = now(),
+             pages_processed = greatest(pages_processed, $4),
+             records_collected = records_collected + $5, finished_at = now(),
              lease_expires_at = null, outcome_detail=$6
          where id = $1 and claim_token = $2 and status in ('claimed','running') and lease_expires_at>now()
          returning batch_id, crawl_target_id, kind`,
@@ -971,6 +981,45 @@ export class CollectionProjectRepository {
       await enqueueDiscovered(tx, job.batch_id, job.crawl_target_id);
       await enforceBatchLimits(tx, job.batch_id);
       await finishBatchIfSettled(tx, job.batch_id);
+    });
+  }
+
+  /**
+   * Releases a healthy checkpoint continuation back to the same approved queue.
+   *
+   * A continuation is not a failed attempt, so it returns the attempt charged
+   * by `claimNextJob`. The approved target/page limits and run expiry still
+   * bound how much work this job may perform.
+   */
+  async continueJob(input: ContinueCollectionJobInput): Promise<void> {
+    await runAtomically(this.client, async (tx) => {
+      const result = await tx.query<{ batch_id: Uuid; crawl_target_id: Uuid }>(
+        `update collection_jobs
+         set status = 'queued', crawl_run_id = $3,
+             pages_processed = greatest(pages_processed, $4),
+             records_collected = records_collected + $5,
+             attempt_count = greatest(attempt_count - 1, 0),
+             claimed_by = null, claim_token = null, lease_expires_at = null,
+             finished_at = null, last_error = null, outcome_detail = $6
+         where id = $1 and claim_token = $2 and status in ('claimed','running')
+           and lease_expires_at > now()
+         returning batch_id, crawl_target_id`,
+        [
+          input.jobId,
+          input.claimToken,
+          input.crawlRunId,
+          input.pagesProcessed,
+          input.recordsCollected,
+          input.detail.slice(0, 2000),
+        ],
+      );
+      const job = result.rows[0];
+      if (job === undefined) throw new Error('collection job claim does not match');
+      await tx.query(
+        `update crawl_targets set status = 'ready', exclusion_reason = null, updated_at = now()
+         where id = $1`,
+        [job.crawl_target_id],
+      );
     });
   }
 

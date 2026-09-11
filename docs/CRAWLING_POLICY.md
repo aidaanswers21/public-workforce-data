@@ -99,22 +99,31 @@ A `Crawl-delay` longer than our configured delay wins.
 
 Defaults in `DEFAULT_CRAWL_POLICY`, all overridable per jurisdiction:
 
-| Setting                           | Default | Purpose                                      |
-| --------------------------------- | ------- | -------------------------------------------- |
-| `requestDelayMs`                  | 1500    | Minimum gap between requests to one domain   |
-| `maxConcurrencyPerDomain`         | 1       | One request at a time per domain             |
-| `maxPagesPerRun`                  | 250     | Hard ceiling on a run                        |
-| `maxPagesPerDomain`               | 250     | Hard ceiling per domain                      |
-| `maxDepth`                        | 4       | Stops a directory walk becoming a site crawl |
-| `maxConsecutiveFailuresPerDomain` | 5       | Circuit breaker                              |
-| `maxPagesWithoutNewRecords`       | 3       | Stops fruitless pagination                   |
-| `maxRetries`                      | 2       | Transient failures only                      |
-| `requestTimeoutMs`                | 20000   |                                              |
+| Setting                           | Default | Purpose                                                    |
+| --------------------------------- | ------- | ---------------------------------------------------------- |
+| `requestDelayMs`                  | 1500    | Minimum gap between requests to one domain                 |
+| `maxConcurrencyPerDomain`         | 1       | One request at a time per domain                           |
+| `maxPagesPerRun`                  | 250     | Checkpoint slice; the approved target ceiling remains hard |
+| `maxPagesPerDomain`               | 250     | Hard ceiling per domain                                    |
+| `maxDepth`                        | 4       | Stops a directory walk becoming a site crawl               |
+| `maxConsecutiveFailuresPerDomain` | 5       | Circuit breaker                                            |
+| `maxPagesWithoutNewRecords`       | 3       | Stops fruitless pagination                                 |
+| `maxRetries`                      | 2       | Transient failures only                                    |
+| `requestTimeoutMs`                | 20000   |                                                            |
 
-The Texas education configuration overrides `requestDelayMs` to 2000 and
-`maxPagesPerDomain` to 150: many organizations touched lightly, rather than one
-touched heavily. A jurisdiction with a handful of large sites would tune it the
-other way.
+The Texas education configuration overrides `requestDelayMs` to 2000 and uses
+150 pages as its baseline domain ceiling. A production collection job may raise
+that domain ceiling only as far as its already approved per-target ceiling so a
+large directory can continue; it does not enlarge the approved target budget.
+
+Production collection executes large approved targets in 250-page checkpoint
+slices. If a slice ends with pending pages, the worker releases the same job back
+to its approved batch and resumes the same crawl run from its saved frontier. A
+clean continuation does not consume a failure attempt. It is still bounded by
+the project's per-target page ceiling, the batch page/error circuit breakers and
+the approved run expiry. Reaching a hard target or domain ceiling with pending
+pages is a partial failure, never a completed job and never an automatic budget
+increase.
 
 ## Guards
 

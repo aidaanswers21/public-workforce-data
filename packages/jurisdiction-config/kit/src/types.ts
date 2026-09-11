@@ -98,5 +98,10 @@ export interface JurisdictionConfig {
   crawlPolicy: Partial<CrawlPolicy>;
   domainDenyList: readonly { domain: string; reason: string }[];
   extraUrlExclusions: readonly string[];
+  /** Optional presentation owned by this jurisdiction, applied by neutral export code. */
+  exportPresentation?: {
+    roleCategoryFlagCode: string;
+    roleCategoryFlagHeader: string;
+  };
   notes: readonly string[];
 }

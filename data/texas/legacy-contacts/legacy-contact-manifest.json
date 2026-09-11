@@ -1,0 +1,16 @@
+{
+  "approvedDomainAllowlistPath": "approved_domains.txt",
+  "approvedDomainAllowlistSha256": "d1182e9cb70351147ce87e6bf158845e265e48840d7468bd6b8a81bece46210e",
+  "artifactId": "texas-accepted-contacts-d0152d69f8c242e4",
+  "contentCutoffAt": "2026-09-11T17:05:13.503205Z",
+  "createdAt": "2026-09-11T19:29:39Z",
+  "files": [
+    {
+      "path": "accepted_contacts.jsonl.gz",
+      "sha256": "d0152d69f8c242e4312451c8638f7d8ac9661eeb10dd54243050dd8df71cf5f6"
+    }
+  ],
+  "jurisdiction": "texas-education",
+  "schemaVersion": 1,
+  "workbookSha256": "99618834a0664ff63af63e757eb1537076799e8109a076da3696e58875be5510"
+}

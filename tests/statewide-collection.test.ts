@@ -314,6 +314,27 @@ describe('statewide collection', () => {
     expect(result.csv).toContain(`Ana,Rivera,ana@example.test,Fixture School,${root}pages/17`);
     expect(result.csv).toContain(`Sam,Ortiz,sam@example.test,Fixture School,${root}pages/18`);
     expect(result.csv).not.toContain('office@example.test');
+    await db.query(
+      `update employment_assignments set role_category_code='teacher'
+       where person_id=(select id from people where full_name_published='Sam Ortiz')`,
+    );
+    const directory = await exporter.buildPeopleExport({
+      ...input,
+      name: 'Staff directory',
+      format: 'staff_directory',
+      roleCategoryFlagCode: 'teacher',
+      roleCategoryFlagHeader: 'is_teacher',
+    });
+    expect(directory.rowCount).toBe(2);
+    expect(directory.csv.split('\r\n')[0]).toContain('parent_organization');
+    expect(directory.csv.split('\r\n')[0]).toContain('organization_website');
+    expect(directory.csv.split('\r\n')[0]).toContain('email_source_document_id');
+    expect(directory.csv.split('\r\n')[0]).toContain('email_source_version');
+    expect(directory.csv.split('\r\n')[0]).toContain('is_teacher');
+    expect(directory.csv).toContain(',true,');
+    expect(directory.csv).toContain(`ana@example.test`);
+    expect(directory.csv).toContain(`${root}pages/17`);
+    expect(directory.csv).not.toContain('office@example.test');
     await db.query(`insert into employment_assignments(person_id,organization_id,title_published,title_normalized,source_document_id,extraction_method_code,confidence)
       select person_id,organization_id,'Teacher','teacher',source_document_id,'html_table',1 from employment_assignments where person_id=(select id from people where full_name_published='Sam Ortiz') limit 1`);
     const repeated = await exporter.buildPeopleExport(input);
@@ -878,6 +899,16 @@ describe('statewide collection', () => {
       Promise.resolve(),
     );
     expect(compact.rowCount).toBe(2005);
+    const directoryChunks: string[] = [];
+    const directory = await exporter.streamPeopleExport(
+      { ...input, format: 'staff_directory' },
+      (chunk) => {
+        directoryChunks.push(chunk);
+        return Promise.resolve();
+      },
+    );
+    expect(directory.rowCount).toBe(2005);
+    expect(directoryChunks.join('').match(/email_source_url/g)?.length).toBe(1);
     const chunks: string[] = [];
     expect(
       (

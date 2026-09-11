@@ -354,6 +354,25 @@ describe('CrawlEngine checkpointing', () => {
     expect(resumed.records).toHaveLength(6);
   });
 
+  it('emits each harvested page once before advancing its checkpoint', async () => {
+    const deltas: Array<{ pages: number; records: string[]; checkpointPages: number }> = [];
+    await engine(MapFetcher.from(NUMBERED), {
+      onCheckpoint: (checkpoint, delta) => {
+        deltas.push({
+          pages: delta.pages.length,
+          records: delta.records.map((record) => record.record.fullNamePublished ?? ''),
+          checkpointPages: checkpoint.pagesFetched,
+        });
+      },
+    }).run(job({ seedUrl: 'https://sample-isd.example.org/staff-directory?page=1' }));
+
+    expect(deltas.map((delta) => delta.pages)).toEqual([1, 1, 1]);
+    expect(deltas.map((delta) => delta.checkpointPages)).toEqual([1, 2, 3]);
+    const names = deltas.flatMap((delta) => delta.records);
+    expect(names).toHaveLength(9);
+    expect(new Set(names).size).toBe(9);
+  });
+
   it('a resumed run does not re-emit records already harvested', async () => {
     const fetcher = MapFetcher.from(NUMBERED);
     const first = await engine(fetcher).run(
@@ -401,6 +420,64 @@ describe('CrawlEngine checkpointing', () => {
     expect(resumeFetcher.requested).toHaveLength(0);
     expect(resumed.stops.map((stop) => stop.reason)).toContain('domain_budget_exhausted');
     expect(resumed.stats.pagesFetched).toBe(1);
+  });
+
+  it('resumes a directory beyond 250 pages without refetching its checkpoint', async () => {
+    const totalPages = 260;
+    const entries: Record<string, string> = {};
+    for (let page = 1; page <= totalPages; page += 1) {
+      const url = `https://sample-isd.example.org/staff-directory?page=${page}`;
+      const next =
+        page === totalPages
+          ? ''
+          : `<a href="/staff-directory?page=${page + 1}" rel="next">Next</a>`;
+      entries[url] =
+        `<html><body><div class="staff-card"><h3 class="staff-name">Person ${page}</h3><p class="staff-title">Teacher</p><a href="mailto:person${page}@sample-isd.example.org">Email</a></div>${next}</body></html>`;
+    }
+
+    const firstFetcher = MapFetcher.from(entries);
+    const first = await engine(firstFetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        policy: withPolicyDefaults({
+          requestDelayMs: 0,
+          respectRobots: false,
+          maxPagesPerRun: 250,
+          maxPagesPerDomain: 300,
+        }),
+      }),
+    );
+    expect(first.stats.pagesFetched).toBe(250);
+    expect(first.checkpoint.pendingTasks).toHaveLength(1);
+
+    const resumedFetcher = MapFetcher.from(entries);
+    const resumed = await engine(resumedFetcher).run(
+      job({
+        seedUrl: 'https://sample-isd.example.org/staff-directory?page=1',
+        resumeFrom: first.checkpoint,
+        policy: withPolicyDefaults({
+          requestDelayMs: 0,
+          respectRobots: false,
+          maxPagesPerRun: 300,
+          maxPagesPerDomain: 300,
+        }),
+      }),
+    );
+
+    expect(resumedFetcher.requested[0]).toContain('page=251');
+    for (let page = 251; page <= 260; page += 1) {
+      expect(resumedFetcher.requested).toContain(
+        `https://sample-isd.example.org/staff-directory?page=${page}`,
+      );
+    }
+    expect(
+      resumedFetcher.requested.some((url) =>
+        /page=(?:[1-9]|[1-9]\d|1\d\d|2[0-4]\d|250)$/.test(url),
+      ),
+    ).toBe(false);
+    expect(resumed.stats.pagesFetched).toBe(260);
+    expect(resumed.checkpoint.pendingTasks).toHaveLength(0);
+    expect(resumed.stops.map((stop) => stop.reason)).toContain('completed');
   });
 
   it('stores only opaque post-boundary keys for prohibited records', async () => {

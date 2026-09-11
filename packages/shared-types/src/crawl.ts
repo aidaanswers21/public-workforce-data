@@ -150,6 +150,12 @@ export interface CrawlCheckpoint {
   pagesPerDomain?: Readonly<Record<string, number>>;
   consecutiveFailuresPerDomain?: Readonly<Record<string, number>>;
   pagesWithoutNewRecords?: number;
+  /** Durable ingestion totals through this checkpoint, used across worker slices. */
+  ingestionSummary?: {
+    peopleSeen: number;
+    pipelineErrors: number;
+    boundaryDrops: number;
+  };
   updatedAt: Timestamp;
 }
 

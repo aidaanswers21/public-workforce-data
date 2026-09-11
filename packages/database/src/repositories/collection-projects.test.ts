@@ -120,6 +120,56 @@ describe('collection project control plane', () => {
     },
   );
 
+  it('requeues a checkpoint continuation on the same approved job and run', async () => {
+    const setup = await fixture({ policy: 'permitted' });
+    const projectId = await setup.projects.create({ ...projectInput(), maxPagesPerTarget: 500 });
+    await setup.projects.generateDiscoveryTargets(projectId, 'owner@example.test');
+    const batchId = await setup.projects.createApprovedBatch({
+      projectId,
+      kind: 'discovery',
+      targetLimit: 1,
+      approvedBy: 'owner@example.test',
+      approvalNote: 'Approve one fixture target with checkpoint continuation.',
+    });
+    const claimed = await setup.projects.claimNextJob('worker-one');
+    expect(claimed).not.toBeNull();
+    await setup.projects.markJobRunning(claimed!.id, claimed!.claimToken, null);
+    await database!.query(
+      `insert into crawl_runs (id,run_type,status,initiated_by)
+       values ('00000000-0000-4000-8000-000000000222','scheduled_collection','running','worker-one')`,
+    );
+    await setup.projects.continueJob({
+      jobId: claimed!.id,
+      claimToken: claimed!.claimToken,
+      crawlRunId: '00000000-0000-4000-8000-000000000222',
+      pagesProcessed: 250,
+      recordsCollected: 500,
+      detail: '250-page checkpoint slice completed',
+    });
+
+    const row = await database!.query<Record<string, unknown>>(
+      'select status,crawl_run_id,pages_processed,records_collected,attempt_count,claim_token from collection_jobs where id=$1',
+      [claimed!.id],
+    );
+    expect(row.rows[0]).toMatchObject({
+      status: 'queued',
+      crawl_run_id: '00000000-0000-4000-8000-000000000222',
+      pages_processed: 250,
+      records_collected: 500,
+      attempt_count: 0,
+      claim_token: null,
+    });
+    expect((await setup.projects.listBatches(projectId))[0]).toMatchObject({
+      id: batchId,
+      status: 'running',
+      queuedJobs: 1,
+      completedJobs: 0,
+    });
+    const resumed = await setup.projects.claimNextJob('worker-two');
+    expect(resumed?.id).toBe(claimed!.id);
+    expect(resumed?.crawlRunId).toBe('00000000-0000-4000-8000-000000000222');
+  });
+
   it('moves unreviewed sources to a policy hold without returning work', async () => {
     const setup = await fixture();
     const projectId = await setup.projects.create(projectInput());

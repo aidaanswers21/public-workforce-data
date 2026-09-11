@@ -95,14 +95,35 @@ The Render Blueprint runs a private operator web service and one daemon in
 Oregon on Starter instances, with automatic deploys disabled. The web service
 has a 30-second shutdown window and `/health` returns success only when its
 database connection is ready. The worker uses a 300-second graceful shutdown
-window. `DATABASE_URL`, admin credentials, `CRAWLER_USER_AGENT`, and
-`CRAWLER_CONTACT_URL` remain dashboard-managed secrets. The worker also
-requires the five `STORAGE_*` values named above. Both services use
-Supabase's published production root certificate from
+window. Its build installs the Chromium revision selected by the locked
+Playwright dependency. Browser rendering remains off unless
+`CRAWLER_RENDER_BROWSER_DOMAINS` contains the approved job's exact hostname; it
+does not run Chromium for other jobs. `WORKER_CONCURRENCY=1`
+keeps only one browser-backed crawl job active on the Starter worker.
+`DATABASE_URL`, admin credentials, `CRAWLER_USER_AGENT`, and
+`CRAWLER_CONTACT_URL` remain dashboard-managed
+secrets. The worker also requires the five `STORAGE_*` values named above. Both
+services use Supabase's published production root certificate from
 `config/certificates/supabase-prod-ca-2021.crt` so the session-pool connections
 retain full certificate and hostname verification. A worker `SIGINT` or
 `SIGTERM` stops new claims; the active job completes and the database pool
 closes before the process exits.
+
+The durable claim queue and checkpoints are stored in PostgreSQL, so this
+deployment does not require Redis or Render Key Value. Chromium increases build
+time and image size even when no rendering domains are configured. It increases
+peak worker memory only for the explicitly selected jobs. Concurrency one is the
+conservative Starter-plan setting: it reduces throughput, but avoids multiple
+browser processes competing for the same memory. Monitor memory and
+out-of-memory restarts during the first approved rendered batch; moving to a
+larger paid worker plan may be necessary before raising concurrency.
+
+Each rendered page is also bounded to 50 script, stylesheet and API subresource
+attempts and a 20-second browser phase. The Blueprint exposes those limits as
+`CRAWLER_RENDER_BROWSER_MAX_SUBRESOURCES` and
+`CRAWLER_RENDER_BROWSER_DEADLINE_MS`; production validation caps them at 250 and
+60,000 milliseconds. Excess or late routes are aborted. If the deadline expires,
+the worker uses the already fetched static page instead of waiting indefinitely.
 
 The worker database pool defaults to 10 connections. The dedicated Supabase
 project's session pool admitted 12 simultaneous worker connections and refused
@@ -150,6 +171,31 @@ require an explicit signed-in confirmation. The repository rejects inactive or
 unknown purposes, supports a limited sample or a complete streaming download, applies suppression in
 SQL, re-checks it immediately before rendering, and records the export checksum
 and audit event. This repository does not send the file or perform outreach.
+
+The staff-directory CSV is one row per published work email. It includes the
+published and parsed name, assignment title and department, organization and
+direct parent, organization website, role taxonomy, specialty, duty location,
+and email-specific source URL, timestamps, classification, validation and
+provenance. It never includes inferred candidates. General office inboxes are
+excluded unless the operator explicitly includes them. The compact contacts and
+full audit-oriented formats remain available.
+
+For imported accepted-contact artifacts, the displayed source URL comes from
+the allowlisted per-record `source_page_url` observation, while the source
+document and version columns continue to identify the archived artifact that
+provided the evidence. Only allowlisted import metadata is flattened: dataset,
+file, line, QA identity method, grade range, organization website, location and
+email-source description. Raw source context is never exported. Duplicate rows
+are keyed by person, organization and email. If the same organization and email
+are attached to different people, both rows remain visible with
+`email_identity_conflict=true` for review.
+
+The selected collection project's jurisdiction configuration may name a
+role-category flag and its CSV header. The neutral export path applies that
+configuration without knowing the vertical. Texas education configures the
+staff-directory download as `is_teacher`, derived from the normalized role
+category, and imported grade metadata is supplied through the allowlisted
+`grade_range_published` observation.
 
 ## See it work
 
@@ -240,17 +286,17 @@ human-approved purpose from `export_purposes`; none is created implicitly.
 
 Each run records its stop reasons. They mean different things:
 
-| Stop                       | Meaning                                  | Action                                                                    |
-| -------------------------- | ---------------------------------------- | ------------------------------------------------------------------------- |
-| `completed`                | The frontier emptied                     | None                                                                      |
-| `blocked_by_source_policy` | No approved policy for the source        | Review and approve the source, or leave it alone                          |
-| `empty_success`            | Page parsed, nobody on it                | Check whether it is JS-rendered, the wrong adapter, or missing vocabulary |
-| `no_progress`              | Pages stopped yielding new people        | Usually correct; check the pager if unexpected                            |
-| `pagination_loop`          | A sequential pager revisited a page      | Adapter or site issue; check the fixture                                  |
-| `duplicate_content`        | A body hashed the same as an earlier one | Usually a pager returning the same page                                   |
-| `page_budget_exhausted`    | Hit the run ceiling                      | Raise the budget deliberately, or narrow the target                       |
-| `blocked_by_robots`        | robots.txt disallowed the path           | Respect it. Do not work around it                                         |
-| `blocked_by_source`        | 401/403/429 or a challenge page          | Respect it. Record it and move on                                         |
+| Stop                       | Meaning                                  | Action                                                                                                      |
+| -------------------------- | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `completed`                | The frontier emptied                     | None                                                                                                        |
+| `blocked_by_source_policy` | No approved policy for the source        | Review and approve the source, or leave it alone                                                            |
+| `empty_success`            | Page parsed, nobody on it                | Check whether it is JS-rendered, the wrong adapter, or missing vocabulary                                   |
+| `no_progress`              | Pages stopped yielding new people        | Usually correct; check the pager if unexpected                                                              |
+| `pagination_loop`          | A sequential pager revisited a page      | Adapter or site issue; check the fixture                                                                    |
+| `duplicate_content`        | A body hashed the same as an earlier one | Usually a pager returning the same page                                                                     |
+| `page_budget_exhausted`    | Hit a checkpoint slice or hard ceiling   | The worker resumes within the approved target ceiling; otherwise raise it deliberately or narrow the target |
+| `blocked_by_robots`        | robots.txt disallowed the path           | Respect it. Do not work around it                                                                           |
+| `blocked_by_source`        | 401/403/429 or a challenge page          | Respect it. Record it and move on                                                                           |
 
 ## Failure response
 
@@ -266,6 +312,17 @@ Crawling runs in the Node worker, never in an orchestrator. n8n, if used, would
 start jobs and receive completion events over webhooks; it would not fetch
 pages.
 
+Large directories remain one durable job and crawl run. The worker saves the
+page's normalized records and provenance before advancing its frontier, then
+releases a healthy job after each 250-page slice. Another lease can resume it
+without refetching earlier pages, and a process death cannot strand records
+behind an advanced checkpoint. A job is not marked complete while its checkpoint
+still has pending tasks. Continuations are bounded by the approved target ceiling
+and run expiry; hard budget exhaustion is recorded as partial failure rather than
+retried forever. Ingestion errors, boundary drops and collected-record counts are
+carried in the checkpoint across slices, so the final run and batch status reflect
+the whole crawl rather than only the last lease.
+
 `N8N_WEBHOOK_URL` is named in `.env.example` and **nothing reads it**. No code
 path posts a webhook. The same is true of any other variable in
 `.env.example` that this documentation does not show being read: naming a
@@ -273,11 +330,15 @@ variable is not wiring it.
 
 ## Cost
 
-There is no billable dependency in the shipped configuration. The only
-cost-bearing component is a validation provider, and the default is a no-op that
-cannot spend anything. `ValidationProviderInfo.billable` marks a provider that
-bills per address, and `email_validation_results` records the provider and
-request id per check so spend is attributable.
+The Blueprint uses paid Starter compute for the web service and worker. Browser
+rendering adds no separate Playwright or Chromium license fee, but its higher
+memory use can require a larger worker plan. PostgreSQL and private object
+storage also have provider-specific hosting costs. No Redis or Render Key Value
+instance is required. The only optional per-address application provider is
+email validation, and the default is a no-op that cannot spend anything.
+`ValidationProviderInfo.billable` marks a provider that bills per address, and
+`email_validation_results` records the provider and request id per check so
+spend is attributable.
 
 ## Before a production crawl
 
@@ -287,3 +348,63 @@ page, a small approved sample first, read the failures, then widen. Not before.
 
 For multi-state roster preparation, full collection runs, browser installation,
 worker concurrency, and streaming exports, see `STATEWIDE_COLLECTION.md`.
+
+## Replaying legacy Texas contact exports
+
+Legacy accepted-contact NDJSON can be checked without pretending that it is a
+saved web page:
+
+```bash
+DATABASE_URL=... pnpm texas:legacy-contacts -- ./legacy-contact-manifest.json
+```
+
+The manifest has `schemaVersion`, a stable `artifactId`, a truthful artifact
+`createdAt`, a separate latest-source `contentCutoffAt`, the `texas-education`
+jurisdiction, and one or more `{ path, sha256 }` file entries.
+Inputs may be `.jsonl` or streaming `.jsonl.gz`; compressed artifacts are
+recorded as `application/gzip`. The default is a dry run. It verifies each file's
+hash, exact-matches the published district and school pair to the organization
+spine, and writes separate quarantine and revalidation NDJSON files. Personal,
+malformed, inferred, unnamed, out-of-state, unmatched, and ambiguous rows never
+enter the people tables. A checkpoint is replaced atomically after each line,
+so the same command resumes rather than starting the file over.
+
+`--seed-revalidation` creates idempotent pending crawl targets for the accepted
+rows' human-viewable directory URLs. It does not run those targets. A live crawl
+still needs the normal source policy and approved-run gates.
+
+`--apply` imports accepted rows as `file_import` evidence. Every manifest file
+must then include either an `archiveStorageKey` for a private durable copy or an
+immutable GitHub git-blob API `archiveUrl`. Canonical person, assignment, and
+email rows cite that archived accepted artifact, so a source suppression applies
+to every imported row. A paired `source_page_url` observation retains the
+human-viewable directory page for each record and email without manufacturing a
+web-page version that was never captured. Separate typed observations retain
+the safe import fields. Replaying the same checksummed manifest is idempotent.
+
+The manifest also binds the originating workbook checksum and a deterministic
+approved-domain allowlist checksum. Import refuses a directory URL outside that
+allowlist, even when the district and school names match exactly.
+
+The bundle's organization website, campus location label, city, county, state,
+and grade range fields come from the exact matched row of that approved
+workbook. `location_published` is the canonical campus name because the source
+workbook contains no street-address field. Missing workbook values stay empty.
+
+The checked Texas bundle is in `data/texas/legacy-contacts`. It contains 96,078
+accepted rows from Batch 1 and Batch 2, a ten-row fixture, its deterministic
+builder, approved-domain allowlist, summary, checksums, and the ready-to-run
+manifest. No quarantined contact rows are checked into that directory.
+
+Rebuild it only from the approved workbook and audited inputs, supplying the
+actual artifact creation time explicitly. Reuse the same value only when
+reproducing the same artifact bytes:
+
+```bash
+python data/texas/legacy-contacts/build_import_bundle.py \
+  --workbook /path/to/TX_School_Websites_by_Location.xlsx \
+  --batch1 /path/to/staff_records.jsonl \
+  --batch2 /path/to/accepted_records.jsonl \
+  --output data/texas/legacy-contacts \
+  --artifact-created-at 2026-09-11T19:29:39Z
+```

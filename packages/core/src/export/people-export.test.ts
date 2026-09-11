@@ -29,10 +29,12 @@ function row(overrides: Partial<ExportablePersonRow> & { personId: string }): Ex
     roleCategoryCode: 'program_analyst',
     jobFamilyCode: 'research_policy',
     seniorityCode: 'staff',
+    specialty: null,
     departmentPublished: null,
     organizationalUnitName: 'Office of Policy',
     organizationId,
     organizationName: 'Sample Bureau',
+    organizationWebsiteUrl: 'https://agency.example.gov',
     organizationTypeCode: 'federal_bureau',
     governmentLevelCode: 'federal',
     sectorCode: 'general_government',
@@ -122,6 +124,138 @@ describe('csv rendering', () => {
 });
 
 describe('exportPeopleCsv', () => {
+  it('writes one staff-directory row per published email with email-specific provenance', () => {
+    const result = exportPeopleCsv({
+      rows: [
+        row({
+          personId: 'p1',
+          fullNamePublished: 'Smith, Jane A.',
+          middleName: 'A.',
+          titlePublished: 'Mathematics Teacher',
+          departmentPublished: 'Mathematics',
+          organizationalUnitName: null,
+          parentOrganizationName: 'Sample District',
+          specialty: 'Algebra',
+          inferredEmailCandidate: 'guess@agency.example.gov',
+          publishedEmails: [
+            {
+              value: 'jane.smith@agency.example.gov',
+              classification: 'published',
+              validationStatus: 'valid',
+              obfuscationKind: 'none',
+              sourceDocumentId: 'email-doc-1',
+              sourceUrl: 'https://agency.example.gov/staff/jane-smith',
+              sourceTypeCode: 'html_directory',
+              sourceVersion: 3,
+              sourceRetrievedAt: '2026-05-31T12:00:00.000Z',
+              firstSeenAt: '2026-02-01T00:00:00.000Z',
+              lastSeenAt: NOW,
+              crawlRunId: 'email-run-1',
+              extractionMethod: 'html_card',
+              confidence: 0.98,
+              gradeRangePublished: 'KG-05',
+              sourceDataset: 'batch-2',
+              sourceFile: 'accepted.jsonl',
+              sourceLine: '17',
+              qaIdentityMethod: 'exact organization key',
+              emailSourceDescription: 'published mailto',
+            },
+            {
+              value: 'jsmith@agency.example.gov',
+              classification: 'decoded_published',
+              validationStatus: 'unvalidated',
+              sourceDocumentId: 'email-doc-2',
+              sourceUrl: 'https://agency.example.gov/directory?page=2',
+            },
+          ],
+        }),
+      ],
+      suppression: SuppressionIndex.empty(),
+      at: NOW,
+      purpose: PURPOSE,
+      format: 'staff_directory',
+    });
+
+    expect(result.rowCount).toBe(2);
+    const [header, first, second] = result.csv.split('\r\n');
+    expect(header).toContain('full_name_published');
+    expect(header).toContain('parent_organization');
+    expect(header).toContain('organization_website');
+    expect(header).toContain('email_source_url');
+    expect(header).toContain('email_source_retrieved_at');
+    expect(header).toContain('email_obfuscation_kind');
+    expect(header).toContain('grade_range_published');
+    expect(header).toContain('import_qa_identity_method');
+    expect(first).toContain('jane.smith@agency.example.gov');
+    expect(first).toContain('https://agency.example.gov/staff/jane-smith');
+    expect(first).toContain('Sample District');
+    expect(first).toContain('Algebra');
+    expect(first).toContain('accepted.jsonl');
+    expect(second).toContain('jsmith@agency.example.gov');
+    expect(second).toContain('https://agency.example.gov/directory?page=2');
+    expect(result.csv).not.toContain('guess@agency.example.gov');
+  });
+
+  it('keeps conflicting identities and flags them instead of silently deduplicating', () => {
+    const shared = {
+      value: 'shared@agency.example.gov',
+      classification: 'published' as const,
+      validationStatus: 'unvalidated' as const,
+      sourceDocumentId: 'email-doc',
+    };
+    const result = exportPeopleCsv({
+      rows: [
+        row({ personId: 'p1', fullNamePublished: 'Jane Smith', publishedEmails: [shared] }),
+        row({ personId: 'p2', fullNamePublished: 'Ravi Patel', publishedEmails: [shared] }),
+        row({ personId: 'p1', assignmentId: 'second-role', publishedEmails: [shared] }),
+      ],
+      suppression: SuppressionIndex.empty(),
+      at: NOW,
+      purpose: PURPOSE,
+      format: 'staff_directory',
+    });
+
+    expect(result.rowCount).toBe(2);
+    expect(result.csv.match(/shared@agency\.example\.gov/g)).toHaveLength(2);
+    const [header, ...records] = result.csv.trim().split('\r\n');
+    const conflictIndex = (header ?? '').split(',').indexOf('email_identity_conflict');
+    expect(records.map((record) => record.split(',')[conflictIndex])).toEqual(['true', 'true']);
+  });
+
+  it('re-checks suppression for each address in a staff-directory export', () => {
+    const result = exportPeopleCsv({
+      rows: [
+        row({
+          personId: 'p1',
+          publishedEmails: [
+            {
+              value: 'keep@agency.example.gov',
+              classification: 'published',
+              validationStatus: 'unvalidated',
+              sourceDocumentId: 'email-doc-1',
+            },
+            {
+              value: 'remove@agency.example.gov',
+              classification: 'published',
+              validationStatus: 'unvalidated',
+              sourceDocumentId: 'email-doc-2',
+            },
+          ],
+        }),
+      ],
+      suppression: SuppressionIndex.fromEntries([
+        suppress({ scope: 'email', value: 'remove@agency.example.gov' }),
+      ]),
+      at: NOW,
+      purpose: PURPOSE,
+      format: 'staff_directory',
+    });
+
+    expect(result.rowCount).toBe(1);
+    expect(result.csv).toContain('keep@agency.example.gov');
+    expect(result.csv).not.toContain('remove@agency.example.gov');
+  });
+
   it('writes allowed rows and reports the checksum', () => {
     const result = exportPeopleCsv({
       rows: [row({ personId: 'p1' }), row({ personId: 'p2' })],

@@ -101,7 +101,11 @@ export class IngestionPipeline {
     },
   ) {}
 
-  async ingestRun(result: CrawlRunResult, context: IngestContext): Promise<IngestSummary> {
+  async ingestRun(
+    result: CrawlRunResult,
+    context: IngestContext,
+    options: { saveCheckpoint?: boolean } = {},
+  ): Promise<IngestSummary> {
     const summary: IngestSummary = {
       pages: result.pages.length,
       peopleCreated: 0,
@@ -157,7 +161,7 @@ export class IngestionPipeline {
       if (created) summary.peopleCreated += 1;
     }
 
-    await this.deps.crawl.saveCheckpoint(result.checkpoint);
+    if (options.saveCheckpoint !== false) await this.deps.crawl.saveCheckpoint(result.checkpoint);
     this.deps.logger.info(
       { crawlRunId: result.crawlRunId, ...summary, at: nowTimestamp(this.deps.clock) },
       'ingested collection output',

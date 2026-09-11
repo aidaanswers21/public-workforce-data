@@ -32,7 +32,7 @@ services:
     plan: starter
     branch: main
     autoDeployTrigger: off
-    buildCommand: corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm build
+    buildCommand: corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm --filter @public-workforce/crawler-worker exec playwright install --with-deps chromium && pnpm build
     startCommand: pnpm collection:daemon
     maxShutdownDelaySeconds: 300
     envVars:
@@ -58,5 +58,13 @@ services:
         sync: false
       - key: WORKER_POLL_INTERVAL_MS
         value: '5000'
+      - key: WORKER_CONCURRENCY
+        value: '1'
+      - key: CRAWLER_RENDER_BROWSER_DOMAINS
+        sync: false
+      - key: CRAWLER_RENDER_BROWSER_MAX_SUBRESOURCES
+        value: '50'
+      - key: CRAWLER_RENDER_BROWSER_DEADLINE_MS
+        value: '20000'
       - key: LOG_LEVEL
         value: info

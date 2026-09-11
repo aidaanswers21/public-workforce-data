@@ -33,6 +33,7 @@
     "collection:daemon": "node services/crawler-worker/dist/cli/collection-worker.js --daemon",
     "spine:organize": "tsx packages/jurisdiction-config/us-national-spine/src/cli.ts",
     "spine:import": "tsx packages/jurisdiction-config/us-national-spine/src/import-cli.ts",
+    "texas:legacy-contacts": "tsx packages/jurisdiction-config/texas-education/src/legacy-contact-import-cli.ts",
     "rls:verify": "tsx scripts/verify-supabase-rls.ts"
   },
   "devDependencies": {
