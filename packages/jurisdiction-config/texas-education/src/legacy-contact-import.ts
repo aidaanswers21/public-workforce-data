@@ -71,6 +71,7 @@ export interface TexasEducationOrganizationCandidate {
   organizationId: string;
   schoolName: string;
   districtName: string;
+  primaryDomains?: readonly string[];
 }
 
 export interface PreparedLegacyContact {
@@ -155,8 +156,23 @@ export class TexasEducationOrganizationIndex {
     }
   }
 
-  exactMatch(district: string, school: string): TexasEducationOrganizationCandidate[] {
-    return this.candidates.get(this.key(district, school)) ?? [];
+  exactMatch(
+    district: string,
+    school: string,
+    domainHints: readonly string[] = [],
+  ): TexasEducationOrganizationCandidate[] {
+    const matches = this.candidates.get(this.key(district, school)) ?? [];
+    if (matches.length <= 1 || domainHints.length === 0) return matches;
+    const normalizedHints = domainHints.map(normalizeDomain).filter(Boolean);
+    const narrowed = matches.filter((candidate) =>
+      (candidate.primaryDomains ?? []).some((candidateDomain) => {
+        const normalizedCandidate = normalizeDomain(candidateDomain);
+        return normalizedHints.some(
+          (hint) => hint === normalizedCandidate || hint.endsWith(`.${normalizedCandidate}`),
+        );
+      }),
+    );
+    return narrowed.length > 0 ? narrowed : matches;
   }
 
   private key(district: string, school: string): string {
@@ -299,7 +315,7 @@ export function prepareLegacyContact(
   if (boundary.findings.length > 0 || boundary.allowed['full_name_published'] === undefined)
     return quarantine('row failed the public professional data boundary');
 
-  const matches = index.exactMatch(district, school);
+  const matches = index.exactMatch(district, school, [parsedUrl.hostname, domain]);
   if (matches.length === 0) return quarantine('no exact Texas district and school match');
   if (matches.length > 1) return quarantine('Texas district and school match is ambiguous');
 
@@ -345,6 +361,14 @@ export function prepareLegacyContact(
       artifactFields,
     },
   };
+}
+
+function normalizeDomain(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/^www\./, '')
+    .replace(/\.$/, '');
 }
 
 export function isApprovedHost(hostname: string, approvedDomains: ReadonlySet<string>): boolean {
