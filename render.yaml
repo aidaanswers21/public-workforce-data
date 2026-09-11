@@ -33,7 +33,7 @@ services:
     branch: main
     autoDeployTrigger: off
     buildCommand: corepack prepare pnpm@10.34.5 --activate && pnpm install --frozen-lockfile && pnpm --filter @public-workforce/crawler-worker exec playwright install --with-deps chromium && pnpm build
-    startCommand: pnpm texas:legacy-contacts:startup && pnpm collection:daemon
+    startCommand: pnpm collection:daemon
     maxShutdownDelaySeconds: 300
     envVars:
       - key: NODE_VERSION
