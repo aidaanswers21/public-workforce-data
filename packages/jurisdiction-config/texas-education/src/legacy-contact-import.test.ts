@@ -121,6 +121,38 @@ describe('Texas legacy accepted-contact import', () => {
     });
   });
 
+  it('uses a published work domain to disambiguate same-named Texas districts', () => {
+    const wylie = new TexasEducationOrganizationIndex([
+      {
+        organizationId: 'wylie-collin-high',
+        districtName: 'Wylie ISD',
+        schoolName: 'Wylie H S',
+        primaryDomains: ['wylieisd.net'],
+      },
+      {
+        organizationId: 'wylie-taylor-high',
+        districtName: 'Wylie ISD',
+        schoolName: 'Wylie H S',
+        primaryDomains: ['wyliebulldogs.org'],
+      },
+    ]);
+    const result = prepareLegacyContact(
+      {
+        ...row,
+        district: 'Wylie Isd',
+        school: 'Wylie H S',
+        email: 'adam.cherry@wyliebulldogs.org',
+        directory_url: 'https://www.wyliebulldogs.org/o/whs/staff?page_no=2',
+      },
+      wylie,
+      'batch-2',
+      95_857,
+    );
+    expect(result.status).toBe('accepted');
+    if (result.status === 'accepted')
+      expect(result.record.organizationId).toBe('wylie-taylor-high');
+  });
+
   it('requires a checksummed Texas manifest', () => {
     expect(
       validateLegacyContactManifest({
