@@ -62,6 +62,14 @@ services:
         value: '1'
       - key: STARTUP_LEGACY_CONTACT_IMPORT_ARTIFACT_ID
         sync: false
+      - key: STARTUP_COLLECTION_PROJECT_ID
+        sync: false
+      - key: STARTUP_COLLECTION_APPROVED_BY
+        sync: false
+      - key: STARTUP_COLLECTION_APPROVAL_NOTE
+        sync: false
+      - key: STARTUP_COLLECTION_EXPIRES_AT
+        sync: false
       - key: CRAWLER_RENDER_BROWSER_DOMAINS
         sync: false
       - key: CRAWLER_RENDER_BROWSER_MAX_SUBRESOURCES
